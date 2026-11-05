@@ -148,6 +148,7 @@ class PurchaseIn(BaseModel):
     supplier_name: str = Field(min_length=1, max_length=250)
     warehouse_id: int
     project_id: int | None = None
+    exception_reason: str | None = Field(default=None, min_length=8, max_length=500)
     notes: str | None = None
     lines: list[POLineIn] = Field(min_length=1)
 
@@ -1048,6 +1049,8 @@ def list_pending_purchase_receipts(_: User = Depends(require_permission("Invento
 
 @purchases.post("", status_code=201)
 def create_order(body: PurchaseIn, user: User = Depends(require_permission("PurchaseCycle", "Add")), db: Session = Depends(get_db)):
+    if not body.exception_reason or len(body.exception_reason.strip()) < 8:
+        raise HTTPException(422,"سبب إنشاء أمر الشراء المباشر الاستثنائي إلزامي (8 أحرف على الأقل)")
     if not db.get(InventoryWarehouse,body.warehouse_id): raise HTTPException(422,"المخزن غير موجود")
     if body.project_id is not None:
         project=db.get(Project,body.project_id)
@@ -1058,11 +1061,11 @@ def create_order(body: PurchaseIn, user: User = Depends(require_permission("Purc
     # The database-generated ID is the concurrency-safe sequence; client-supplied
     # order numbers are intentionally ignored so every new order is numbered uniformly.
     party=resolve_counterparty(db,body.supplier_name,"Supplier")
-    po=PurchaseOrder(order_no=f"PO-PENDING-{uuid4().hex}",order_date=body.order_date,supplier_name=party.legal_name if party else body.supplier_name,counterparty_id=party.counterparty_id if party else None,warehouse_id=body.warehouse_id,project_id=body.project_id,status="Draft",notes=body.notes,total_amount=total,created_by=user.user_id)
+    po=PurchaseOrder(order_no=f"PO-PENDING-{uuid4().hex}",order_date=body.order_date,supplier_name=party.legal_name if party else body.supplier_name,counterparty_id=party.counterparty_id if party else None,warehouse_id=body.warehouse_id,project_id=body.project_id,status="Draft",notes=("شراء مباشر استثنائي: "+body.exception_reason.strip()+("\n"+body.notes.strip() if body.notes and body.notes.strip() else "")),total_amount=total,created_by=user.user_id)
     db.add(po);db.flush()
     po.order_no=f"PO-{body.order_date.year}-{po.purchase_order_id:06d}"
     for line in body.lines: db.add(PurchaseOrderLine(purchase_order_id=po.purchase_order_id,item_id=line.item_id,quantity=line.quantity,unit_price=line.unit_price,received_quantity=0))
-    write_audit(db,user.user_id,"Create","PurchaseOrders",po.purchase_order_id,new={"order_no":po.order_no,"total_amount":str(total),"project_id":po.project_id});db.commit()
+    write_audit(db,user.user_id,"Create","PurchaseOrders",po.purchase_order_id,new={"order_no":po.order_no,"total_amount":str(total),"project_id":po.project_id,"exception_reason":body.exception_reason.strip()});db.commit()
     return {"purchase_order_id":po.purchase_order_id,"order_no":po.order_no,"status":po.status,"total_amount":str(total)}
 
 @purchases.get("/invoices")
