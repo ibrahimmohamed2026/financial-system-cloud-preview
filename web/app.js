@@ -154,7 +154,7 @@ function shell(title, path = "") {
   const initial = [...name.trim()][0] || "؟";
   root.innerHTML = `<div class="app">
     <aside class="sidebar" aria-label="${tr("القائمة الرئيسية", "Main navigation")}">
-      <a class="brand" href="#/"><img src="/static/company-logos.png?v=20261017" alt="شعارات الشركات"><div class="brand-t">${tr("النظام المالي", "Financial System")}</div></a>
+      <a class="brand" href="#/"><img src="/static/company-logos.png?v=20261017" alt="شعارات الشركات"><div class="brand-t">ADEX ERP</div><small class="brand-sub">ENTERPRISE MANAGEMENT</small></a>
       ${navHtml(path)}
     </aside>
     <div class="content">
@@ -218,7 +218,7 @@ function shell(title, path = "") {
 function loginPage() {
   resetSession();
   document.body.classList.add("login-mode");
-  root.innerHTML = `<form class="login"><div style="display:flex;justify-content:flex-end"><button class="btn sm" id="loginlang" type="button">${isEN() ? "العربية" : "English"}</button></div><h2>${tr("تسجيل الدخول", "Sign in")}</h2>
+  root.innerHTML = `<form class="login"><div class="adex-login-brand"><strong>ADEX</strong><small>ENTERPRISE RESOURCE PLANNING</small></div><div style="display:flex;justify-content:flex-end"><button class="btn sm" id="loginlang" type="button">${isEN() ? "العربية" : "English"}</button></div><h2>${tr("تسجيل الدخول", "Sign in")}</h2>
     <div class="f"><label>${tr("اسم المستخدم", "Username")}</label><input name="u" autocomplete="username" required autofocus></div>
     <div class="f"><label>${tr("كلمة المرور", "Password")}</label><input name="p" type="password" autocomplete="current-password" required></div>
     <div class="err" id="e"></div><button class="btn primary" style="width:100%">${tr("دخول", "Sign in")}</button></form>`;
