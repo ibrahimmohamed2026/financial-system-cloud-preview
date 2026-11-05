@@ -14,7 +14,7 @@ from ..models import ContractRequest, Contract, Project, User
 router = APIRouter(prefix="/api/contract-requests", tags=["Contract Requests"])
 
 class RequestIn(BaseModel):
-    request_no: str = Field(min_length=1, max_length=50)
+    request_no: str | None = Field(default=None, max_length=50)
     request_type: Literal["Customer", "Subcontractor", "Supplier"] = "Customer"
     title: str = Field(min_length=1, max_length=250)
     title_en: str | None = Field(default=None, max_length=250)
@@ -57,12 +57,12 @@ def create_request(body: RequestIn, user: User = Depends(require_permission("Con
         project = db.get(Project, body.project_id)
         if project is None or not project.is_active:
             raise HTTPException(422, "المشروع المحدد غير موجود أو غير نشط؛ اختر مشروعًا من القائمة")
-    if db.scalar(select(ContractRequest.request_id).where(ContractRequest.request_no==body.request_no)):
-        raise HTTPException(409,"رقم طلب التعاقد مستخدم بالفعل")
-    x=ContractRequest(**body.model_dump(),created_by=user.user_id,status="Draft")
+    values=body.model_dump(exclude={"request_no"})
+    x=ContractRequest(request_no=f"CR-PENDING-{uuid4().hex}",**values,created_by=user.user_id,status="Draft")
     db.add(x)
     try:
-        db.flush(); write_audit(db,user.user_id,"Create","ContractRequests",x.request_id,new=out(x)); db.commit()
+        db.flush(); x.request_no=f"CR-{datetime.utcnow().year}-{x.request_id:06d}"
+        write_audit(db,user.user_id,"Create","ContractRequests",x.request_id,new=out(x)); db.commit()
     except IntegrityError:
         db.rollback()
         raise HTTPException(409,"تعذر حفظ الطلب: رقم الطلب مستخدم بالفعل أو توجد بيانات مرتبطة غير صالحة")
