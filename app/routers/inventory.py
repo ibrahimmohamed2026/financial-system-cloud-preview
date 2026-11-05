@@ -1110,6 +1110,51 @@ def supplier_aging_report(_: User = Depends(require_permission("PurchaseCycle", 
                    for key in ("current", "days_31_60", "days_61_90", "over_90", "total")}}
 
 
+
+@purchases.get("/reports/supplier-performance")
+def supplier_performance_report(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
+    orders = db.scalars(select(PurchaseOrder).order_by(PurchaseOrder.order_date.desc())).all()
+    grouped = {}
+    for po in orders:
+        key = po.counterparty_id or f"name:{(po.supplier_name or '').strip().casefold()}"
+        supplier = db.get(Counterparty, po.counterparty_id) if po.counterparty_id else None
+        row = grouped.setdefault(key, {"supplier": (supplier.legal_name or supplier.name) if supplier else po.supplier_name,
+            "orders": 0, "fully_received_orders": 0, "partially_received_orders": 0,
+            "open_orders": 0, "ordered_value": Decimal("0"), "received_value": Decimal("0"),
+            "ordered_quantity": Decimal("0"), "received_quantity": Decimal("0"), "first_receipt_days": []})
+        row["orders"] += 1
+        if po.status == "Received":
+            row["fully_received_orders"] += 1
+        elif po.status == "PartiallyReceived":
+            row["partially_received_orders"] += 1
+        elif po.status not in ("Cancelled",):
+            row["open_orders"] += 1
+        lines = db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id == po.purchase_order_id)).all()
+        for line in lines:
+            ordered = Decimal(str(line.quantity or 0))
+            received = Decimal(str(line.received_quantity or 0))
+            price = Decimal(str(line.unit_price or 0))
+            row["ordered_quantity"] += ordered
+            row["received_quantity"] += received
+            row["ordered_value"] += ordered * price
+            row["received_value"] += received * price
+        first_receipt = db.scalar(select(func.min(PurchaseGoodsReceipt.receipt_date)).where(
+            PurchaseGoodsReceipt.purchase_order_id == po.purchase_order_id))
+        if first_receipt:
+            row["first_receipt_days"].append(max(0, (first_receipt - po.order_date).days))
+    items = []
+    for row in grouped.values():
+        ordered_qty = row["ordered_quantity"]
+        row["fulfillment_rate"] = float((row["received_quantity"] / ordered_qty * 100) if ordered_qty else 0)
+        row["average_first_receipt_days"] = round(sum(row["first_receipt_days"]) / len(row["first_receipt_days"]), 1) if row["first_receipt_days"] else None
+        row.pop("first_receipt_days", None)
+        for key in ("ordered_value", "received_value", "ordered_quantity", "received_quantity"):
+            row[key] = str(row[key])
+        items.append(row)
+    items.sort(key=lambda row: Decimal(row["ordered_value"]), reverse=True)
+    return {"items": items, "metrics_note": "معدل التوريد محسوب بالكميات المستلمة إلى المطلوبة؛ متوسط أيام أول استلام متاح للمحاضر المسجلة فقط."}
+
+
 @purchases.get("/invoice-lookups")
 def supplier_invoice_lookups(_:User=Depends(require_permission("PurchaseCycle","View")),db:Session=Depends(get_db)):
     accounts=db.scalars(select(Account).where(Account.is_active.is_(True)).order_by(Account.account_code)).all()
