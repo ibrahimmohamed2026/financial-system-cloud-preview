@@ -559,3 +559,42 @@ tbody tr:hover td{background:var(--brand-soft)}
  .pagebar{gap:8px}
 }
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+
+
+/* Financial dashboard redesign */
+.home-hero{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:25px 28px;margin:0 0 24px;border:1px solid var(--line);border-radius:20px;background:linear-gradient(115deg,var(--card),color-mix(in srgb,var(--brand-soft) 76%,var(--card)));box-shadow:var(--shadow);position:relative;overflow:hidden}
+.home-hero:after{content:"";position:absolute;inset-inline-end:-45px;top:-85px;width:230px;height:230px;border:34px solid color-mix(in srgb,var(--brand) 10%,transparent);border-radius:50%;pointer-events:none}
+.home-hero h1{margin:6px 0 5px;font-size:clamp(22px,2.3vw,30px);font-weight:850;letter-spacing:-.5px;color:var(--ink)}
+.home-hero p{margin:0;color:var(--muted);font-size:13px}
+.home-eyebrow{display:block;color:var(--brand);font-size:10px;font-weight:850;letter-spacing:1.2px;margin-bottom:4px}
+.home-date{display:flex;align-items:center;gap:9px;padding:11px 14px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--muted);font-size:12px;white-space:nowrap;z-index:1}
+.home-date .ico{width:17px;height:17px;color:var(--brand)}
+.home-section-title{display:flex;align-items:end;justify-content:space-between;margin:0 2px 12px}
+.home-section-title h2{font-size:16px;font-weight:850;margin:0;color:var(--ink)}
+.home-section-title p{font-size:11px;color:var(--muted);margin:3px 0 0}
+.home-kpis{gap:14px;margin-bottom:26px}
+.home-kpi{min-height:142px;padding:17px 18px;background:var(--card);transition:transform .18s ease,box-shadow .18s ease}
+.home-kpi:hover{transform:translateY(-3px);box-shadow:var(--shadow-lg)}
+.home-kpi .kpi-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.home-kpi .kpi-h{display:flex;align-items:center;gap:8px}
+.home-kpi .kpi-h .ico{width:17px;height:17px;color:var(--brand)}
+.home-kpi .kpi-mark{display:grid;place-items:center;width:36px;height:36px;border-radius:11px;background:var(--brand-soft);color:var(--brand)}
+.home-kpi .kpi-mark .ico{width:19px;height:19px}
+.home-kpi .kpi-v{font-size:clamp(21px,2vw,28px);margin-top:15px;line-height:1.25}
+.home-kpi .kpi-s{margin-top:6px}
+.home-activity-title{margin-top:3px}
+.home-dash{grid-template-columns:minmax(0,1.08fr) minmax(0,.92fr);gap:16px;align-items:stretch}
+.home-panel{min-width:0;overflow:hidden}
+.home-panel .card-h{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:17px 19px}
+.home-panel .card-h h3{margin:0;font-size:15px;font-weight:850}
+.home-panel .home-eyebrow{margin-bottom:3px}
+.home-period{font-size:11px;color:var(--muted);padding:6px 10px;border-radius:20px;background:var(--bg);white-space:nowrap}
+.home-panel .chart{padding:16px 12px 8px;min-height:270px}
+.home-panel .chart svg{width:100%;height:auto;display:block}
+.home-panel-foot{padding:10px 18px;border-top:1px solid var(--line);font-size:10px;color:var(--muted)}
+.home-empty{min-height:250px;display:grid;place-items:center;padding:20px;color:var(--muted);font-size:13px;text-align:center}
+.home-recent .tbl-wrap{box-shadow:none;border:0;border-radius:0}
+.home-recent table{min-width:540px}
+.home-recent tbody tr{cursor:pointer}
+@media(max-width:900px){.home-hero{padding:20px;align-items:flex-start}.home-dash{grid-template-columns:minmax(0,1fr)}.home-panel .chart{min-height:220px}}
+@media(max-width:600px){.home-hero{display:block;padding:18px 16px;margin-bottom:18px;border-radius:15px}.home-hero h1{font-size:21px}.home-hero p{font-size:12px;max-width:95%}.home-date{display:inline-flex;margin-top:14px;padding:8px 10px;font-size:11px}.home-section-title{margin-bottom:10px}.home-section-title h2{font-size:14px}.home-section-title p{font-size:10px}.home-kpis{gap:9px;margin-bottom:21px}.home-kpi{min-height:120px;padding:12px 11px;border-radius:13px}.home-kpi .kpi-mark{width:30px;height:30px;border-radius:9px}.home-kpi .kpi-mark .ico{width:16px;height:16px}.home-kpi .kpi-v{margin-top:12px;font-size:clamp(17px,4.6vw,22px)}.home-panel .card-h{padding:13px 12px;align-items:flex-start}.home-panel .card-h h3{font-size:13px}.home-panel .seg .btn{padding:5px 8px;font-size:11px}.home-panel .chart{padding:10px 3px;min-height:180px}.home-period{font-size:10px;padding:5px 7px}.home-recent table{min-width:510px}}
