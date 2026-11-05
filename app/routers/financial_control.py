@@ -204,11 +204,7 @@ def overview(date_from: date | None = None, date_to: date | None = None,
     return _overview(db, start, end)
 
 
-@router.get("/account-statement")
-def account_statement(account_id: int, date_from: date | None = None, date_to: date | None = None,
-                      _: User = Depends(require_permission("AnalyticsReports", "View")),
-                      db: Session = Depends(get_db)):
-    start, end = _dates(date_from, date_to)
+def _statement_data(db: Session, account_id: int, start: date, end: date):
     account = db.get(Account, account_id)
     if not account:
         raise HTTPException(404, "الحساب غير موجود")
@@ -216,7 +212,8 @@ def account_statement(account_id: int, date_from: date | None = None, date_to: d
         JournalEntry, JournalEntry.journal_entry_id == JournalEntryDetail.journal_entry_id
     ).where(JournalEntryDetail.account_id == account_id, JournalEntry.status == "Posted")
     opening_rows = db.execute(base.where(JournalEntry.entry_date < start)).all()
-    opening = sum((_dec(d.debit_amount) - _dec(d.credit_amount) for d, _ in opening_rows), D0)
+    opening = _dec(account.opening_debit) - _dec(account.opening_credit)
+    opening += sum((_dec(d.debit_amount) - _dec(d.credit_amount) for d, _ in opening_rows), D0)
     rows = db.execute(base.where(JournalEntry.entry_date >= start, JournalEntry.entry_date <= end)
         .order_by(JournalEntry.entry_date, JournalEntry.journal_entry_id, JournalEntryDetail.line_no)
         .limit(5000)).all()
@@ -226,19 +223,23 @@ def account_statement(account_id: int, date_from: date | None = None, date_to: d
     items = []
     for d, entry in rows:
         running += _dec(d.debit_amount) - _dec(d.credit_amount)
-        items.append({
-            "date": str(entry.entry_date), "entry_no": entry.entry_no,
+        items.append({"date": str(entry.entry_date), "entry_no": entry.entry_no,
             "description": d.description or entry.description or "",
             "debit": _money(d.debit_amount), "credit": _money(d.credit_amount),
-            "balance": _money(running),
-        })
-    return {
-        "account": {"id": account.account_id, "code": account.account_code, "name": account.account_name_ar},
+            "balance": _money(running)})
+    return {"account": {"id": account.account_id, "code": account.account_code, "name": account.account_name_ar},
         "date_from": str(start), "date_to": str(end), "opening_balance": _money(opening),
         "total_debit": _money(debit), "total_credit": _money(credit),
         "closing_balance": _money(opening + debit - credit), "items": items,
-        "truncated": len(rows) >= 5000,
-    }
+        "truncated": len(rows) >= 5000}
+
+
+@router.get("/account-statement")
+def account_statement(account_id: int, date_from: date | None = None, date_to: date | None = None,
+                      _: User = Depends(require_permission("AnalyticsReports", "View")),
+                      db: Session = Depends(get_db)):
+    start, end = _dates(date_from, date_to)
+    return _statement_data(db, account_id, start, end)
 
 
 def _report_rows(data):
@@ -257,7 +258,7 @@ def _report_rows(data):
 
 
 @router.get("/export.xlsx")
-def export_xlsx(date_from: date | None = None, date_to: date | None = None,
+def export_xlsx(date_from: date | None = None, date_to: date | None = None, account_id: int | None = None,
                 _: User = Depends(require_permission("AnalyticsReports", "View")),
                 db: Session = Depends(get_db)):
     start, end = _dates(date_from, date_to)
@@ -288,6 +289,15 @@ def export_xlsx(date_from: date | None = None, date_to: date | None = None,
         sh = wb.create_sheet(name)
         sh.append(headers)
         for row in rows: sh.append(row)
+    if account_id:
+        statement = _statement_data(db, account_id, start, end)
+        sh = wb.create_sheet("حركة الحساب")
+        sh.append(["الحساب", statement["account"]["code"] + " — " + statement["account"]["name"]])
+        sh.append(["رصيد أول المدة", statement["opening_balance"], "إجمالي المدين", statement["total_debit"]])
+        sh.append(["إجمالي الدائن", statement["total_credit"], "رصيد آخر المدة", statement["closing_balance"]])
+        sh.append(["التاريخ", "رقم القيد", "البيان", "مدين", "دائن", "الرصيد"])
+        for x in statement["items"]:
+            sh.append([x["date"], x["entry_no"], x["description"], x["debit"], x["credit"], x["balance"]])
     for sh in wb.worksheets:
         sh.freeze_panes = "A2"
         sh.auto_filter.ref = sh.dimensions
@@ -305,7 +315,7 @@ def export_xlsx(date_from: date | None = None, date_to: date | None = None,
 
 
 @router.get("/export.pdf")
-def export_pdf(date_from: date | None = None, date_to: date | None = None,
+def export_pdf(date_from: date | None = None, date_to: date | None = None, account_id: int | None = None,
                _: User = Depends(require_permission("AnalyticsReports", "View")),
                db: Session = Depends(get_db)):
     start, end = _dates(date_from, date_to)
@@ -359,13 +369,18 @@ def export_pdf(date_from: date | None = None, date_to: date | None = None,
             ("TOPPADDING", (0,0), (-1,-1), 4),
         ]))
         story.append(t); story.append(Spacer(1, 8))
-    add_table("المؤشرات", ["المؤشر", "القيمة"], [[shape(str(a)), shape(str(b))] for a,b in summary[1:]])
+    add_table("المؤشرات", ["المؤشر", "القيمة"], [[str(a), str(b)] for a,b in summary[1:]])
     add_table("أعمار المستحقات", ["المستخلص","العقد","الطرف","العمر","الصافي","المدفوع","المتبقي"],
         [[x["settlement_no"],x["contract_no"],x["counterparty"],x["age_days"],x["net_amount"],x["paid_amount"],x["outstanding_amount"]] for x in data["aging"]["items"][:100]])
     add_table("دورة المستخلص", ["فني","مالي","العقد","الحالة الفنية","الحالة المالية","القيد"],
         [[x["technical_no"],x["financial_no"],x["contract_no"],x["technical_status"],x["financial_status"],x["journal_status"]] for x in data["lifecycle"][:100]])
     add_table("الإشعارات", ["النوع","المرجع","التاريخ","التفاصيل"],
         [[x["type"],x["reference"],x["date"],x["message"]] for x in data["notifications"][:100]])
+    if account_id:
+        statement = _statement_data(db, account_id, start, end)
+        add_table("حركة الحساب " + statement["account"]["code"] + " — " + statement["account"]["name"],
+            ["التاريخ", "القيد", "البيان", "مدين", "دائن", "الرصيد"],
+            [[x["date"],x["entry_no"],x["description"],x["debit"],x["credit"],x["balance"]] for x in statement["items"][:300]])
     doc.build(story); buf.seek(0)
     return StreamingResponse(buf, media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="financial-control-{start}-{end}.pdf"'})
