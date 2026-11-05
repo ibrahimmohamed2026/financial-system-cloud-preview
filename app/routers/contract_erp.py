@@ -355,7 +355,7 @@ def contract_financial_summary(db: Session, contract_id: int, side: str):
     if not c:
         raise HTTPException(404, "العقد غير موجود")
     valid = (ContractSettlement.contract_id == contract_id, ContractSettlement.settlement_side == side,
-             ContractSettlement.status.in_(("Approved", "Posted")))
+             ContractSettlement.status.in_(("Approved", "Posted", "PendingFinalApproval")))
     previous_new = db.scalar(select(func.coalesce(func.sum(ContractSettlement.work_value), 0)).where(*valid)) or ZERO
     # Include approved historical certificates from the legacy ProgressBillings table in the financial total.
     legacy = db.scalar(select(func.coalesce(func.sum(ProgressBilling.work_value), 0)).where(
@@ -379,7 +379,7 @@ def settlement_summary(contract_id: int, settlement_side: Literal["Customer","Su
     valid_financial_ids = select(ContractSettlement.settlement_id).where(
         ContractSettlement.contract_id == contract_id,
         ContractSettlement.settlement_side == settlement_side,
-        ContractSettlement.status.in_(("Approved", "Posted")),
+        ContractSettlement.status.in_(("Approved", "Posted", "PendingFinalApproval")),
         ContractSettlement.settlement_id.not_in(linked_financial_ids))
     financial_rows = db.execute(select(ContractSettlementItem.contract_item_id, func.sum(ContractSettlementItem.quantity))
         .where(ContractSettlementItem.settlement_id.in_(valid_financial_ids))
@@ -436,7 +436,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
             seen.add(requested.contract_item_id)
             item=db.scalar(select(ContractItem).where(ContractItem.item_id==requested.contract_item_id,ContractItem.contract_id==contract_id))
             if not item: raise HTTPException(422,f"البند {requested.contract_item_id} لا يتبع هذا العقد")
-            valid_ids=select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==contract_id,ContractSettlement.settlement_side==side,ContractSettlement.status.in_(("Approved","Posted")))
+            valid_ids=select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==contract_id,ContractSettlement.settlement_side==side,ContractSettlement.status.in_(("Approved","Posted","PendingFinalApproval")))
             done=db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity),0)).where(ContractSettlementItem.contract_item_id==item.item_id,ContractSettlementItem.settlement_id.in_(valid_ids))) or ZERO
             remaining=Decimal(item.quantity)-Decimal(str(done))
             if requested.quantity>remaining: raise HTTPException(409,f"كمية البند {item.item_no} المطلوبة {requested.quantity} تتجاوز المتبقي {max(ZERO,remaining)} {item.unit}")
@@ -554,7 +554,7 @@ def approve_settlement(settlement_id:int,user:User=Depends(require_permission("C
             raise HTTPException(409,"لا يمكن اعتماد المستخلص الفني قبل توزيع المستخلصات القديمة المعتمدة على بنود العقد")
         for line in lines:
             item=db.get(ContractItem,line.contract_item_id)
-            prior_ids=select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==x.contract_id,ContractSettlement.settlement_side==x.settlement_side,ContractSettlement.status.in_(("Approved","Posted")),ContractSettlement.settlement_id!=x.settlement_id)
+            prior_ids=select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==x.contract_id,ContractSettlement.settlement_side==x.settlement_side,ContractSettlement.status.in_(("Approved","Posted","PendingFinalApproval")),ContractSettlement.settlement_id!=x.settlement_id)
             done=db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity),0)).where(ContractSettlementItem.contract_item_id==line.contract_item_id,ContractSettlementItem.settlement_id.in_(prior_ids))) or ZERO
             if Decimal(str(done))+Decimal(line.quantity)>Decimal(item.quantity):
                 raise HTTPException(409,f"لا يمكن اعتماد المستخلص: كمية البند {item.item_no} ستتجاوز الكمية التعاقدية بعد احتساب المستخلصات المعتمدة الأخرى")
@@ -581,6 +581,29 @@ def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permi
     contract=db.scalar(select(Contract).where(Contract.contract_id==x.contract_id).with_for_update())
     if not contract or contract.status.lower()!="active":
         raise HTTPException(409,"لا يمكن اعتماد مستخلص لعقد غير فعّال")
+    # Recheck reserved quantities and contract value at the final approval gate.
+    # This also protects against overlapping pending approvals created before
+    # pending-final approvals began reserving quantities/value.
+    lines=db.scalars(select(ContractSettlementItem).where(
+        ContractSettlementItem.settlement_id==x.settlement_id)).all()
+    if lines:
+        prior_ids=select(ContractSettlement.settlement_id).where(
+            ContractSettlement.contract_id==x.contract_id,
+            ContractSettlement.settlement_side==x.settlement_side,
+            ContractSettlement.status.in_(("Approved","Posted","PendingFinalApproval")),
+            ContractSettlement.settlement_id!=x.settlement_id)
+        for line in lines:
+            item=db.get(ContractItem,line.contract_item_id)
+            if item is None:
+                raise HTTPException(409,"بند المستخلص لم يعد موجودًا في العقد")
+            done=db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity),0)).where(
+                ContractSettlementItem.contract_item_id==line.contract_item_id,
+                ContractSettlementItem.settlement_id.in_(prior_ids))) or ZERO
+            if Decimal(str(done))+Decimal(line.quantity)>Decimal(item.quantity):
+                raise HTTPException(409,f"لا يمكن اعتماد المدير: كمية البند {item.item_no} تتجاوز الكمية التعاقدية بعد احتساب المستخلصات المحجوزة الأخرى")
+    _,reserved_value,contract_value=contract_financial_summary(db,x.contract_id,x.settlement_side)
+    if reserved_value>contract_value:
+        raise HTTPException(409,"لا يمكن اعتماد المدير: إجمالي المستخلصات المعتمدة والمعلقة يتجاوز قيمة العقد المعدلة")
     x.manager_approved_by=user.user_id
     x.manager_approved_at=datetime.utcnow()
     x.status="Approved"
