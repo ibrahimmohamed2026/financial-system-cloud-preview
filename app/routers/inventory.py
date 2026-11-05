@@ -127,6 +127,9 @@ class RequisitionIn(BaseModel):
     project_id: int | None = None
     notes: str | None = None
     lines: list[RequisitionLineIn] = Field(min_length=1)
+class RequisitionRejectIn(BaseModel):
+    reason: str = Field(min_length=8, max_length=500)
+
 class QuotationLineIn(BaseModel):
     item_id: int
     quantity: Decimal = Field(gt=0)
@@ -937,6 +940,24 @@ def approve_requisition(requisition_id: int, user: User = Depends(require_permis
     if x.requested_by == user.user_id: raise HTTPException(403, "لا يجوز اعتماد طلب الشراء بواسطة مقدمه")
     x.status = "Approved"; x.approved_by = user.user_id
     write_audit(db, user.user_id, "Approve", "PurchaseRequisitions", requisition_id, new={"status": x.status})
+    db.commit()
+    return {"requisition_id": requisition_id, "status": x.status}
+
+@purchases.post("/requisitions/{requisition_id}/reject")
+def reject_requisition(requisition_id: int, body: RequisitionRejectIn,
+        user: User = Depends(require_permission("PurchaseCycle", "Approve")), db: Session = Depends(get_db)):
+    x = db.scalar(select(PurchaseRequisition).where(
+        PurchaseRequisition.requisition_id == requisition_id).with_for_update())
+    if not x:
+        raise HTTPException(404, "طلب الشراء غير موجود")
+    if x.status != "PendingApproval":
+        raise HTTPException(409, "لا يمكن رفض طلب الشراء في حالته الحالية")
+    if x.requested_by == user.user_id:
+        raise HTTPException(403, "لا يجوز رفض طلب الشراء بواسطة مقدمه")
+    x.status = "Rejected"
+    x.notes = ((x.notes or "") + "\\nسبب الرفض: " + body.reason.strip()).strip()
+    write_audit(db, user.user_id, "Reject", "PurchaseRequisitions", requisition_id,
+        new={"status": x.status, "reason": body.reason.strip()})
     db.commit()
     return {"requisition_id": requisition_id, "status": x.status}
 
