@@ -110,19 +110,19 @@ export async function render(main, { api, auth }) {
     dlg.innerHTML = `<form method="dialog"><h3>استيراد شجرة حسابات من Excel</h3>
       <p class="muted">الفحص أولًا بدون حفظ، ولو سليم تقدر تحفظ. الحفظ كله أو لا شيء.</p>
       <div class="f"><input type="file" id="file" accept=".xlsx"></div>
-      <div class="f"><label>التعامل مع الحسابات الموجودة (المفتاح: كود الحساب)</label><select id="mode"><option value="update">تحديث الموجود وإضافة الجديد</option><option value="skip">تخطي الموجود وإضافة الجديد فقط</option><option value="error">إيقاف الاستيراد لو الكود موجود</option></select></div>
+      <div class="f"><label>سياسة الاستيراد</label><p class="muted">إضافة الحسابات الجديدة فقط حسب كود الحساب؛ أي حساب موجود سيتم تخطيه دون تعديل بياناته.</p></div>
       <div class="rep" id="rep" hidden></div>
       <div class="actions"><button class="btn" value="x" id="chk" type="button">فحص</button><button class="btn primary" id="save" type="button" disabled>حفظ</button>
       <button class="btn" type="button" id="tpl">تحميل القالب</button><button class="btn" value="x" formnovalidate>إغلاق</button></div></form>`;
     const q = s => dlg.querySelector(s);
     const run = async dry => {
       const f = q("#file").files[0]; if (!f) return toast("اختر ملف .xlsx");
-      const fd = new FormData(); fd.append("file", f); fd.append("dry_run", dry); fd.append("skip_existing", q("#mode").value === "skip"); fd.append("update_existing", q("#mode").value === "update");
+      const fd = new FormData(); fd.append("file", f); fd.append("dry_run", dry); fd.append("skip_existing", "true"); fd.append("update_existing", "false");
       let r; try { r = await api("/accounts/import", { method: "POST", form: fd }); } catch (e) { r = e.detail?.errors ? e.detail : null; if (!r) return toast(errText(e)); }
       const rep = q("#rep"); rep.hidden = false;
-      rep.innerHTML = `<b>${r.total_rows}</b> صف — سليم: <b>${r.valid_rows}</b> — متخطّى: ${r.skipped_existing}${r.created ? ` — اتحفظ: <b>${r.created}</b>` : ""}` +
+      rep.innerHTML = `<b>${r.total_rows}</b> صف — حسابات جديدة صالحة: <b>${r.valid_rows}</b> — حسابات موجودة تم تخطيها: <b>${r.skipped_existing}</b>${r.created ? ` — تمت الإضافة: <b>${r.created}</b>` : ""}` +
         (r.errors.length ? `<ul>${r.errors.map(e => `<li>صف ${e.row}: ${esc(e.message)}</li>`).join("")}</ul>` : "") +
-        (dry && !r.errors.length ? `<p class="muted">دي معاينة فقط؛ لم يتم حفظ أي تغييرات. الحسابات الموجودة ستُحدّث حسب الاختيار أعلاه.</p>` : "");
+        (dry && !r.errors.length ? `<p class="muted">معاينة فقط؛ لم يتم حفظ أي تغيير. سيتم إضافة الحسابات الجديدة فقط، والأرصدة الافتتاحية صفر، والحسابات الموجودة لن يتم تعديلها.</p>` : "");
       q("#save").disabled = !(dry && !r.errors.length && r.valid_rows);
       if (!dry && !r.errors.length) { toast("تم الاستيراد"); await load(); }
     };
