@@ -177,6 +177,10 @@ function shell(title, path = "") {
   if (auth.user?.avatar_updated_at) userAvatarUrl(auth.user.user_id, auth.user.avatar_updated_at).then(url => {
     const el = $("#profile-avatar"); if (el && url) el.innerHTML = `<img src="${url}" alt="الصورة الشخصية">`;
   }).catch(() => {});
+  api("/company-profile").then(company => {
+    const logo = $(".brand img");
+    if (logo && company?.logo_data) logo.src = company.logo_data;
+  }).catch(() => {});
   const app = $(".app");
   root.querySelectorAll(".nav-gh").forEach(b => b.onclick = () => b.parentElement.classList.toggle("open"));
   $("#menubtn").onclick = () => app.classList.toggle("open");
