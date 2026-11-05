@@ -136,6 +136,45 @@ def list_audit_logs(
         "created_at": log.timestamp, **lk,
     } for (log, name, username), lk in zip(rows, links)]}
 
+
+def _safe_audit_value(value):
+    """Decode stored snapshots while masking credentials and secrets."""
+    import json
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return value
+    sensitive = ("password", "passwd", "token", "secret", "authorization",
+                 "api_key", "apikey", "connection_string", "connectionstring")
+    def clean(item):
+        if isinstance(item, dict):
+            return {key: ("[محجوب]" if any(part in str(key).lower() for part in sensitive) else clean(val))
+                    for key, val in item.items()}
+        if isinstance(item, list):
+            return [clean(v) for v in item]
+        return item
+    return clean(parsed)
+
+
+@router.get("/detail/{audit_id}")
+def audit_log_detail(
+    audit_id: int,
+    _: User = Depends(require_permission("AuditLogs", "View")),
+    db: Session = Depends(get_db),
+):
+    from fastapi import HTTPException
+    log = db.get(AuditLog, audit_id)
+    if log is None:
+        raise HTTPException(status_code=404, detail="سجل النشاط غير موجود")
+    return {
+        "id": log.audit_id,
+        "old_value": _safe_audit_value(log.old_value),
+        "new_value": _safe_audit_value(log.new_value),
+        "description": log.new_value or log.old_value or "",
+    }
+
 @router.get("/users")
 def audit_users(_: User = Depends(require_permission("AuditLogs", "View")), db: Session = Depends(get_db)):
     rows = db.execute(select(User.user_id, User.full_name, User.username).order_by(User.full_name)).all()
