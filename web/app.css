@@ -992,3 +992,63 @@ dialog .journal-lines textarea{min-width:150px;resize:vertical}
  .wrap .audit-detail-content .grid-2{grid-template-columns:minmax(0,1fr)}
  .wrap .audit-detail-content pre{max-height:260px;font-size:11px}
 }
+
+
+/* ===== ADEX ERP — treasury, cheques, inventory and purchasing responsive pass ===== */
+.cheques-page{min-width:0;max-width:100%;overflow:hidden}
+.cheques-page .ch-actions{display:flex;flex-wrap:wrap;gap:8px}
+.cheques-page .ch-filters{display:flex;align-items:end;flex-wrap:wrap;gap:10px}
+.cheques-page .ch-filters label{flex:1 1 165px;min-width:0}
+.cheques-page .ch-filters input,.cheques-page .ch-filters select{width:100%;min-width:0}
+.cheques-page .ch-table-wrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-inline:contain}
+.cheques-page .ch-table{min-width:1120px}
+.accounts-toolbar{min-width:0}
+.accounts-filters input,.accounts-filters select{width:100%;max-width:100%}
+.accounts-toolbar-actions .btn{min-width:120px}
+.wrap:has(#df):has(#dt):has(#sum){min-width:0;max-width:100%}
+.wrap:has(#df):has(#dt):has(#sum)>h3{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px;padding:13px 15px;border:1px solid var(--line);border-inline-start:4px solid var(--brand);border-radius:13px;background:linear-gradient(110deg,var(--card),var(--brand-soft));color:var(--ink)}
+.wrap:has(#df):has(#dt):has(#sum)>h3 small{font-size:12px}
+.wrap:has(#df):has(#dt):has(#sum) #sum{padding:13px 15px;margin:0 0 12px!important;border:1px solid var(--line);border-radius:12px;background:var(--card);line-height:2;font-size:12px;overflow-wrap:anywhere}
+.wrap:has(#df):has(#dt):has(#sum) #sum b{color:var(--ink);font-variant-numeric:tabular-nums}
+.wrap:has(#df):has(#dt):has(#sum)>.tbl-wrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.wrap:has(#df):has(#dt):has(#sum) table{min-width:850px}
+.wrap:has(#receipts):has(#movements),.wrap:has(#invoice-rows):has(#detail){min-width:0;max-width:100%}
+.wrap:has(#receipts):has(#movements)>.kpis,.wrap:has(#invoice-rows):has(#detail)>.kpis{grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.wrap:has(#receipts):has(#movements)>.kpis .kpi,.wrap:has(#invoice-rows):has(#detail)>.kpis .kpi{min-width:0;border:1px solid var(--line);border-radius:14px;background:linear-gradient(145deg,var(--card),var(--brand-soft));box-shadow:var(--shadow)}
+.wrap:has(#receipts):has(#movements)>.toolbar,.wrap:has(#invoice-rows):has(#detail)>.toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px}
+.wrap:has(#receipts):has(#movements)>.toolbar .grow,.wrap:has(#invoice-rows):has(#detail)>.toolbar .grow{min-width:0;flex:1 1 240px}
+.wrap:has(#receipts):has(#movements)>.panel,.wrap:has(#invoice-rows):has(#detail)>.panel{min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+.wrap:has(#receipts):has(#movements)>.panel h3,.wrap:has(#invoice-rows):has(#detail)>.panel h3{padding:12px 15px;margin:0;border-bottom:1px solid var(--line);background:linear-gradient(100deg,var(--card),var(--brand-soft));font-size:14px}
+.wrap:has(#receipts):has(#movements) .tbl-wrap,.wrap:has(#invoice-rows):has(#detail) .tbl-wrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-inline:contain}
+.wrap:has(#receipts):has(#movements) table{min-width:900px}
+.wrap:has(#invoice-rows):has(#detail) table{min-width:980px}
+.wrap:has(#invoice-rows):has(#detail) #detail{padding:14px;overflow:hidden;overflow-wrap:anywhere;line-height:1.9}
+.wrap:has(#invoice-rows):has(#detail) #detail table{min-width:650px}
+@media(max-width:760px){
+ .cheques-page .ch-bindings{grid-template-columns:minmax(0,1fr)}
+ .cheques-page .ch-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .cheques-page .ch-panel-head{align-items:stretch}
+ .cheques-page .ch-actions .ch-btn{flex:1 1 130px;justify-content:center}
+ .cheques-page .ch-filters label{flex:1 1 calc(50% - 8px)}
+ .accounts-filters{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;padding:12px}
+ .accounts-filter-search{grid-column:1/-1}
+ .accounts-toolbar-actions{width:100%}
+ .accounts-toolbar-actions .btn{flex:1 1 130px;justify-content:center}
+ .wrap:has(#df):has(#dt):has(#sum)>.toolbar{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+ .wrap:has(#df):has(#dt):has(#sum)>.toolbar .w{width:auto!important;min-width:0}
+ .wrap:has(#df):has(#dt):has(#sum)>.toolbar .grow{grid-column:1/-1}
+ .wrap:has(#df):has(#dt):has(#sum)>.toolbar>.btn{grid-column:1/-1;justify-content:center}
+ .wrap:has(#receipts):has(#movements)>.kpis,.wrap:has(#invoice-rows):has(#detail)>.kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+ .wrap:has(#receipts):has(#movements)>.toolbar,.wrap:has(#invoice-rows):has(#detail)>.toolbar{padding:10px}
+ .wrap:has(#receipts):has(#movements)>.toolbar .btn,.wrap:has(#invoice-rows):has(#detail)>.toolbar .btn{flex:1 1 calc(50% - 8px);justify-content:center;white-space:normal}
+ .wrap:has(#receipts):has(#movements)>.toolbar .grow,.wrap:has(#invoice-rows):has(#detail)>.toolbar .grow{flex-basis:100%}
+ .wrap:has(#receipts):has(#movements)>.panel,.wrap:has(#invoice-rows):has(#detail)>.panel{margin-top:12px!important}
+ .wrap:has(#invoice-rows):has(#detail) #detail{padding:10px}
+}
+@media(max-width:420px){
+ .cheques-page .ch-kpis{grid-template-columns:minmax(0,1fr)}
+ .cheques-page .ch-filters label{flex-basis:100%}
+ .accounts-filters{grid-template-columns:minmax(0,1fr)}
+ .accounts-filter-search{grid-column:auto}
+ .wrap:has(#receipts):has(#movements)>.kpis,.wrap:has(#invoice-rows):has(#detail)>.kpis{grid-template-columns:minmax(0,1fr)}
+}
