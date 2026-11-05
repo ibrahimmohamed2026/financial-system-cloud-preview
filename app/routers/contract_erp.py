@@ -90,7 +90,7 @@ def settlement_out(x, db: Session | None = None):
             TreasuryTransaction.settlement_id == x.settlement_id,
             TreasuryTransaction.status == "تم الصرف")) or 0)
     remaining = max(ZERO, Decimal(x.net_amount or 0) - paid)
-    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":normalized_deductions(x),"vat_amount":str(x.vat_amount),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"remaining_amount":str(money(remaining)),"status":x.status,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
+    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":normalized_deductions(x),"vat_amount":str(x.vat_amount),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"remaining_amount":str(money(remaining)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
 def settlement_line_out(line, item=None):
     item = item
     return {"settlement_item_id":line.settlement_item_id,"contract_item_id":line.contract_item_id,"item_no":item.item_no if item else "","description":item.description if item else "","unit":item.unit if item else "","contract_quantity":str(item.quantity) if item else "0","quantity":str(line.quantity),"unit_price":str(line.unit_price),"amount":str(line.amount),"account_id":getattr(line,"account_id",None) or (getattr(item,"account_id",None) if item else None)}
@@ -537,10 +537,12 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
     return settlement_out(x, db)
 
 @router.post("/settlements/{settlement_id}/approve")
-def approve_settlement(settlement_id:int,user:User=Depends(require_permission("ContractSettlements","Approve")),db:Session=Depends(get_db)):
+@router.post("/settlements/{settlement_id}/financial-approve")
+def approve_settlement(settlement_id:int,user:User=Depends(require_permission("ContractSettlements","FinancialApprove")),db:Session=Depends(get_db)):
+    """Stage 1: financial review. Manager approval is a separate, mandatory stage."""
     x=db.scalar(select(ContractSettlement).where(ContractSettlement.settlement_id==settlement_id).with_for_update())
     if not x: raise HTTPException(404,"المستخلص غير موجود")
-    if x.status not in ("Draft", "PendingApproval"): raise HTTPException(409,"لا يمكن اعتماد المستخلص إلا إذا كان بانتظار الاعتماد المالي")
+    if x.status not in ("Draft", "PendingApproval"): raise HTTPException(409,"المستخلص ليس بانتظار المراجعة المالية")
     contract = db.scalar(select(Contract).where(Contract.contract_id==x.contract_id).with_for_update())
     if not contract or contract.status.lower() != "active": raise HTTPException(409,"لا يمكن اعتماد مستخلص لعقد غير فعّال")
     lines=db.scalars(select(ContractSettlementItem).where(ContractSettlementItem.settlement_id==x.settlement_id)).all()
@@ -559,7 +561,31 @@ def approve_settlement(settlement_id:int,user:User=Depends(require_permission("C
     if money(previous+x.work_value)>contract_value:
         raise HTTPException(409,"لا يمكن اعتماد المستخلص لأن إجمالي الأعمال المعتمدة سيتجاوز قيمة العقد المعدلة")
     x.cumulative_work_value=money(previous+x.work_value)
-    x.status="Approved";write_audit(db,user.user_id,"Approve","ContractSettlements",x.settlement_id,new=settlement_out(x, db));db.commit();return settlement_out(x, db)
+    x.financial_approved_by=user.user_id
+    x.financial_approved_at=datetime.utcnow()
+    x.status="PendingFinalApproval"
+    write_audit(db,user.user_id,"FinancialApprove","ContractSettlements",x.settlement_id,new=settlement_out(x, db))
+    db.commit();db.refresh(x)
+    return settlement_out(x, db)
+
+@router.post("/settlements/{settlement_id}/manager-approve")
+def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permission("ContractSettlements","ManagerApprove")),db:Session=Depends(get_db)):
+    """Stage 2: manager approval. Only this stage unlocks accounting posting."""
+    x=db.scalar(select(ContractSettlement).where(ContractSettlement.settlement_id==settlement_id).with_for_update())
+    if not x: raise HTTPException(404,"المستخلص غير موجود")
+    if x.status!="PendingFinalApproval" or not x.financial_approved_by:
+        raise HTTPException(409,"يجب إتمام المراجعة المالية أولاً قبل اعتماد المدير")
+    if x.financial_approved_by==user.user_id:
+        raise HTTPException(403,"يجب أن يكون اعتماد المدير من مستخدم مختلف عن المراجع المالي")
+    contract=db.scalar(select(Contract).where(Contract.contract_id==x.contract_id).with_for_update())
+    if not contract or contract.status.lower()!="active":
+        raise HTTPException(409,"لا يمكن اعتماد مستخلص لعقد غير فعّال")
+    x.manager_approved_by=user.user_id
+    x.manager_approved_at=datetime.utcnow()
+    x.status="Approved"
+    write_audit(db,user.user_id,"ManagerApprove","ContractSettlements",x.settlement_id,new=settlement_out(x, db))
+    db.commit();db.refresh(x)
+    return settlement_out(x, db)
 
 @router.post("/settlements/{settlement_id}/post")
 def post_settlement(settlement_id:int,user:User=Depends(require_permission("ContractSettlements","Post")),db:Session=Depends(get_db)):
