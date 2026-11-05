@@ -73,6 +73,11 @@ def delete_settlement_tree(db, settlement: ContractSettlement, user_id: int) -> 
         write_audit(db, user_id, "DeleteCascade", "TechnicalSettlementEstimates", tech.estimate_id,
                     {"estimate_no": tech.estimate_no, "status": tech.status}, None)
         db.delete(tech)
+    # PostgreSQL enforces TechnicalSettlementEstimates.FinancialSettlementId.
+    # Flush estimate deletions before deleting the referenced ContractSettlement;
+    # otherwise the unit-of-work may issue the settlement DELETE first because
+    # these tables have no ORM relationship to establish dependency ordering.
+    db.flush()
     for attachment in db.scalars(select(ContractAttachment).where(ContractAttachment.settlement_id == sid)).all():
         db.delete(attachment)
     for line in db.scalars(select(ContractSettlementItem).where(ContractSettlementItem.settlement_id == sid)).all():
