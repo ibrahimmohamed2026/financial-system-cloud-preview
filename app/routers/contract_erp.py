@@ -135,7 +135,7 @@ class SettlementLineIn(BaseModel):
     contract_item_id: int = Field(gt=0)
     quantity: Decimal = Field(gt=0)
 class SettlementIn(BaseModel):
-    settlement_side: Literal["Customer","Subcontractor"]; settlement_no: str = Field(min_length=1,max_length=50)
+    settlement_side: Literal["Customer","Subcontractor"]; settlement_no: str | None = Field(default=None,max_length=50)
     settlement_date: date; counterparty_name: str = Field(min_length=1,max_length=200); counterparty_name_en: str | None = Field(default=None,max_length=200)
     work_value: Optional[Decimal] = Field(default=None,gt=0)
     items: list[SettlementLineIn] = Field(default_factory=list)
@@ -156,7 +156,7 @@ class SettlementDeductionsUpdate(BaseModel):
         return self
 
 class ChangeOrderIn(BaseModel):
-    change_order_no: str = Field(min_length=1,max_length=50)
+    change_order_no: str | None = Field(default=None,max_length=50)
     change_order_date: date
     description: str = Field(min_length=1,max_length=500)
     value_change: Decimal
@@ -169,10 +169,11 @@ def list_change_orders(contract_id:int, _:User=Depends(require_permission("Contr
 @router.post("/{contract_id}/change-orders",status_code=201)
 def create_change_order(contract_id:int,body:ChangeOrderIn,user:User=Depends(require_permission("Contracts","Add")),db:Session=Depends(get_db)):
     if not db.get(Contract,contract_id): raise HTTPException(404,"العقد غير موجود")
-    if db.scalar(select(ContractChangeOrder.change_order_id).where(ContractChangeOrder.contract_id==contract_id,ContractChangeOrder.change_order_no==body.change_order_no)):
-        raise HTTPException(409,"رقم الأمر التغييري مستخدم بالفعل")
-    x=ContractChangeOrder(contract_id=contract_id,**body.model_dump(),status="Pending",created_by=user.user_id)
-    db.add(x);db.flush();write_audit(db,user.user_id,"Create","ContractChangeOrders",x.change_order_id,new={"change_order_no":x.change_order_no,"value_change":str(x.value_change),"status":x.status});db.commit()
+    # Internal change-order number is assigned from the database-generated ID.
+    values=body.model_dump(exclude={"change_order_no"})
+    x=ContractChangeOrder(contract_id=contract_id,change_order_no=f"CO-PENDING-{uuid4().hex}",**values,status="Pending",created_by=user.user_id)
+    db.add(x);db.flush();x.change_order_no=f"CO-{body.change_order_date.year}-{x.change_order_id:06d}"
+    write_audit(db,user.user_id,"Create","ContractChangeOrders",x.change_order_id,new={"change_order_no":x.change_order_no,"value_change":str(x.value_change),"status":x.status});db.commit()
     return {"change_order_id":x.change_order_id,"contract_id":x.contract_id,"change_order_no":x.change_order_no,"change_order_date":x.change_order_date,"description":x.description,"value_change":str(x.value_change),"status":x.status}
 
 @router.post("/change-orders/{change_order_id}/approve")
@@ -420,8 +421,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     if c.status.lower() != "active": raise HTTPException(409,"لا يمكن إنشاء مستخلص إلا لعقد حالته Active")
     side=body.settlement_side
     previous, contract_value = contract_financial_summary(db, contract_id, side)[1:]
-    if db.scalar(select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==contract_id,ContractSettlement.settlement_side==side,ContractSettlement.settlement_no==body.settlement_no)):
-        raise HTTPException(409,"رقم المستخلص مستخدم بالفعل لهذا العقد ونوع المستخلص")
+    # Settlement numbers are generated internally; sequence is scoped by contract and settlement side.
     contract_items=db.scalars(select(ContractItem).where(ContractItem.contract_id==contract_id).order_by(ContractItem.item_no)).all()
     lines=[]; work=ZERO
     if contract_items:
@@ -470,8 +470,10 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     vat=money(work*vat_rate/Decimal("100")); net=money(work+vat-total)
     if net<0: raise HTTPException(422,"الخصومات والضريبة تجعل صافي المستخلص سالبًا")
     seq=(db.scalar(select(func.max(ContractSettlement.sequence_no)).where(ContractSettlement.contract_id==contract_id,ContractSettlement.settlement_side==side)) or 0)+1
-    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,settlement_no=body.settlement_no,settlement_date=body.settlement_date,counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
+    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,settlement_no=f"ST-PENDING-{uuid4().hex}",settlement_date=body.settlement_date,counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
+    side_code = "CUS" if side == "Customer" else "SUB"
+    x.settlement_no = f"ST-{side_code}-{body.settlement_date.year}-{x.settlement_id:06d}"
     for item, quantity, amount in lines:
         db.add(ContractSettlementItem(settlement_id=x.settlement_id,contract_item_id=item.item_id,account_id=item.account_id,quantity=quantity,unit_price=item.unit_price,amount=amount))
     write_audit(db,user.user_id,"Create","ContractSettlements",x.settlement_id,new=settlement_out(x, db));db.commit();db.refresh(x);return settlement_out(x, db)
