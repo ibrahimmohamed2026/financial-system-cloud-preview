@@ -25,7 +25,7 @@ button,input,select{font:inherit;color:inherit}
 .app{display:grid;grid-template-columns:250px minmax(0,1fr);min-height:100vh}
 .sidebar{position:sticky;top:0;height:100vh;overflow:auto;background:var(--side);border-left:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:4px}
 .brand{display:block;padding:4px 6px 10px;text-decoration:none}
-.brand img{display:block;width:100%;max-height:56px;object-fit:contain;object-position:right}
+.brand img{display:block;width:auto;max-width:190px;max-height:72px;object-fit:contain;object-position:right center}
 .brand-t{margin-top:6px;font-weight:700;color:var(--ink);font-size:15px}
 .nav-i{display:flex;align-items:center;gap:12px;width:100%;padding:10px 12px;border:1px solid transparent;border-radius:10px;background:none;color:var(--ink);text-decoration:none;text-align:right;cursor:pointer;font-size:15px}
 .nav-i:hover{background:var(--brand-soft)}
