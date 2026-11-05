@@ -1114,14 +1114,21 @@ def supplier_aging_report(_: User = Depends(require_permission("PurchaseCycle", 
 def supplier_invoice_lookups(_:User=Depends(require_permission("PurchaseCycle","View")),db:Session=Depends(get_db)):
     accounts=db.scalars(select(Account).where(Account.is_active.is_(True)).order_by(Account.account_code)).all()
     parents=set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
+    def invoice_line_lookup(line):
+        invoiced = Decimal(str(db.scalar(select(func.coalesce(func.sum(SupplierInvoiceLine.quantity), 0)).join(SupplierInvoice).where(
+            SupplierInvoiceLine.purchase_order_line_id == line.line_id, SupplierInvoice.status != "Cancelled")) or 0))
+        received = Decimal(str(line.received_quantity or 0))
+        item = db.get(InventoryItem, line.item_id)
+        return {"line_id": line.line_id, "item": item.name if item else "",
+            "received_quantity": str(received), "uninvoiced_quantity": str(max(Decimal("0"), received - invoiced)),
+            "unit_price": str(line.unit_price)}
     return {"accounts":[{"account_id":a.account_id,"code":a.account_code,"name":a.account_name_ar,"normal_balance":a.normal_balance}
         for a in accounts if a.account_id not in parents],
         "projects":[{"project_id":p.project_id,"name_ar":p.name_ar} for p in db.scalars(select(Project).where(Project.is_active.is_(True)).order_by(Project.name_ar)).all()],
         "treasury_accounts":[{"treasury_account_id":t.treasury_account_id,"name":t.name_ar,"gl_account_id":t.gl_account_id}
         for t in db.scalars(select(TreasuryAccount).where(TreasuryAccount.is_active.is_(True)).order_by(TreasuryAccount.name_ar)).all()],
         "received_orders":[{"purchase_order_id":p.purchase_order_id,"order_no":p.order_no,"supplier_name":p.supplier_name,"project_id":p.project_id,
-        "lines":[{"line_id":l.line_id,"item":db.get(InventoryItem,l.item_id).name if db.get(InventoryItem,l.item_id) else "",
-        "received_quantity":str(l.received_quantity),"unit_price":str(l.unit_price)} for l in db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==p.purchase_order_id)).all()]}
+        "lines":[invoice_line_lookup(l) for l in db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==p.purchase_order_id)).all()]}
         for p in db.scalars(select(PurchaseOrder).where(PurchaseOrder.status.in_(("Received","PartiallyReceived"))).order_by(PurchaseOrder.purchase_order_id.desc())).all()]}
 
 @purchases.post("/invoices",status_code=201)
