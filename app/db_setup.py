@@ -185,6 +185,7 @@ def ensure_schema(engine: Engine) -> None:
     if "Users" in existing_tables:
         with engine.begin() as conn:
             conn.execute(text('UPDATE "Users" SET "TokenVersion"=0 WHERE "TokenVersion" IS NULL'))
+            conn.execute(text("UPDATE \"Users\" SET \"PreferredLanguage\"='ar' WHERE \"PreferredLanguage\" IS NULL OR \"PreferredLanguage\" NOT IN ('ar', 'en')"))
     for table_name, column_name, sql_type in (
         ("Contracts", "RequestId", "INTEGER NULL"),
         ("ContractItems", "CatalogItemId", "INTEGER NULL"),
