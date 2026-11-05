@@ -9,11 +9,11 @@ const qs = main => {
   if (main.querySelector("#fc-to").value) p.set("date_to", main.querySelector("#fc-to").value);
   return p.toString();
 };
-const table = (headers, rows, empty = "لا توجد بيانات") => \`<div class="tbl-wrap"><table><thead><tr>\${headers.map(x => \`<th>\${x}</th>\`).join("")}</tr></thead><tbody>\${rows.length ? rows.join("") : \`<tr><td colspan="\${headers.length}" class="empty">\${empty}</td></tr>\`}</tbody></table></div>\`;
-const card = (title, value, hint) => \`<article class="card" style="padding:16px"><small class="muted">\${title}</small><h2 style="margin:8px 0;direction:ltr;text-align:right">\${value}</h2><small class="muted">\${hint || ""}</small></article>\`;
+const table = (headers, rows, empty = "لا توجد بيانات") => `<div class="tbl-wrap"><table><thead><tr>${headers.map(x => `<th>${x}</th>`).join("")}</tr></thead><tbody>${rows.length ? rows.join("") : `<tr><td colspan="${headers.length}" class="empty">${empty}</td></tr>`}</tbody></table></div>`;
+const card = (title, value, hint) => `<article class="card" style="padding:16px"><small class="muted">${title}</small><h2 style="margin:8px 0;direction:ltr;text-align:right">${value}</h2><small class="muted">${hint || ""}</small></article>`;
 
 export async function render(main, { api }) {
-  main.innerHTML = \`
+  main.innerHTML = `
   <div class="fc-page" dir="rtl">
     <section class="card" style="padding:18px;margin-bottom:14px">
       <div style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap">
@@ -49,7 +49,7 @@ export async function render(main, { api }) {
       </div>
       <div id="fc-account-result"><p class="muted">اختر حساباً لعرض رصيد أول المدة والحركة المدينة والدائنة ورصيد آخر المدة.</p></div>
     </section>
-  </div>\`;
+  </div>`;
   const $ = s => main.querySelector(s);
   let current = null;
   const params = () => qs(main);
@@ -70,15 +70,15 @@ export async function render(main, { api }) {
     $("#fc-aging-buckets").innerHTML = current.aging.buckets.map(x => card(x.label + " يوم", fmt(x.amount), "الرصيد المتبقي")).join("");
     $("#fc-aging").innerHTML = table(
       ["المستخلص","العقد","الطرف","النوع","التاريخ","العمر","الصافي","المدفوع","المتبقي","الحالة"],
-      current.aging.items.map(x => \`<tr><td>\${esc(x.settlement_no)}</td><td>\${esc(x.contract_no)}</td><td>\${esc(x.counterparty)}</td><td>\${esc(labelSide(x.side))}</td><td>\${esc(x.settlement_date)}</td><td>\${x.age_days}</td><td>\${fmt(x.net_amount)}</td><td>\${fmt(x.paid_amount)}</td><td><b>\${fmt(x.outstanding_amount)}</b></td><td>\${esc(x.status)}</td></tr>\`));
+      current.aging.items.map(x => `<tr><td>${esc(x.settlement_no)}</td><td>${esc(x.contract_no)}</td><td>${esc(x.counterparty)}</td><td>${esc(labelSide(x.side))}</td><td>${esc(x.settlement_date)}</td><td>${x.age_days}</td><td>${fmt(x.net_amount)}</td><td>${fmt(x.paid_amount)}</td><td><b>${fmt(x.outstanding_amount)}</b></td><td>${esc(x.status)}</td></tr>`));
     $("#fc-lifecycle").innerHTML = table(
       ["فني","مالي","العقد","الطرف","تاريخ الإنشاء","الحالة الفنية","الحالة المالية","القيد","الصافي","المدفوع"],
-      current.lifecycle.map(x => \`<tr><td>\${esc(x.technical_no || "—")}</td><td>\${esc(x.financial_no || "—")}</td><td>\${esc(x.contract_no)}</td><td>\${esc(x.counterparty)}</td><td>\${esc(x.created)}</td><td>\${esc(x.technical_status)}</td><td>\${esc(x.financial_status)}</td><td>\${esc(x.journal_status)}</td><td>\${fmt(x.net_amount)}</td><td>\${fmt(x.paid_amount)}</td></tr>\`));
+      current.lifecycle.map(x => `<tr><td>${esc(x.technical_no || "—")}</td><td>${esc(x.financial_no || "—")}</td><td>${esc(x.contract_no)}</td><td>${esc(x.counterparty)}</td><td>${esc(x.created)}</td><td>${esc(x.technical_status)}</td><td>${esc(x.financial_status)}</td><td>${esc(x.journal_status)}</td><td>${fmt(x.net_amount)}</td><td>${fmt(x.paid_amount)}</td></tr>`));
     $("#fc-notifications").innerHTML = table(
       ["الأهمية","النوع","المرجع","الطرف / الحساب","التاريخ","التفاصيل"],
-      current.notifications.map(x => \`<tr><td>\${x.severity === "danger" ? "متأخر" : "متابعة"}</td><td>\${esc(x.type)}</td><td>\${esc(x.reference)}</td><td>\${esc(x.party)}</td><td>\${esc(x.date)}</td><td>\${esc(x.message)}</td></tr>\`));
+      current.notifications.map(x => `<tr><td>${x.severity === "danger" ? "متأخر" : "متابعة"}</td><td>${esc(x.type)}</td><td>${esc(x.reference)}</td><td>${esc(x.party)}</td><td>${esc(x.date)}</td><td>${esc(x.message)}</td></tr>`));
     const selected = $("#fc-account").value;
-    $("#fc-account").innerHTML = '<option value="">اختر الحساب</option>' + current.accounts.map(a => \`<option value="\${a.account_id}">\${esc(a.code)} — \${esc(a.name)}</option>\`).join("");
+    $("#fc-account").innerHTML = '<option value="">اختر الحساب</option>' + current.accounts.map(a => `<option value="${a.account_id}">${esc(a.code)} — ${esc(a.name)}</option>`).join("");
     $("#fc-account").value = selected;
   };
   const showAccount = async () => {
@@ -87,15 +87,15 @@ export async function render(main, { api }) {
     const p = new URLSearchParams(params());
     p.set("account_id", id);
     const d = await get("/api/financial-control/account-statement?" + p.toString());
-    $("#fc-account-result").innerHTML = \`
+    $("#fc-account-result").innerHTML = `
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin:10px 0">
-        \${card("رصيد أول المدة", fmt(d.opening_balance), d.account.code + " — " + esc(d.account.name))}
-        \${card("إجمالي المدين", fmt(d.total_debit), "خلال الفترة")}
-        \${card("إجمالي الدائن", fmt(d.total_credit), "خلال الفترة")}
-        \${card("رصيد آخر المدة", fmt(d.closing_balance), "مدين موجب / دائن سالب")}
+        ${card("رصيد أول المدة", fmt(d.opening_balance), d.account.code + " — " + esc(d.account.name))}
+        ${card("إجمالي المدين", fmt(d.total_debit), "خلال الفترة")}
+        ${card("إجمالي الدائن", fmt(d.total_credit), "خلال الفترة")}
+        ${card("رصيد آخر المدة", fmt(d.closing_balance), "مدين موجب / دائن سالب")}
       </div>
-      \${table(["التاريخ","رقم القيد","البيان","مدين","دائن","الرصيد الجاري"], d.items.map(x => \`<tr><td>\${esc(x.date)}</td><td>\${esc(x.entry_no)}</td><td>\${esc(x.description)}</td><td>\${fmt(x.debit)}</td><td>\${fmt(x.credit)}</td><td>\${fmt(x.balance)}</td></tr>\`))}
-      \${d.truncated ? '<p class="muted">تم عرض أول 5000 حركة فقط.</p>' : ""}\`;
+      ${table(["التاريخ","رقم القيد","البيان","مدين","دائن","الرصيد الجاري"], d.items.map(x => `<tr><td>${esc(x.date)}</td><td>${esc(x.entry_no)}</td><td>${esc(x.description)}</td><td>${fmt(x.debit)}</td><td>${fmt(x.credit)}</td><td>${fmt(x.balance)}</td></tr>`))}
+      ${d.truncated ? '<p class="muted">تم عرض أول 5000 حركة فقط.</p>' : ""}`;
   };
   $("#fc-refresh").onclick = safe(load);
   $("#fc-apply").onclick = safe(async () => { await load(); $("#fc-account-result").innerHTML = '<p class="muted">اختر حساباً لعرض الحركة.</p>'; });
