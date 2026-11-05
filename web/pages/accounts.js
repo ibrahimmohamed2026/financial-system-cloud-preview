@@ -1,4 +1,5 @@
 import { esc, money, toast, errText } from "../ui.js";
+import { translate as tr } from "../i18n.js";
 
 const SCREEN = "ChartOfAccounts", PAGE = 50;
 
@@ -12,17 +13,17 @@ export async function render(main, { api, auth }) {
   main.innerHTML = `
   <div class="accounts-toolbar" dir="rtl">
     <div class="accounts-filters">
-      <div class="accounts-filter-search"><label for="q">بحث برقم أو اسم الحساب</label><input id="q" type="search" placeholder="اكتب كود الحساب أو اسمه..."></div>
-      <div><label for="cid">التصنيف</label><select id="cid"><option value="">كل التصنيفات</option>${cls.map(c => `<option value="${c.classification_id}">${esc(c.name_ar)}</option>`).join("")}</select></div>
-      <div><label for="act">الحالة</label><select id="act"><option value="">كل الحالات</option><option value="true">نشط</option><option value="false">موقوف</option></select></div>
+      <div class="accounts-filter-search"><label for="q">${tr("بحث برقم أو اسم الحساب","Search by account code or name")}</label><input id="q" type="search" placeholder="${tr("اكتب كود الحساب أو اسمه...","Enter account code or name...")}"></div>
+      <div><label for="cid">${tr("التصنيف","Classification")}</label><select id="cid"><option value="">${tr("كل التصنيفات","All classifications")}</option>${cls.map(c => `<option value="${c.classification_id}">${esc(c.name_ar)}</option>`).join("")}</select></div>
+      <div><label for="act">${tr("الحالة","Status")}</label><select id="act"><option value="">${tr("كل الحالات","All statuses")}</option><option value="true">${tr("نشط","Active")}</option><option value="false">${tr("موقوف","Inactive")}</option></select></div>
     </div>
     <div class="accounts-toolbar-actions">
-      ${can("Add") ? `<button class="btn primary" id="add">+ حساب جديد</button><button class="btn" id="imp">استيراد Excel</button>` : ""}
-      ${can("Print") ? `<button class="btn" id="pdf">طباعة PDF</button>` : ""}
+      ${can("Add") ? `<button class="btn primary" id="add">+ ${tr("حساب جديد","New account")}</button><button class="btn" id="imp">${tr("استيراد Excel","Import Excel")}</button>` : ""}
+      ${can("Print") ? `<button class="btn" id="pdf">${tr("طباعة PDF","Print PDF")}</button>` : ""}
     </div>
   </div>
-  <div class="tbl-wrap"><table><thead><tr><th>الكود</th><th>اسم الحساب</th><th>التصنيف</th><th>الطبيعة</th><th>مدين افتتاحي</th><th>دائن افتتاحي</th><th>الحالة</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
-  <div class="pager"><button class="btn sm" id="prev">السابق</button><span id="info"></span><button class="btn sm" id="next">التالي</button></div>
+  <div class="tbl-wrap"><table><thead><tr><th>${tr("الكود","Code")}</th><th>${tr("اسم الحساب","Account name")}</th><th>${tr("التصنيف","Classification")}</th><th>${tr("الطبيعة","Normal balance")}</th><th>${tr("مدين افتتاحي","Opening debit")}</th><th>${tr("دائن افتتاحي","Opening credit")}</th><th>${tr("الحالة","Status")}</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div class="pager"><button class="btn sm" id="prev">${tr("السابق","Previous")}</button><span id="info"></span><button class="btn sm" id="next">${tr("التالي","Next")}</button></div>
   <dialog id="dlg"></dialog>`;
   const $ = s => main.querySelector(s), dlg = $("#dlg");
   let items = [], total = 0;
@@ -32,11 +33,11 @@ export async function render(main, { api, auth }) {
     if (st.q) p.set("q", st.q); if (st.cid) p.set("classification_id", st.cid); if (st.active) p.set("is_active", st.active);
     const r = await api("/accounts?" + p); items = r.items; total = r.total;
     $("#rows").innerHTML = items.map(a => `<tr class="${a.is_active ? "" : "off"}"><td>${esc(a.account_code)}</td><td>${esc(a.account_name_ar)}</td>
-      <td>${esc(clsName[a.classification_id])}</td><td>${a.normal_balance === "DR" ? "مدين" : "دائن"}</td>
+      <td>${esc(clsName[a.classification_id])}</td><td>${a.normal_balance === "DR" ? tr("مدين","Debit") : tr("دائن","Credit")}</td>
       <td class="num">${money(a.opening_debit)}</td><td class="num">${money(a.opening_credit)}</td>
-      <td><span class="tag ${a.is_active ? "ok" : "no"}">${a.is_active ? "نشط" : "موقوف"}</span></td>
-      <td>${can("Edit") ? `<button class="btn sm" data-e="${a.account_id}">تعديل</button> ` : ""}${can("Delete") ? `<button class="btn sm danger" data-d="${a.account_id}">حذف</button>` : ""}</td></tr>`).join("")
-      || `<tr><td colspan="8" class="muted">لا توجد حسابات مطابقة</td></tr>`;
+      <td><span class="tag ${a.is_active ? "ok" : "no"}">${a.is_active ? tr("نشط","Active") : tr("موقوف","Inactive")}</span></td>
+      <td>${can("Edit") ? `<button class="btn sm" data-e="${a.account_id}">${tr("تعديل","Edit")}</button> ` : ""}${can("Delete") ? `<button class="btn sm danger" data-d="${a.account_id}">${tr("حذف","Delete")}</button>` : ""}</td></tr>`).join("")
+      || `<tr><td colspan="8" class="muted">${tr("لا توجد حسابات مطابقة","No matching accounts")}</td></tr>`;
     const to = Math.min(st.skip + PAGE, total);
     $("#info").textContent = total ? `${st.skip + 1}–${to} من ${total}` : "0";
     $("#prev").disabled = st.skip === 0; $("#next").disabled = to >= total;
@@ -55,26 +56,26 @@ export async function render(main, { api, auth }) {
     if (e) return openForm(items.find(x => x.account_id == e.dataset.e));
     if (d) {
       const a = items.find(x => x.account_id == d.dataset.d);
-      if (!confirm(`حذف الحساب ${a.account_code} — ${a.account_name_ar}؟`)) return;
-      await api("/accounts/" + a.account_id, { method: "DELETE" }); toast("تم الحذف"); await load();
+      if (!confirm(`${tr("حذف الحساب","Delete account")} ${a.account_code} — ${a.account_name_ar}?`)) return;
+      await api("/accounts/" + a.account_id, { method: "DELETE" }); toast(tr("تم الحذف","Deleted")); await load();
     }
   });
 
   async function openForm(acc) {
     parents = (await api("/accounts?limit=1000&is_active=true")).items.filter(p => !acc || p.account_id !== acc.account_id);
     const v = acc || { account_code: "", account_name_ar: "", parent_account_id: "", classification_id: cls[0]?.classification_id, normal_balance: "DR", opening_debit: 0, opening_credit: 0, is_active: true };
-    dlg.innerHTML = `<form method="dialog"><h3>${acc ? "تعديل حساب" : "حساب جديد"}</h3>
+    dlg.innerHTML = `<form method="dialog"><h3>${acc ? tr("تعديل حساب","Edit account") : tr("حساب جديد","New account")}</h3>
       <div class="grid2">
-      <div class="f"><label>الكود</label><input name="account_code" value="${esc(v.account_code)}" required maxlength="30"></div>
-      <div class="f"><label>الاسم</label><input name="account_name_ar" value="${esc(v.account_name_ar)}" required maxlength="300"></div>
-      <div class="f"><label>الحساب الأب</label><select name="parent_account_id"><option value="">— بدون —</option>${parents.map(p => `<option value="${p.account_id}" ${p.account_id == v.parent_account_id ? "selected" : ""}>${esc(p.account_code)} — ${esc(p.account_name_ar)}</option>`).join("")}</select></div>
-      <div class="f"><label>التصنيف</label><select name="classification_id">${cls.map(c => `<option value="${c.classification_id}" ${c.classification_id == v.classification_id ? "selected" : ""}>${esc(c.name_ar)}</option>`).join("")}</select></div>
-      <div class="f"><label>طبيعة الرصيد</label><select name="normal_balance"><option value="DR" ${v.normal_balance === "DR" ? "selected" : ""}>مدين</option><option value="CR" ${v.normal_balance === "CR" ? "selected" : ""}>دائن</option></select></div>
+      <div class="f"><label>${tr("الكود","Code")}</label><input name="account_code" value="${esc(v.account_code)}" required maxlength="30"></div>
+      <div class="f"><label>${tr("الاسم","Name")}</label><input name="account_name_ar" value="${esc(v.account_name_ar)}" required maxlength="300"></div>
+      <div class="f"><label>${tr("الحساب الأب","Parent account")}</label><select name="parent_account_id"><option value="">— ${tr("بدون","None")} —</option>${parents.map(p => `<option value="${p.account_id}" ${p.account_id == v.parent_account_id ? "selected" : ""}>${esc(p.account_code)} — ${esc(p.account_name_ar)}</option>`).join("")}</select></div>
+      <div class="f"><label>${tr("التصنيف","Classification")}</label><select name="classification_id">${cls.map(c => `<option value="${c.classification_id}" ${c.classification_id == v.classification_id ? "selected" : ""}>${esc(c.name_ar)}</option>`).join("")}</select></div>
+      <div class="f"><label>${tr("طبيعة الرصيد","Balance nature")}</label><select name="normal_balance"><option value="DR" ${v.normal_balance === "DR" ? "selected" : ""}>${tr("مدين","Debit")}</option><option value="CR" ${v.normal_balance === "CR" ? "selected" : ""}>${tr("دائن","Credit")}</option></select></div>
       <div class="f"><label>الحالة</label><select name="is_active"><option value="true" ${v.is_active ? "selected" : ""}>نشط</option><option value="false" ${v.is_active ? "" : "selected"}>موقوف</option></select></div>
-      <div class="f"><label>رصيد افتتاحي مدين</label><input name="opening_debit" type="number" step="0.01" min="0" value="${v.opening_debit}"></div>
-      <div class="f"><label>رصيد افتتاحي دائن</label><input name="opening_credit" type="number" step="0.01" min="0" value="${v.opening_credit}"></div></div>
+      <div class="f"><label>${tr("رصيد افتتاحي مدين","Opening debit balance")}</label><input name="opening_debit" type="number" step="0.01" min="0" value="${v.opening_debit}"></div>
+      <div class="f"><label>${tr("رصيد افتتاحي دائن","Opening credit balance")}</label><input name="opening_credit" type="number" step="0.01" min="0" value="${v.opening_credit}"></div></div>
       <div class="err" id="fe"></div>
-      <div class="actions"><button class="btn primary" value="ok">حفظ</button><button class="btn" value="x" formnovalidate>إلغاء</button></div></form>`;
+      <div class="actions"><button class="btn primary" value="ok">${tr("حفظ","Save")}</button><button class="btn" value="x" formnovalidate>${tr("إلغاء","Cancel")}</button></div></form>`;
     const f = dlg.querySelector("form");
     f.onsubmit = async ev => {
       if (ev.submitter?.value !== "ok") return;
@@ -89,7 +90,7 @@ export async function render(main, { api, auth }) {
       };
       try {
         await api(acc ? "/accounts/" + acc.account_id : "/accounts", { method: acc ? "PUT" : "POST", json: body });
-        dlg.close(); toast("تم الحفظ"); await load();
+        dlg.close(); toast(tr("تم الحفظ","Saved")); await load();
       } catch (e) { dlg.querySelector("#fe").textContent = errText(e); }
     };
     dlg.showModal();
