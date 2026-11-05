@@ -1,0 +1,38 @@
+name: Recover admin account
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recover-admin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Recover admin account
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ADMIN_RESET_USERNAME: ${{ secrets.ADMIN_RESET_USERNAME }}
+          ADMIN_RESET_PASSWORD: ${{ secrets.ADMIN_RESET_PASSWORD }}
+        run: |
+          test -n "$DATABASE_URL" || (echo "Missing DATABASE_URL secret" && exit 1)
+          test -n "$JWT_SECRET" || (echo "Missing JWT_SECRET secret" && exit 1)
+          test -n "$ADMIN_RESET_PASSWORD" || (echo "Missing ADMIN_RESET_PASSWORD secret" && exit 1)
+          python -m app.reset_admin
