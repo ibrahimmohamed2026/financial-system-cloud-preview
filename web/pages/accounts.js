@@ -104,7 +104,7 @@ export async function render(main, { api, auth }) {
   }
   if (can("Print")) $("#pdf").onclick = safe(() => {
     const p = new URLSearchParams(); if (st.q) p.set("q", st.q); if (st.cid) p.set("classification_id", st.cid); if (st.active) p.set("is_active", st.active);
-    return download("/accounts/export/pdf?" + p, "chart_of_accounts.pdf", true);
+    return download("/accounts/export/pdf?" + p + "&lang=" + (localStorage.getItem("fs_lang")==="en"?"en":"ar"), "chart_of_accounts.pdf", true);
   });
 
   if (can("Add")) $("#imp").onclick = () => {
