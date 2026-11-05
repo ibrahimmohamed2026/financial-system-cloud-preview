@@ -498,11 +498,11 @@ def create_inventory_return(body: InventoryReturnIn, user: User = Depends(requir
             if not source or source.item_id != row.item_id:
                 raise HTTPException(422, "بند أمر الشراء لا يطابق الصنف")
             order = db.get(PurchaseOrder, source.purchase_order_id)
-            if not order or order.warehouse_id != body.warehouse_id or order.status not in ("Received", "PartiallyReceived"):
+            if not order or order.warehouse_id != body.warehouse_id or order.status != "Received":
                 raise HTTPException(422, "أمر الشراء غير مستلم أو لا يتبع المخزن المحدد")
             already = db.scalar(select(func.coalesce(func.sum(InventoryReturnLine.quantity), 0)).join(
                 InventoryReturn, InventoryReturn.return_id == InventoryReturnLine.return_id).where(
-                InventoryReturn.return_type == "Supplier", InventoryReturn.status.in_(("Approved", "Posted")),
+                InventoryReturn.return_type == "Supplier", InventoryReturn.status.in_(("PendingApproval", "Approved", "Posted")),
                 InventoryReturnLine.purchase_order_line_id == source.line_id)) or 0
             available = Decimal(str(source.received_quantity or 0)) - Decimal(str(already))
             if Decimal(str(row.quantity)) > available:
@@ -514,13 +514,17 @@ def create_inventory_return(body: InventoryReturnIn, user: User = Depends(requir
             if not source or source.item_id != row.item_id:
                 raise HTTPException(422, "بند طلب الصرف لا يطابق الصنف")
             request = db.get(SiteIssueRequest, source.request_id)
-            if not request or request.status not in ("Issued", "PartiallyIssued") or request.warehouse_id != body.warehouse_id:
-                raise HTTPException(422, "طلب الصرف غير مصروف أو لا يتبع المخزن المحدد")
+            if not request or request.status not in ("Issued", "PartiallyIssued"):
+                raise HTTPException(422, "طلب الصرف غير مصروف")
+            issued_at_warehouse = db.scalar(select(func.coalesce(func.sum(InventoryMovement.quantity), 0)).where(
+                InventoryMovement.reference == request.request_no, InventoryMovement.item_id == row.item_id,
+                InventoryMovement.warehouse_id == body.warehouse_id, InventoryMovement.movement_type == "OUT")) or 0
             already = db.scalar(select(func.coalesce(func.sum(InventoryReturnLine.quantity), 0)).join(
                 InventoryReturn, InventoryReturn.return_id == InventoryReturnLine.return_id).where(
-                InventoryReturn.return_type == "Site", InventoryReturn.status.in_(("Approved", "Posted")),
-                InventoryReturnLine.site_issue_line_id == source.line_id)) or 0
-            available = Decimal(str(source.issued_quantity or 0)) - Decimal(str(already))
+                InventoryReturn.return_type == "Site", InventoryReturn.status.in_(("PendingApproval", "Approved", "Posted")),
+                InventoryReturnLine.site_issue_line_id == source.line_id,
+                InventoryReturn.warehouse_id == body.warehouse_id)) or 0
+            available = Decimal(str(issued_at_warehouse)) - Decimal(str(already))
             if Decimal(str(row.quantity)) > available:
                 raise HTTPException(409, f"كمية المرتجع تتجاوز الكمية المصروفة المتبقية للصنف {item.name}")
         prepared.append(row)
@@ -585,12 +589,17 @@ def post_inventory_return(return_id: int, user: User = Depends(require_permissio
             movement_type = "OUT"
         else:
             source = db.get(SiteIssueRequestLine, line.site_issue_line_id)
+            request = db.get(SiteIssueRequest, source.request_id) if source else None
+            issued_at_warehouse = db.scalar(select(func.coalesce(func.sum(InventoryMovement.quantity), 0)).where(
+                InventoryMovement.reference == (request.request_no if request else ""), InventoryMovement.item_id == line.item_id,
+                InventoryMovement.warehouse_id == x.warehouse_id, InventoryMovement.movement_type == "OUT")) or 0
             already = db.scalar(select(func.coalesce(func.sum(InventoryReturnLine.quantity), 0)).join(
                 InventoryReturn, InventoryReturn.return_id == InventoryReturnLine.return_id).where(
                 InventoryReturn.return_type == "Site", InventoryReturn.status == "Posted",
-                InventoryReturnLine.site_issue_line_id == line.site_issue_line_id)) or 0
-            if not source or Decimal(str(already)) + Decimal(str(line.quantity)) > Decimal(str(source.issued_quantity or 0)):
-                raise HTTPException(409, "تجاوزت المرتجعات الكمية المصروفة للموقع")
+                InventoryReturnLine.site_issue_line_id == line.site_issue_line_id,
+                InventoryReturn.warehouse_id == x.warehouse_id)) or 0
+            if not source or Decimal(str(already)) + Decimal(str(line.quantity)) > Decimal(str(issued_at_warehouse)):
+                raise HTTPException(409, "تجاوزت المرتجعات الكمية المصروفة للموقع في هذا المخزن")
             movement_type = "IN"
         movement_no = f"RET-{x.return_id}-{line.line_id}-{uuid4().hex[:8]}"
         db.add(InventoryMovement(movement_no=movement_no, item_id=line.item_id, warehouse_id=x.warehouse_id,
