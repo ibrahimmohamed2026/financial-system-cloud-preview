@@ -840,6 +840,7 @@ class SupplierInvoice(Base):
     journal_entry_id: Mapped[Optional[int]] = C("JournalEntryId", ForeignKey("JournalEntries.JournalEntryId"), nullable=True, unique=True)
     created_by: Mapped[Optional[int]] = C("CreatedBy", ForeignKey("Users.UserId"), nullable=True)
     approved_by: Mapped[Optional[int]] = C("ApprovedBy", ForeignKey("Users.UserId"), nullable=True)
+    price_variance_reason: Mapped[Optional[str]] = C("PriceVarianceReason", Unicode(500), nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
 
 
