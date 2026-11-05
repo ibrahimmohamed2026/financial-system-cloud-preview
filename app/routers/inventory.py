@@ -1074,6 +1074,42 @@ def list_supplier_invoices(_: User = Depends(require_permission("PurchaseCycle",
         "paid_amount":str(db.scalar(select(func.coalesce(func.sum(TreasuryTransaction.outflow),0)).where(TreasuryTransaction.supplier_invoice_id==x.invoice_id)) or 0),
         "status":x.status,"journal_entry_id":x.journal_entry_id} for x in invoices]}
 
+
+@purchases.get("/reports/supplier-aging")
+def supplier_aging_report(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
+    today = date.today()
+    invoices = db.scalars(select(SupplierInvoice).where(SupplierInvoice.status == "Posted").order_by(
+        SupplierInvoice.invoice_date, SupplierInvoice.invoice_id)).all()
+    grouped = {}
+    details = []
+    for invoice in invoices:
+        supplier = db.get(Counterparty, invoice.supplier_id)
+        paid = Decimal(str(db.scalar(select(func.coalesce(func.sum(TreasuryTransaction.outflow), 0)).where(
+            TreasuryTransaction.supplier_invoice_id == invoice.invoice_id)) or 0))
+        remaining = max(Decimal("0"), Decimal(str(invoice.total_amount)) - paid)
+        if remaining <= 0:
+            continue
+        age = max(0, (today - invoice.invoice_date).days)
+        bucket = "current" if age <= 30 else "days_31_60" if age <= 60 else "days_61_90" if age <= 90 else "over_90"
+        supplier_id = invoice.supplier_id
+        row = grouped.setdefault(supplier_id, {"supplier_id": supplier_id,
+            "supplier": (supplier.legal_name or supplier.name) if supplier else "مورد غير محدد",
+            "current": Decimal("0"), "days_31_60": Decimal("0"), "days_61_90": Decimal("0"),
+            "over_90": Decimal("0"), "total": Decimal("0"), "invoice_count": 0})
+        row[bucket] += remaining
+        row["total"] += remaining
+        row["invoice_count"] += 1
+        details.append({"invoice_id": invoice.invoice_id, "invoice_no": invoice.invoice_no,
+            "supplier_id": supplier_id, "supplier": row["supplier"], "invoice_date": str(invoice.invoice_date),
+            "age_days": age, "total_amount": str(invoice.total_amount), "paid_amount": str(paid),
+            "remaining_amount": str(remaining), "bucket": bucket})
+    items = [{**row, key: str(value) for key, value in row.items()} for row in grouped.values()]
+    items.sort(key=lambda row: Decimal(row["total"]), reverse=True)
+    return {"as_of": str(today), "aging_basis": "invoice_date", "items": items, "invoices": details,
+        "totals": {key: str(sum((row[key] for row in grouped.values()), Decimal("0")))
+                   for key in ("current", "days_31_60", "days_61_90", "over_90", "total")}}
+
+
 @purchases.get("/invoice-lookups")
 def supplier_invoice_lookups(_:User=Depends(require_permission("PurchaseCycle","View")),db:Session=Depends(get_db)):
     accounts=db.scalars(select(Account).where(Account.is_active.is_(True)).order_by(Account.account_code)).all()
