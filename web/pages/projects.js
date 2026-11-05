@@ -1,0 +1,31 @@
+import { esc, formDialog, toast, safe, errText } from "../ui.js";
+const SCREEN = "CostCenters";
+export async function render(main, { api, auth }) {
+  const can = a => auth.can(SCREEN, a);
+  main.innerHTML = `<div class="toolbar"><div class="grow"><label>بحث</label><input id="q"></div>${can("Add") ? '<button class="btn primary" id="add">+ مركز تكلفة / مشروع</button>' : ""}</div>
+    <div class="tbl-wrap"><table><thead><tr><th>#</th><th>الاسم</th><th>الاسم بالإنجليزي</th><th>مكتب رئيسي</th><th>الحالة</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
+  const $ = s => main.querySelector(s); let items = [];
+  const load = async () => {
+    items = await api("/projects" + ($("#q").value.trim() ? "?q=" + encodeURIComponent($("#q").value.trim()) : ""));
+    $("#rows").innerHTML = items.map(p => `<tr class="${p.is_active ? "" : "off"}"><td>${p.project_id}</td><td>${esc(p.name_ar)}</td><td>${esc(p.name_en)}</td>
+      <td>${p.is_head_office ? "نعم" : ""}</td><td><span class="tag ${p.is_active ? "ok" : "no"}">${p.is_active ? "نشط" : "موقوف"}</span></td>
+      <td>${can("Edit") ? `<button class="btn sm" data-e="${p.project_id}">تعديل</button> ` : ""}${can("Delete") ? `<button class="btn sm danger" data-d="${p.project_id}">حذف</button>` : ""}</td></tr>`).join("")
+      || `<tr><td colspan="6" class="muted">لا توجد بيانات</td></tr>`;
+  };
+  const form = p => formDialog({
+    title: p ? "تعديل" : "مركز تكلفة جديد", values: p ? { ...p, is_active: String(p.is_active), is_head_office: String(p.is_head_office) } : { is_active: "true", is_head_office: "false" },
+    fields: [{ name: "name_ar", label: "الاسم", required: true }, { name: "name_en", label: "الاسم بالإنجليزي" },
+      { name: "is_head_office", label: "مكتب رئيسي", type: "select", options: [["false", "لا"], ["true", "نعم"]] },
+      { name: "is_active", label: "الحالة", type: "select", options: [["true", "نشط"], ["false", "موقوف"]] }],
+    onSubmit: async v => { await api(p ? "/projects/" + p.project_id : "/projects", { method: p ? "PUT" : "POST",
+      json: { name_ar: v.name_ar, name_en: v.name_en || null, is_head_office: v.is_head_office === "true", is_active: v.is_active === "true" } }); toast("تم الحفظ"); await load(); } });
+  let t; $("#q").oninput = () => { clearTimeout(t); t = setTimeout(safe(load), 300); };
+  if (can("Add")) $("#add").onclick = () => form(null);
+  $("#rows").onclick = safe(async ev => {
+    const e = ev.target.closest("[data-e]"), d = ev.target.closest("[data-d]");
+    if (e) form(items.find(x => x.project_id == e.dataset.e));
+    if (d) { const p = items.find(x => x.project_id == d.dataset.d); if (!confirm(`حذف ${p.name_ar}؟`)) return;
+      await api("/projects/" + p.project_id, { method: "DELETE" }); toast("تم الحذف"); await load(); }
+  });
+  await load();
+}

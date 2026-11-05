@@ -1,0 +1,449 @@
+"""Inventory and purchasing workflow. All tables are additive; existing financial tables are untouched."""
+from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
+from uuid import uuid4
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field, ConfigDict
+from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+from ..database import get_db
+from ..deps import require_permission, write_audit
+from ..models import (Account, Counterparty, FiscalYear, InventoryItem, InventoryWarehouse,
+    InventoryMovement, JournalEntry, JournalEntryDetail, PurchaseOrder, PurchaseOrderLine,
+    SupplierInvoice, SupplierInvoiceLine, TreasuryAccount, TreasuryTransaction, Project, User, utcnow)
+from ..counterparties import resolve_counterparty
+
+inventory = APIRouter(prefix="/api/inventory", tags=["Inventory"])
+purchases = APIRouter(prefix="/api/purchases", tags=["Purchasing"])
+
+class WarehouseIn(BaseModel):
+    code: str = Field(min_length=1, max_length=40)
+    name: str = Field(min_length=1, max_length=200)
+    location: str | None = None
+    is_active: bool = True
+class ItemIn(BaseModel):
+    code: str = Field(min_length=1, max_length=50)
+    name: str = Field(min_length=1, max_length=250)
+    category: str | None = None
+    unit: str = Field(default="قطعة", max_length=30)
+    min_quantity: Decimal = Field(default=Decimal("0"), ge=0)
+    is_active: bool = True
+class MovementIn(BaseModel):
+    movement_no: str = Field(min_length=1, max_length=60)
+    item_id: int
+    warehouse_id: int
+    movement_date: date = Field(default_factory=date.today)
+    movement_type: str
+    quantity: Decimal = Field(gt=0)
+    unit_cost: Decimal = Field(default=Decimal("0"), ge=0)
+    reference: str | None = None
+    notes: str | None = None
+class MovementBatchLineIn(BaseModel):
+    item_id: int
+    quantity: Decimal = Field(gt=0)
+    unit_cost: Decimal = Field(default=Decimal("0"), ge=0)
+class MovementBatchIn(BaseModel):
+    movement_no: str = Field(min_length=1, max_length=50)
+    warehouse_id: int
+    movement_date: date = Field(default_factory=date.today)
+    movement_type: str
+    lines: list[MovementBatchLineIn] = Field(min_length=1)
+    reference: str | None = None
+    notes: str | None = None
+class POLineIn(BaseModel):
+    item_id: int
+    quantity: Decimal = Field(gt=0)
+    unit_price: Decimal = Field(ge=0)
+class PurchaseIn(BaseModel):
+    order_no: str | None = Field(default=None, max_length=60)
+    order_date: date = Field(default_factory=date.today)
+    supplier_name: str = Field(min_length=1, max_length=250)
+    warehouse_id: int
+    project_id: int | None = None
+    notes: str | None = None
+    lines: list[POLineIn] = Field(min_length=1)
+
+class SupplierInvoiceLineIn(BaseModel):
+    purchase_order_line_id: int
+    account_id: int
+    quantity: Decimal = Field(gt=0)
+    unit_price: Decimal = Field(ge=0)
+
+class SupplierInvoiceIn(BaseModel):
+    invoice_no: str = Field(min_length=1, max_length=60)
+    invoice_date: date
+    purchase_order_id: int
+    tax_account_id: int | None = None
+    tax_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    lines: list[SupplierInvoiceLineIn] = Field(min_length=1)
+
+class SupplierInvoicePaymentIn(BaseModel):
+    treasury_account_id: int
+    transaction_date: date
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
+    voucher_no: str | None = Field(default=None, max_length=50)
+
+def _cent(value: Decimal) -> Decimal:
+    return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+def _invoice_account(db: Session, account_id: int, normal_balance: str, label: str) -> Account:
+    account = db.get(Account, account_id)
+    if not account or not account.is_active:
+        raise HTTPException(422, f"{label}: الحساب غير موجود أو غير نشط")
+    if db.scalar(select(Account.account_id).where(Account.parent_account_id == account_id)):
+        raise HTTPException(422, f"{label}: اختر حسابًا فرعيًا")
+    if account.normal_balance != normal_balance:
+        raise HTTPException(422, f"{label}: طبيعة الحساب غير مناسبة")
+    return account
+
+def _balance(db: Session, item_id: int, warehouse_id: int) -> Decimal:
+    rows = db.execute(select(InventoryMovement.movement_type, func.sum(InventoryMovement.quantity)).where(
+        InventoryMovement.item_id == item_id, InventoryMovement.warehouse_id == warehouse_id
+    ).group_by(InventoryMovement.movement_type)).all()
+    total = Decimal("0")
+    for typ, qty in rows:
+        total += Decimal(str(qty or 0)) if typ == "IN" else -Decimal(str(qty or 0))
+    return total
+
+@inventory.get("/warehouses")
+def list_warehouses(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
+    return {"items": [{"warehouse_id":w.warehouse_id,"code":w.code,"name":w.name,"location":w.location,"is_active":w.is_active} for w in db.scalars(select(InventoryWarehouse).order_by(InventoryWarehouse.name)).all()]}
+
+@inventory.post("/warehouses", status_code=201)
+def create_warehouse(body: WarehouseIn, user: User = Depends(require_permission("InventoryManagement", "Add")), db: Session = Depends(get_db)):
+    if db.scalar(select(InventoryWarehouse.warehouse_id).where(InventoryWarehouse.code == body.code)):
+        raise HTTPException(409, "كود المخزن مستخدم بالفعل")
+    x=InventoryWarehouse(**body.model_dump()); db.add(x); db.flush(); write_audit(db,user.user_id,"Create","InventoryWarehouses",x.warehouse_id,new=body.model_dump()); db.commit()
+    return {"warehouse_id":x.warehouse_id,"code":x.code,"name":x.name,"location":x.location,"is_active":x.is_active}
+
+@inventory.get("/items")
+def list_items(q: str | None = None, _: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
+    stmt=select(InventoryItem)
+    if q and q.strip(): stmt=stmt.where((InventoryItem.code.ilike(f"%{q.strip()}%")) | (InventoryItem.name.ilike(f"%{q.strip()}%")))
+    items=db.scalars(stmt.order_by(InventoryItem.name)).all(); warehouses=db.scalars(select(InventoryWarehouse).where(InventoryWarehouse.is_active.is_(True))).all()
+    out=[]
+    for x in items:
+        balances=[{"warehouse_id":w.warehouse_id,"warehouse":w.name,"quantity":str(_balance(db,x.item_id,w.warehouse_id))} for w in warehouses]
+        total=sum((Decimal(b["quantity"]) for b in balances),Decimal("0"))
+        out.append({"item_id":x.item_id,"code":x.code,"name":x.name,"category":x.category,"unit":x.unit,"min_quantity":str(x.min_quantity),"is_active":x.is_active,"quantity":str(total),"balances":balances})
+    return {"items":out,"warehouses":[{"warehouse_id":w.warehouse_id,"name":w.name} for w in warehouses]}
+
+@inventory.post("/items", status_code=201)
+def create_item(body: ItemIn, user: User = Depends(require_permission("InventoryManagement", "Add")), db: Session = Depends(get_db)):
+    if db.scalar(select(InventoryItem.item_id).where(InventoryItem.code == body.code)): raise HTTPException(409,"كود الصنف مستخدم بالفعل")
+    x=InventoryItem(**body.model_dump());db.add(x);db.flush();write_audit(db,user.user_id,"Create","InventoryItems",x.item_id,new=body.model_dump());db.commit()
+    return {"item_id":x.item_id,"code":x.code,"name":x.name}
+
+@inventory.get("/movements")
+def list_movements(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
+    rows=db.scalars(select(InventoryMovement).order_by(InventoryMovement.movement_date.desc(),InventoryMovement.movement_id.desc()).limit(500)).all()
+    out=[]
+    for x in rows:
+        i=db.get(InventoryItem,x.item_id); w=db.get(InventoryWarehouse,x.warehouse_id)
+        out.append({"movement_id":x.movement_id,"movement_no":x.movement_no,"date":str(x.movement_date),"type":x.movement_type,"item":i.name if i else "","warehouse":w.name if w else "","quantity":str(x.quantity),"unit_cost":str(x.unit_cost),"reference":x.reference,"notes":x.notes})
+    return {"items":out}
+
+@inventory.get("/items/{item_id}/card")
+def item_stock_card(item_id: int, date_from: date | None = None, date_to: date | None = None,
+    warehouse_id: int | None = None, _: User = Depends(require_permission("InventoryManagement", "View")),
+    db: Session = Depends(get_db)):
+    """Return a stock ledger and opening/running balances derived only from posted movements."""
+    item = db.get(InventoryItem, item_id)
+    if not item:
+        raise HTTPException(404, "الصنف غير موجود")
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(422, "تاريخ البداية يجب أن يسبق تاريخ النهاية")
+    if warehouse_id is not None and not db.get(InventoryWarehouse, warehouse_id):
+        raise HTTPException(422, "المخزن غير موجود")
+
+    base = select(InventoryMovement).where(InventoryMovement.item_id == item_id)
+    if warehouse_id is not None:
+        base = base.where(InventoryMovement.warehouse_id == warehouse_id)
+    before = base
+    if date_from:
+        before = before.where(InventoryMovement.movement_date < date_from)
+    opening_rows = db.scalars(before.order_by(InventoryMovement.movement_date, InventoryMovement.movement_id)).all()
+    opening = sum((Decimal(str(m.quantity)) if m.movement_type == "IN" else -Decimal(str(m.quantity))
+        for m in opening_rows), Decimal("0"))
+
+    stmt = base
+    if date_from:
+        stmt = stmt.where(InventoryMovement.movement_date >= date_from)
+    if date_to:
+        stmt = stmt.where(InventoryMovement.movement_date <= date_to)
+    rows = db.scalars(stmt.order_by(InventoryMovement.movement_date, InventoryMovement.movement_id)).all()
+    running = opening
+    movements = []
+    incoming = outgoing = Decimal("0")
+    for movement in rows:
+        warehouse = db.get(InventoryWarehouse, movement.warehouse_id)
+        signed = Decimal(str(movement.quantity)) if movement.movement_type == "IN" else -Decimal(str(movement.quantity))
+        running += signed
+        if signed > 0:
+            incoming += signed
+        else:
+            outgoing += -signed
+        movements.append({"movement_id": movement.movement_id, "movement_no": movement.movement_no,
+            "date": str(movement.movement_date), "type": movement.movement_type,
+            "warehouse_id": movement.warehouse_id, "warehouse": warehouse.name if warehouse else "",
+            "quantity": str(movement.quantity), "signed_quantity": str(signed), "balance": str(running),
+            "unit_cost": str(movement.unit_cost), "reference": movement.reference, "notes": movement.notes})
+    return {"item": {"item_id": item.item_id, "code": item.code, "name": item.name, "unit": item.unit},
+        "date_from": str(date_from) if date_from else None, "date_to": str(date_to) if date_to else None,
+        "warehouse_id": warehouse_id, "opening_balance": str(opening), "incoming": str(incoming),
+        "outgoing": str(outgoing), "closing_balance": str(running), "movements": movements}
+
+@inventory.post("/movements", status_code=201)
+def create_movement(body: MovementIn, user: User = Depends(require_permission("InventoryManagement", "Add")), db: Session = Depends(get_db)):
+    if body.movement_type not in ("IN","OUT"): raise HTTPException(422,"نوع الحركة يجب أن يكون IN أو OUT")
+    if not db.get(InventoryItem,body.item_id) or not db.get(InventoryWarehouse,body.warehouse_id): raise HTTPException(422,"الصنف أو المخزن غير موجود")
+    if db.scalar(select(InventoryMovement.movement_id).where(InventoryMovement.movement_no==body.movement_no)): raise HTTPException(409,"رقم الحركة مستخدم بالفعل")
+    if body.movement_type=="OUT" and _balance(db,body.item_id,body.warehouse_id)<body.quantity: raise HTTPException(409,"الرصيد غير كافٍ للصرف")
+    x=InventoryMovement(**body.model_dump(),created_by=user.user_id);db.add(x);db.flush();write_audit(db,user.user_id,"Create","InventoryMovements",x.movement_id,new=body.model_dump());db.commit()
+    return {"movement_id":x.movement_id,"movement_no":x.movement_no,"message":"تم حفظ حركة المخزون"}
+
+@inventory.post("/movements/batch", status_code=201)
+def create_movement_batch(body: MovementBatchIn, user: User = Depends(require_permission("InventoryManagement", "Add")), db: Session = Depends(get_db)):
+    """Register all document lines atomically; no journal is created by stock-only movements."""
+    if body.movement_type not in ("IN", "OUT"):
+        raise HTTPException(422, "نوع الحركة يجب أن يكون IN أو OUT")
+    if not db.get(InventoryWarehouse, body.warehouse_id):
+        raise HTTPException(422, "المخزن غير موجود")
+    totals: dict[int, Decimal] = {}
+    for line in body.lines:
+        if not db.get(InventoryItem, line.item_id):
+            raise HTTPException(422, f"الصنف {line.item_id} غير موجود")
+        totals[line.item_id] = totals.get(line.item_id, Decimal("0")) + line.quantity
+    if body.movement_type == "OUT":
+        for item_id, quantity in totals.items():
+            if _balance(db, item_id, body.warehouse_id) < quantity:
+                item = db.get(InventoryItem, item_id)
+                raise HTTPException(409, f"الرصيد غير كافٍ للصنف {item.code if item else item_id}")
+    refs = [f"{body.movement_no}-{n:03d}" for n in range(1, len(body.lines) + 1)]
+    duplicate = db.scalar(select(InventoryMovement.movement_id).where(InventoryMovement.movement_no.in_(refs)).limit(1))
+    if duplicate:
+        raise HTTPException(409, "رقم مستند الحركة مستخدم من قبل")
+    created = []
+    for ref, line in zip(refs, body.lines):
+        movement = InventoryMovement(movement_no=ref, item_id=line.item_id, warehouse_id=body.warehouse_id,
+            movement_date=body.movement_date, movement_type=body.movement_type, quantity=line.quantity,
+            unit_cost=line.unit_cost, reference=body.reference or body.movement_no, notes=body.notes, created_by=user.user_id)
+        db.add(movement); db.flush()
+        write_audit(db, user.user_id, "Create", "InventoryMovements", movement.movement_id,
+            new={"movement_no":ref,"batch_no":body.movement_no,"item_id":line.item_id,"quantity":str(line.quantity),"movement_type":body.movement_type})
+        created.append({"movement_id":movement.movement_id,"movement_no":ref,"item_id":line.item_id,"quantity":str(line.quantity)})
+    db.commit()
+    return {"movement_no":body.movement_no,"items":created,"message":"تم حفظ مستند المخزون متعدد البنود"}
+
+@purchases.get("")
+def list_orders(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
+    rows=db.scalars(select(PurchaseOrder).order_by(PurchaseOrder.order_date.desc(),PurchaseOrder.purchase_order_id.desc())).all()
+    return {"items":[{"purchase_order_id":x.purchase_order_id,"order_no":x.order_no,"order_date":str(x.order_date),"supplier_name":x.supplier_name,"warehouse_id":x.warehouse_id,"warehouse":(db.get(InventoryWarehouse,x.warehouse_id).name if db.get(InventoryWarehouse,x.warehouse_id) else ""),"project_id":x.project_id,"project":(db.get(Project,x.project_id).name_ar if x.project_id and db.get(Project,x.project_id) else ""),"status":x.status,"notes":x.notes,"total_amount":str(x.total_amount),"lines":[{"line_id":l.line_id,"item_id":l.item_id,"item":(db.get(InventoryItem,l.item_id).name if db.get(InventoryItem,l.item_id) else ""),"quantity":str(l.quantity),"unit_price":str(l.unit_price),"received_quantity":str(l.received_quantity)} for l in db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==x.purchase_order_id)).all()]} for x in rows]}
+
+@inventory.get("/purchase-receipts")
+def list_pending_purchase_receipts(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
+    """Expose approved purchase orders as receiving documents in the warehouse screen."""
+    orders = db.scalars(select(PurchaseOrder).where(PurchaseOrder.status == "Approved")
+        .order_by(PurchaseOrder.order_date.desc(), PurchaseOrder.purchase_order_id.desc())).all()
+    pending = []
+    for order in orders:
+        lines = db.scalars(select(PurchaseOrderLine).where(
+            PurchaseOrderLine.purchase_order_id == order.purchase_order_id)).all()
+        remaining = [line for line in lines if Decimal(str(line.quantity)) > Decimal(str(line.received_quantity or 0))]
+        if not remaining:
+            continue
+        warehouse = db.get(InventoryWarehouse, order.warehouse_id)
+        pending.append({"purchase_order_id": order.purchase_order_id, "order_no": order.order_no,
+            "order_date": str(order.order_date), "supplier_name": order.supplier_name,
+            "project": db.get(Project, order.project_id).name_ar if order.project_id and db.get(Project, order.project_id) else "",
+            "warehouse": warehouse.name if warehouse else "", "total_amount": str(order.total_amount),
+            "lines": [{"item": (db.get(InventoryItem, line.item_id).name if db.get(InventoryItem, line.item_id) else ""),
+                "quantity": str(line.quantity), "received_quantity": str(line.received_quantity or 0),
+                "unit_price": str(line.unit_price)} for line in remaining]})
+    return {"items": pending}
+
+@purchases.post("", status_code=201)
+def create_order(body: PurchaseIn, user: User = Depends(require_permission("PurchaseCycle", "Add")), db: Session = Depends(get_db)):
+    if not db.get(InventoryWarehouse,body.warehouse_id): raise HTTPException(422,"المخزن غير موجود")
+    if body.project_id is not None:
+        project=db.get(Project,body.project_id)
+        if not project or not project.is_active: raise HTTPException(422,"مركز التكلفة غير موجود أو غير نشط")
+    for line in body.lines:
+        if not db.get(InventoryItem,line.item_id): raise HTTPException(422,f"الصنف {line.item_id} غير موجود")
+    total=sum((line.quantity*line.unit_price for line in body.lines),Decimal("0"))
+    # The database-generated ID is the concurrency-safe sequence; client-supplied
+    # order numbers are intentionally ignored so every new order is numbered uniformly.
+    party=resolve_counterparty(db,body.supplier_name,"Supplier")
+    po=PurchaseOrder(order_no=f"PO-PENDING-{uuid4().hex}",order_date=body.order_date,supplier_name=party.legal_name if party else body.supplier_name,counterparty_id=party.counterparty_id if party else None,warehouse_id=body.warehouse_id,project_id=body.project_id,status="Draft",notes=body.notes,total_amount=total,created_by=user.user_id)
+    db.add(po);db.flush()
+    po.order_no=f"PO-{body.order_date.year}-{po.purchase_order_id:06d}"
+    for line in body.lines: db.add(PurchaseOrderLine(purchase_order_id=po.purchase_order_id,item_id=line.item_id,quantity=line.quantity,unit_price=line.unit_price,received_quantity=0))
+    write_audit(db,user.user_id,"Create","PurchaseOrders",po.purchase_order_id,new={"order_no":po.order_no,"total_amount":str(total),"project_id":po.project_id});db.commit()
+    return {"purchase_order_id":po.purchase_order_id,"order_no":po.order_no,"status":po.status,"total_amount":str(total)}
+
+@purchases.get("/invoices")
+def list_supplier_invoices(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
+    invoices=db.scalars(select(SupplierInvoice).order_by(SupplierInvoice.invoice_date.desc(),SupplierInvoice.invoice_id.desc())).all()
+    return {"items":[{"invoice_id":x.invoice_id,"invoice_no":x.invoice_no,"invoice_date":str(x.invoice_date),
+        "purchase_order_id":x.purchase_order_id,"order_no":db.get(PurchaseOrder,x.purchase_order_id).order_no if db.get(PurchaseOrder,x.purchase_order_id) else "",
+        "project_id":x.project_id,"project":db.get(Project,x.project_id).name_ar if x.project_id and db.get(Project,x.project_id) else "",
+        "supplier":db.get(Counterparty,x.supplier_id).legal_name if db.get(Counterparty,x.supplier_id) else "",
+        "net_amount":str(x.net_amount),"tax_amount":str(x.tax_amount),"total_amount":str(x.total_amount),
+        "paid_amount":str(db.scalar(select(func.coalesce(func.sum(TreasuryTransaction.outflow),0)).where(TreasuryTransaction.supplier_invoice_id==x.invoice_id)) or 0),
+        "status":x.status,"journal_entry_id":x.journal_entry_id} for x in invoices]}
+
+@purchases.get("/invoice-lookups")
+def supplier_invoice_lookups(_:User=Depends(require_permission("PurchaseCycle","View")),db:Session=Depends(get_db)):
+    accounts=db.scalars(select(Account).where(Account.is_active.is_(True)).order_by(Account.account_code)).all()
+    parents=set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
+    return {"accounts":[{"account_id":a.account_id,"code":a.account_code,"name":a.account_name_ar,"normal_balance":a.normal_balance}
+        for a in accounts if a.account_id not in parents],
+        "projects":[{"project_id":p.project_id,"name_ar":p.name_ar} for p in db.scalars(select(Project).where(Project.is_active.is_(True)).order_by(Project.name_ar)).all()],
+        "treasury_accounts":[{"treasury_account_id":t.treasury_account_id,"name":t.name_ar,"gl_account_id":t.gl_account_id}
+        for t in db.scalars(select(TreasuryAccount).where(TreasuryAccount.is_active.is_(True)).order_by(TreasuryAccount.name_ar)).all()],
+        "received_orders":[{"purchase_order_id":p.purchase_order_id,"order_no":p.order_no,"supplier_name":p.supplier_name,"project_id":p.project_id,
+        "lines":[{"line_id":l.line_id,"item":db.get(InventoryItem,l.item_id).name if db.get(InventoryItem,l.item_id) else "",
+        "received_quantity":str(l.received_quantity),"unit_price":str(l.unit_price)} for l in db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==p.purchase_order_id)).all()]}
+        for p in db.scalars(select(PurchaseOrder).where(PurchaseOrder.status=="Received").order_by(PurchaseOrder.purchase_order_id.desc())).all()]}
+
+@purchases.post("/invoices",status_code=201)
+def create_supplier_invoice(body:SupplierInvoiceIn,user:User=Depends(require_permission("PurchaseCycle","Add")),db:Session=Depends(get_db)):
+    po=db.get(PurchaseOrder,body.purchase_order_id)
+    if not po or po.status!="Received":raise HTTPException(409,"لا تسجل فاتورة المورد إلا بعد استلام أمر الشراء كاملًا")
+    party=resolve_counterparty(db,po.supplier_name,"Supplier",po.counterparty_id)
+    if not party:raise HTTPException(409,"سجل المورد المرتبط بأمر الشراء غير موجود")
+    if db.scalar(select(SupplierInvoice.invoice_id).where(SupplierInvoice.supplier_id==party.counterparty_id,SupplierInvoice.invoice_no==body.invoice_no)):
+        raise HTTPException(409,"رقم الفاتورة مستخدم لهذا المورد")
+    if len({x.purchase_order_line_id for x in body.lines})!=len(body.lines):raise HTTPException(422,"لا تكرر بند أمر الشراء في الفاتورة")
+    po_lines={x.line_id:x for x in db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==po.purchase_order_id)).all()}
+    prepared=[];net_total=Decimal("0")
+    for row in body.lines:
+        pl=po_lines.get(row.purchase_order_line_id)
+        if not pl:raise HTTPException(422,"بند الفاتورة لا يتبع أمر الشراء المحدد")
+        _invoice_account(db,row.account_id,"DR","حساب المخزون أو المصروف")
+        invoiced=Decimal(str(db.scalar(select(func.coalesce(func.sum(SupplierInvoiceLine.quantity),0)).join(SupplierInvoice).where(
+            SupplierInvoiceLine.purchase_order_line_id==pl.line_id,SupplierInvoice.status!="Cancelled")) or 0))
+        available=Decimal(str(pl.received_quantity or 0))-invoiced
+        if row.quantity>available:raise HTTPException(409,f"كمية الفاتورة تتجاوز الكمية المستلمة غير المفوترة ({available})")
+        amount=_cent(row.quantity*row.unit_price);net_total+=amount;prepared.append((row,amount))
+    if body.tax_amount and not body.tax_account_id:raise HTTPException(422,"حدد حساب ضريبة المدخلات")
+    if body.tax_account_id:_invoice_account(db,body.tax_account_id,"DR","حساب ضريبة المدخلات")
+    tax=_cent(body.tax_amount);net_total=_cent(net_total);total=_cent(net_total+tax)
+    inv=SupplierInvoice(supplier_id=party.counterparty_id,purchase_order_id=po.purchase_order_id,project_id=po.project_id,invoice_no=body.invoice_no,
+        invoice_date=body.invoice_date,tax_account_id=body.tax_account_id,net_amount=net_total,tax_amount=tax,
+        total_amount=total,status="Draft",created_by=user.user_id)
+    db.add(inv)
+    try:db.flush()
+    except IntegrityError:
+        db.rollback();raise HTTPException(409,"رقم الفاتورة مستخدم لهذا المورد")
+    for row,amount in prepared:db.add(SupplierInvoiceLine(invoice_id=inv.invoice_id,purchase_order_line_id=row.purchase_order_line_id,
+        account_id=row.account_id,quantity=row.quantity,unit_price=row.unit_price,net_amount=amount))
+    write_audit(db,user.user_id,"Create","SupplierInvoices",inv.invoice_id,new={"invoice_no":inv.invoice_no,"total_amount":str(total)})
+    db.commit();return {"invoice_id":inv.invoice_id,"invoice_no":inv.invoice_no,"status":inv.status,"total_amount":str(total)}
+
+@purchases.post("/invoices/{invoice_id}/approve")
+def approve_supplier_invoice(invoice_id:int,user:User=Depends(require_permission("PurchaseCycle","Approve")),db:Session=Depends(get_db)):
+    inv=db.scalar(select(SupplierInvoice).where(SupplierInvoice.invoice_id==invoice_id).with_for_update())
+    if not inv:raise HTTPException(404,"فاتورة المورد غير موجودة")
+    if inv.status!="Draft":raise HTTPException(409,"الفاتورة ليست مسودة")
+    supplier=db.get(Counterparty,inv.supplier_id)
+    if not supplier or not supplier.linked_account_id:raise HTTPException(409,"اربط حساب الدائنين للمورد من سجل المورد")
+    _invoice_account(db,supplier.linked_account_id,"CR","حساب الدائنين للمورد")
+    inv.status="Approved";inv.approved_by=user.user_id
+    write_audit(db,user.user_id,"Approve","SupplierInvoices",invoice_id,new={"status":inv.status});db.commit()
+    return {"invoice_id":invoice_id,"status":inv.status}
+
+@purchases.post("/invoices/{invoice_id}/post")
+def post_supplier_invoice(invoice_id:int,user:User=Depends(require_permission("PurchaseCycle","Post")),db:Session=Depends(get_db)):
+    inv=db.scalar(select(SupplierInvoice).where(SupplierInvoice.invoice_id==invoice_id).with_for_update())
+    if not inv:raise HTTPException(404,"فاتورة المورد غير موجودة")
+    if inv.status!="Approved" or inv.journal_entry_id:raise HTTPException(409,"اعتمد الفاتورة قبل الترحيل، ولا يمكن ترحيلها مرتين")
+    fy=db.scalar(select(FiscalYear).where(FiscalYear.start_date<=inv.invoice_date,FiscalYear.end_date>=inv.invoice_date).with_for_update())
+    if not fy:raise HTTPException(409,"لا توجد سنة مالية تشمل تاريخ الفاتورة")
+    if fy.is_closed:raise HTTPException(409,"السنة المالية مقفولة")
+    supplier=db.get(Counterparty,inv.supplier_id)
+    if not supplier or not supplier.linked_account_id:raise HTTPException(409,"حساب الدائنين للمورد غير محدد")
+    _invoice_account(db,supplier.linked_account_id,"CR","حساب الدائنين للمورد")
+    company_id=fy.company_id
+    last=db.scalar(select(func.max(JournalEntry.entry_no)).where(JournalEntry.entry_no.like(f"JE-{fy.start_date.year}-%")))
+    seq=int(last.rsplit("-",1)[1])+1 if last and last.rsplit("-",1)[1].isdigit() else 1
+    entry=JournalEntry(entry_no=f"JE-{fy.start_date.year}-{seq:06d}",entry_date=inv.invoice_date,company_id=company_id,
+        fiscal_year_id=fy.fiscal_year_id,description=f"فاتورة مورد {inv.invoice_no}",status="Posted",created_by=user.user_id,
+        posted_by=user.user_id,posted_at=utcnow())
+    db.add(entry);db.flush();lines=db.scalars(select(SupplierInvoiceLine).where(SupplierInvoiceLine.invoice_id==invoice_id)).all()
+    for n,line in enumerate(lines,1):
+        db.add(JournalEntryDetail(journal_entry_id=entry.journal_entry_id,line_no=n,account_id=line.account_id,
+            project_id=inv.project_id,debit_amount=line.net_amount,credit_amount=0,description=f"فاتورة {inv.invoice_no}"))
+    n=len(lines)+1
+    if inv.tax_amount:
+        _invoice_account(db,inv.tax_account_id,"DR","حساب ضريبة المدخلات")
+        db.add(JournalEntryDetail(journal_entry_id=entry.journal_entry_id,line_no=n,account_id=inv.tax_account_id,
+            project_id=inv.project_id,debit_amount=inv.tax_amount,credit_amount=0,description=f"ضريبة فاتورة {inv.invoice_no}"));n+=1
+    db.add(JournalEntryDetail(journal_entry_id=entry.journal_entry_id,line_no=n,account_id=supplier.linked_account_id,
+        project_id=inv.project_id,debit_amount=0,credit_amount=inv.total_amount,description=f"مستحق للمورد {supplier.legal_name or supplier.name}"))
+    inv.journal_entry_id=entry.journal_entry_id;inv.status="Posted"
+    write_audit(db,user.user_id,"Post","SupplierInvoices",invoice_id,new={"status":inv.status,"journal_entry_id":entry.journal_entry_id})
+    db.commit();return {"invoice_id":invoice_id,"status":inv.status,"journal_entry_id":entry.journal_entry_id,"entry_no":entry.entry_no}
+
+@purchases.post("/invoices/{invoice_id}/payments",status_code=201)
+def pay_supplier_invoice(invoice_id:int,body:SupplierInvoicePaymentIn,user:User=Depends(require_permission("PurchaseCycle","Post")),db:Session=Depends(get_db)):
+    inv=db.scalar(select(SupplierInvoice).where(SupplierInvoice.invoice_id==invoice_id).with_for_update())
+    if not inv or inv.status!="Posted":raise HTTPException(409,"يجب ترحيل فاتورة المورد قبل السداد")
+    if body.transaction_date<inv.invoice_date:raise HTTPException(422,"تاريخ السداد لا يسبق تاريخ الفاتورة")
+    paid=Decimal(str(db.scalar(select(func.coalesce(func.sum(TreasuryTransaction.outflow),0)).where(TreasuryTransaction.supplier_invoice_id==invoice_id)) or 0))
+    remaining=Decimal(str(inv.total_amount))-paid
+    if body.amount>remaining:raise HTTPException(409,f"مبلغ السداد يتجاوز المتبقي ({remaining:.2f})")
+    treasury=db.get(TreasuryAccount,body.treasury_account_id)
+    if not treasury or not treasury.is_active:raise HTTPException(422,"حساب الخزينة أو البنك غير موجود أو غير نشط")
+    _invoice_account(db,treasury.gl_account_id,"DR","حساب البنك أو الخزينة")
+    supplier=db.get(Counterparty,inv.supplier_id)
+    if not supplier or not supplier.linked_account_id:raise HTTPException(409,"حساب الدائنين للمورد غير محدد")
+    _invoice_account(db,supplier.linked_account_id,"CR","حساب الدائنين للمورد")
+    fy=db.scalar(select(FiscalYear).where(FiscalYear.start_date<=body.transaction_date,FiscalYear.end_date>=body.transaction_date).with_for_update())
+    if not fy:raise HTTPException(409,"لا توجد سنة مالية تشمل تاريخ السداد")
+    if fy.is_closed:raise HTTPException(409,"السنة المالية مقفولة")
+    last=db.scalar(select(func.max(JournalEntry.entry_no)).where(JournalEntry.entry_no.like(f"JE-{fy.start_date.year}-%")))
+    seq=int(last.rsplit("-",1)[1])+1 if last and last.rsplit("-",1)[1].isdigit() else 1
+    entry=JournalEntry(entry_no=f"JE-{fy.start_date.year}-{seq:06d}",entry_date=body.transaction_date,company_id=fy.company_id,
+        fiscal_year_id=fy.fiscal_year_id,description=f"سداد فاتورة المورد {inv.invoice_no}",status="Posted",created_by=user.user_id,
+        posted_by=user.user_id,posted_at=utcnow())
+    db.add(entry);db.flush()
+    db.add(JournalEntryDetail(journal_entry_id=entry.journal_entry_id,line_no=1,account_id=supplier.linked_account_id,
+        project_id=inv.project_id,debit_amount=body.amount,credit_amount=0,description=f"سداد فاتورة {inv.invoice_no}"))
+    db.add(JournalEntryDetail(journal_entry_id=entry.journal_entry_id,line_no=2,account_id=treasury.gl_account_id,
+        project_id=inv.project_id,debit_amount=0,credit_amount=body.amount,description=f"سداد فاتورة {inv.invoice_no}"))
+    voucher=body.voucher_no or f"SUP-{inv.invoice_id}-{int(paid*100)+1}"
+    tx=TreasuryTransaction(treasury_account_id=treasury.treasury_account_id,transaction_date=body.transaction_date,
+        inflow=0,outflow=body.amount,description=f"سداد فاتورة المورد {inv.invoice_no}",voucher_no=voucher,status="Posted",
+        recipient_name=supplier.legal_name or supplier.name,counterparty_id=supplier.counterparty_id,project_id=inv.project_id,
+        supplier_invoice_id=inv.invoice_id,journal_entry_id=entry.journal_entry_id)
+    db.add(tx);db.flush()
+    write_audit(db,user.user_id,"PaySupplierInvoice","SupplierInvoices",invoice_id,new={"amount":str(body.amount),"journal_entry_id":entry.journal_entry_id,"transaction_id":tx.transaction_id})
+    db.commit()
+    return {"invoice_id":invoice_id,"paid_amount":str(paid+body.amount),"remaining_amount":str(remaining-body.amount),
+        "transaction_id":tx.transaction_id,"journal_entry_id":entry.journal_entry_id,"entry_no":entry.entry_no}
+
+@purchases.post("/{order_id}/approve")
+def approve_order(order_id:int,user:User=Depends(require_permission("PurchaseCycle","Approve")),db:Session=Depends(get_db)):
+    po=db.scalar(select(PurchaseOrder).where(PurchaseOrder.purchase_order_id==order_id).with_for_update())
+    if not po: raise HTTPException(404,"أمر الشراء غير موجود")
+    if po.status!="Draft": raise HTTPException(409,"لا يمكن اعتماد أمر الشراء بهذه الحالة")
+    po.status="Approved";write_audit(db,user.user_id,"Approve","PurchaseOrders",po.purchase_order_id,new={"status":po.status});db.commit()
+    return {"purchase_order_id":po.purchase_order_id,"status":po.status}
+
+@purchases.post("/{order_id}/receive")
+def receive_order(order_id:int,user:User=Depends(require_permission("InventoryManagement","Post")),db:Session=Depends(get_db)):
+    po=db.scalar(select(PurchaseOrder).where(PurchaseOrder.purchase_order_id==order_id).with_for_update())
+    if not po: raise HTTPException(404,"أمر الشراء غير موجود")
+    if po.status!="Approved": raise HTTPException(409,"يجب اعتماد أمر الشراء قبل الاستلام")
+    lines=db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==order_id)).all()
+    for line in lines:
+        remaining=Decimal(str(line.quantity))-Decimal(str(line.received_quantity or 0))
+        if remaining>0:
+            movement_no=f"PO-{po.order_no}-{line.line_id}"
+            if not db.scalar(select(InventoryMovement.movement_id).where(InventoryMovement.movement_no==movement_no)):
+                db.add(InventoryMovement(movement_no=movement_no,item_id=line.item_id,warehouse_id=po.warehouse_id,movement_date=date.today(),movement_type="IN",quantity=remaining,unit_cost=line.unit_price,reference=po.order_no,notes="استلام أمر شراء",created_by=user.user_id))
+            line.received_quantity=line.quantity
+    po.status="Received";write_audit(db,user.user_id,"Receive","PurchaseOrders",po.purchase_order_id,new={"status":po.status});db.commit()
+    return {"purchase_order_id":po.purchase_order_id,"status":po.status,"message":"تم الاستلام وتحديث أرصدة المخزون"}
