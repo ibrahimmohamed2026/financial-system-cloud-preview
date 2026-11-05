@@ -253,6 +253,91 @@ def _read_jsonl(z: zipfile.ZipFile, table) -> list[dict] | None:
     return rows
 
 
+
+def _preflight_restore(z: zipfile.ZipFile, manifest: dict) -> dict[str, int]:
+    """Validate archive/model/live-schema compatibility before creating a safety copy or deleting rows."""
+    expected_tables = {table.name: table for table in Base.metadata.sorted_tables}
+    declared = manifest.get("tables")
+    if not isinstance(declared, dict) or set(declared) != set(expected_tables):
+        missing = sorted(set(expected_tables) - set(declared or {}))
+        extra = sorted(set(declared or {}) - set(expected_tables))
+        raise BackupError(
+            f"مخطط النسخة غير متوافق مع إصدار النظام. جداول ناقصة: {missing[:8]}، جداول زائدة: {extra[:8]}"
+        )
+
+    archive_names = set(z.namelist())
+    db_files = {name for name in archive_names if name.startswith("database/") and name.endswith(".jsonl")}
+    expected_files = {f"database/{name}.jsonl" for name in expected_tables}
+    if db_files != expected_files:
+        missing = sorted(expected_files - db_files)
+        extra = sorted(db_files - expected_files)
+        raise BackupError(
+            f"ملفات بيانات النسخة غير مكتملة أو غير متوافقة. ملفات ناقصة: {missing[:5]}، ملفات زائدة: {extra[:5]}"
+        )
+
+    inspector = inspect(engine)
+    live_tables = set(inspector.get_table_names())
+    missing_live = sorted(set(expected_tables) - live_tables)
+    if missing_live:
+        raise BackupError(f"قاعدة التشغيل ينقصها جداول مطلوبة: {missing_live[:8]}")
+
+    counts: dict[str, int] = {}
+    for table_name, table in expected_tables.items():
+        expected_columns = {column.name for column in db_setup.data_columns(table)}
+        live_columns_info = inspector.get_columns(table_name)
+        live_columns = {column["name"] for column in live_columns_info}
+        missing_columns = sorted(expected_columns - live_columns)
+        if missing_columns:
+            raise BackupError(f"قاعدة التشغيل: أعمدة ناقصة في {table_name}: {missing_columns[:8]}")
+
+        # Existing DB columns not represented by the current model can block inserts
+        # when they are mandatory and have no database-side default.
+        model_columns = {column.name for column in table.columns}
+        blocking_extra = sorted(
+            column["name"] for column in live_columns_info
+            if column["name"] not in model_columns
+            and not column.get("nullable", True)
+            and column.get("default") is None
+            and column.get("computed") is None
+        )
+        if blocking_extra:
+            raise BackupError(
+                f"قاعدة التشغيل تحتوي أعمدة إلزامية غير معروفة للنظام في {table_name}: {blocking_extra[:8]}"
+            )
+
+        entry = f"database/{table_name}.jsonl"
+        expected_count = declared[table_name]
+        if not isinstance(expected_count, int) or expected_count < 0:
+            raise BackupError(f"عدد سجلات غير صالح في manifest للجدول {table_name}")
+
+        count = 0
+        with z.open(entry) as raw:
+            for line_number, line in enumerate(raw, 1):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError as exc:
+                    raise BackupError(f"بيانات JSON تالفة في {table_name} عند السطر {line_number}") from exc
+                if not isinstance(record, dict):
+                    raise BackupError(f"صيغة سجل غير صحيحة في الجدول {table_name}")
+                fields = set(record)
+                if fields != expected_columns:
+                    missing = sorted(expected_columns - fields)
+                    extra = sorted(fields - expected_columns)
+                    raise BackupError(
+                        f"حقول النسخة غير متوافقة في {table_name}. ناقصة: {missing[:8]}، زائدة: {extra[:8]}"
+                    )
+                count += 1
+        if count != expected_count:
+            raise BackupError(
+                f"عدد سجلات النسخة في {table_name} ({count}) لا يطابق manifest ({expected_count})"
+            )
+        counts[table_name] = count
+
+    return counts
+
+
 def _restore_legacy_sqlite(z: zipfile.ZipFile, conn) -> dict[str, int]:
     """نسخ قديمة (قبل الشكل الجديد) كان فيها database/database.sqlite."""
     fd, tmp = tempfile.mkstemp(suffix=".db")
@@ -306,6 +391,7 @@ def restore_backup(path: Path) -> dict:
             if bad:
                 raise BackupError(f"ملف النسخة تالف (فشل فحص السلامة عند: {bad})")
 
+            _preflight_restore(z, manifest)  # رفض النسخ غير المتوافقة قبل أي تغيير أو نسخة أمان
             safety = create_backup("pre_restore")       # نسخة أمان بالحالة الحالية قبل أي تغيير
             try:
                 with engine.begin() as conn:
