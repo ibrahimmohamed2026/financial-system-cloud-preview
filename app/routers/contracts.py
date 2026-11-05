@@ -65,13 +65,13 @@ class ContractIn(BaseModel):
         return self
 
 class AddendumIn(BaseModel):
-    addendum_no: str = Field(min_length=1, max_length=50)
+    addendum_no: str | None = Field(default=None, max_length=50)
     addendum_date: date
     description: str = Field(min_length=1, max_length=500)
     value_change: Decimal = D0
 
 class BillingIn(BaseModel):
-    billing_no: str = Field(min_length=1, max_length=50)
+    billing_no: str | None = Field(default=None, max_length=50)
     billing_date: date
     work_value: Decimal = Field(ge=0)
     retention_amount: Decimal = Field(default=D0, ge=0)
@@ -275,8 +275,10 @@ def contract_detail(contract_id: int, _: User = Depends(require_permission("Cont
 def create_addendum(contract_id: int, body: AddendumIn, user: User = Depends(require_permission("Contracts", "Add")), db: Session = Depends(get_db)):
     c=db.get(Contract,contract_id)
     if not c: raise HTTPException(404,"العقد غير موجود")
-    a=ContractAddendum(contract_id=contract_id,**body.model_dump(),created_by=user.user_id)
-    db.add(a); db.flush(); write_audit(db,user.user_id,"Create","ContractAddendums",a.addendum_id,new=_addendum(a)); db.commit(); db.refresh(a)
+    values=body.model_dump(exclude={"addendum_no"})
+    a=ContractAddendum(contract_id=contract_id,addendum_no=f"AD-PENDING-{uuid4().hex}",**values,created_by=user.user_id)
+    db.add(a); db.flush(); a.addendum_no=f"AD-{body.addendum_date.year}-{a.addendum_id:06d}"
+    write_audit(db,user.user_id,"Create","ContractAddendums",a.addendum_id,new=_addendum(a)); db.commit(); db.refresh(a)
     return _addendum(a)
 
 @router.post("/{contract_id}/billings", status_code=201)
@@ -287,8 +289,10 @@ def create_billing(contract_id: int, body: BillingIn, user: User = Depends(requi
     if db.scalar(select(ContractItem.item_id).where(ContractItem.contract_id==contract_id)):
         raise HTTPException(409,"هذا العقد مرتبط بجدول كميات فني؛ أنشئ المستخلص من شاشة المكتب الفني وحدد كميات البنود لمنع تكرار الأعمال.")
     net=body.work_value-body.retention_amount-body.advance_deduction-body.other_deductions
-    b=ProgressBilling(contract_id=contract_id,**body.model_dump(),net_amount=net,created_by=user.user_id)
-    db.add(b); db.flush(); write_audit(db,user.user_id,"Create","ProgressBillings",b.billing_id,new=_billing(b)); db.commit(); db.refresh(b)
+    values=body.model_dump(exclude={"billing_no"})
+    b=ProgressBilling(contract_id=contract_id,billing_no=f"PB-PENDING-{uuid4().hex}",**values,net_amount=net,created_by=user.user_id)
+    db.add(b); db.flush(); b.billing_no=f"PB-{body.billing_date.year}-{b.billing_id:06d}"
+    write_audit(db,user.user_id,"Create","ProgressBillings",b.billing_id,new=_billing(b)); db.commit(); db.refresh(b)
     return _billing(b)
 
 
