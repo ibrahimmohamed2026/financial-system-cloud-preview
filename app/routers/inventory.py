@@ -68,6 +68,7 @@ class SiteIssuePostLineIn(BaseModel):
     line_id: int
     quantity: Decimal = Field(gt=0)
 class SiteIssuePostIn(BaseModel):
+    warehouse_id: int
     lines: list[SiteIssuePostLineIn] = Field(default_factory=list)
 
 class StockTransferLineIn(BaseModel):
