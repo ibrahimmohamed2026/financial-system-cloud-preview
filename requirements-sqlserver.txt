@@ -1,0 +1,4 @@
+# Optional dependencies for migrating from SQL Server only.
+# Also install Microsoft ODBC Driver 18 for SQL Server on the host OS.
+-r requirements.txt
+pyodbc>=5.0

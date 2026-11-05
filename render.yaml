@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: financial-system
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: API_DOCS_ENABLED
+        value: "false"
+      - key: BACKUP_AUTO_ENABLED
+        value: "false"
