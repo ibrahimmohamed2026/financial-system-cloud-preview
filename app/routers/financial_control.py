@@ -327,6 +327,7 @@ def export_pdf(date_from: date | None = None, date_to: date | None = None, accou
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from xml.sax.saxutils import escape
     import os
     font_path = next((p for p in (
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -341,13 +342,14 @@ def export_pdf(date_from: date | None = None, date_to: date | None = None, accou
         shape = lambda v: get_display(arabic_reshaper.reshape(str(v)))
     except Exception:
         shape = str
+    para_text = lambda v: escape(shape(str(v)))
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=landscape(A4), rightMargin=22, leftMargin=22, topMargin=24, bottomMargin=24)
     styles = getSampleStyleSheet()
     title = ParagraphStyle("ArabicTitle", parent=styles["Title"], fontName="Arabic", alignment=TA_RIGHT, fontSize=15)
     body = ParagraphStyle("ArabicBody", parent=styles["BodyText"], fontName="Arabic", alignment=TA_RIGHT, fontSize=7, leading=10)
-    story = [Paragraph(shape("لوحة الرقابة المالية"), title),
-             Paragraph(shape(f"الفترة: {start} إلى {end}"), body), Spacer(1, 10)]
+    story = [Paragraph(para_text("لوحة الرقابة المالية"), title),
+             Paragraph(para_text(f"الفترة: {start} إلى {end}"), body), Spacer(1, 10)]
     summary = [["المؤشر", "القيمة"]] + [[k, v] for k, v in [
         ("عدد العقود", data["kpis"]["contracts_count"]), ("قيمة العقود", data["kpis"]["contracts_value"]),
         ("عدد المستخلصات", data["kpis"]["settlements_count"]), ("صافي المستخلصات", data["kpis"]["settlements_net"]),
@@ -356,7 +358,7 @@ def export_pdf(date_from: date | None = None, date_to: date | None = None, accou
     ]]
     def add_table(title_text, headers, rows):
         story.append(Paragraph(shape(title_text), body))
-        table_data = [[Paragraph(shape(str(c)), body) for c in row] for row in [headers] + rows]
+        table_data = [[Paragraph(para_text(c), body) for c in row] for row in [headers] + rows]
         t = Table(table_data, repeatRows=1, hAlign="RIGHT")
         t.setStyle(TableStyle([
             ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#24557A")),
