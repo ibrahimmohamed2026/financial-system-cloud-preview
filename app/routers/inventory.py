@@ -187,6 +187,9 @@ class SupplierInvoicePaymentIn(BaseModel):
     amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
     voucher_no: str | None = Field(default=None, max_length=50)
 
+class SupplierInvoiceCancelIn(BaseModel):
+    reason: str = Field(min_length=8, max_length=500)
+
 def _cent(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
@@ -1237,6 +1240,16 @@ def create_supplier_invoice(body:SupplierInvoiceIn,user:User=Depends(require_per
         account_id=row.account_id,quantity=row.quantity,unit_price=row.unit_price,net_amount=amount))
     write_audit(db,user.user_id,"Create","SupplierInvoices",inv.invoice_id,new={"invoice_no":inv.invoice_no,"total_amount":str(total)})
     db.commit();return {"invoice_id":inv.invoice_id,"invoice_no":inv.invoice_no,"status":inv.status,"total_amount":str(total)}
+
+@purchases.post("/invoices/{invoice_id}/cancel")
+def cancel_supplier_invoice(invoice_id:int,body:SupplierInvoiceCancelIn,user:User=Depends(require_permission("PurchaseCycle","Delete")),db:Session=Depends(get_db)):
+    inv=db.scalar(select(SupplierInvoice).where(SupplierInvoice.invoice_id==invoice_id).with_for_update())
+    if not inv:raise HTTPException(404,"فاتورة المورد غير موجودة")
+    if inv.status!="Draft" or inv.journal_entry_id:raise HTTPException(409,"يمكن إلغاء مسودة الفاتورة فقط قبل الاعتماد أو الترحيل")
+    inv.status="Cancelled"
+    write_audit(db,user.user_id,"Cancel","SupplierInvoices",invoice_id,new={"status":inv.status,"reason":body.reason.strip()})
+    db.commit()
+    return {"invoice_id":invoice_id,"status":inv.status}
 
 @purchases.post("/invoices/{invoice_id}/approve")
 def approve_supplier_invoice(invoice_id:int,user:User=Depends(require_permission("PurchaseCycle","Approve")),db:Session=Depends(get_db)):
