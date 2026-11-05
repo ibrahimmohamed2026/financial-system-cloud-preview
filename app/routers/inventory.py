@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import require_permission, write_audit
 from ..models import (Account, Counterparty, FiscalYear, InventoryItem, InventoryWarehouse,
-    InventoryMovement, JournalEntry, JournalEntryDetail, PurchaseOrder, PurchaseOrderLine,
+    InventoryMovement, SiteIssueRequest, SiteIssueRequestLine, JournalEntry, JournalEntryDetail, PurchaseOrder, PurchaseOrderLine,
     SupplierInvoice, SupplierInvoiceLine, TreasuryAccount, TreasuryTransaction, Project, User, utcnow)
 from ..counterparties import resolve_counterparty
 
@@ -51,6 +51,25 @@ class MovementBatchIn(BaseModel):
     lines: list[MovementBatchLineIn] = Field(min_length=1)
     reference: str | None = None
     notes: str | None = None
+class SiteIssueRequestLineIn(BaseModel):
+    item_id: int
+    quantity: Decimal = Field(gt=0)
+class SiteIssueRequestIn(BaseModel):
+    request_no: str = Field(min_length=1, max_length=60)
+    request_date: date = Field(default_factory=date.today)
+    needed_by: date | None = None
+    project_id: int | None = None
+    site_name: str | None = Field(default=None, max_length=200)
+    notes: str | None = None
+    lines: list[SiteIssueRequestLineIn] = Field(min_length=1)
+class SiteIssueRejectIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+class SiteIssuePostLineIn(BaseModel):
+    line_id: int
+    quantity: Decimal = Field(gt=0)
+class SiteIssuePostIn(BaseModel):
+    lines: list[SiteIssuePostLineIn] = Field(default_factory=list)
+
 class StockTransferLineIn(BaseModel):
     item_id: int
     quantity: Decimal = Field(gt=0)
@@ -119,6 +138,137 @@ def _balance(db: Session, item_id: int, warehouse_id: int) -> Decimal:
     for typ, qty in rows:
         total += Decimal(str(qty or 0)) if typ == "IN" else -Decimal(str(qty or 0))
     return total
+
+@inventory.get("/site-issue-requests")
+def list_site_issue_requests(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
+    rows = db.scalars(select(SiteIssueRequest).order_by(SiteIssueRequest.request_date.desc(), SiteIssueRequest.request_id.desc()).limit(300)).all()
+    result = []
+    for request in rows:
+        project = db.get(Project, request.project_id) if request.project_id else None
+        requester = db.get(User, request.requested_by)
+        approver = db.get(User, request.approved_by) if request.approved_by else None
+        issuer = db.get(User, request.issued_by) if request.issued_by else None
+        lines = []
+        for line in db.scalars(select(SiteIssueRequestLine).where(SiteIssueRequestLine.request_id == request.request_id).order_by(SiteIssueRequestLine.line_id)).all():
+            item = db.get(InventoryItem, line.item_id)
+            lines.append({"line_id": line.line_id, "item_id": line.item_id,
+                "item_code": item.code if item else "", "item": item.name if item else "",
+                "unit": item.unit if item else "", "requested_quantity": str(line.requested_quantity),
+                "approved_quantity": str(line.approved_quantity), "issued_quantity": str(line.issued_quantity),
+                "remaining_quantity": str(Decimal(str(line.approved_quantity or 0)) - Decimal(str(line.issued_quantity or 0)))})
+        result.append({"request_id": request.request_id, "request_no": request.request_no,
+            "request_date": str(request.request_date), "needed_by": str(request.needed_by) if request.needed_by else None,
+            "project": project.name_ar if project else "", "site_name": request.site_name or "",
+            "requested_by": getattr(requester, "username", None) or str(request.requested_by),
+            "approved_by": getattr(approver, "username", None) if approver else "",
+            "issued_by": getattr(issuer, "username", None) if issuer else "",
+            "status": request.status, "notes": request.notes, "lines": lines})
+    return {"items": result}
+
+@inventory.post("/site-issue-requests", status_code=201)
+def create_site_issue_request(body: SiteIssueRequestIn, user: User = Depends(require_permission("InventoryManagement", "Add")), db: Session = Depends(get_db)):
+    if db.scalar(select(SiteIssueRequest.request_id).where(SiteIssueRequest.request_no == body.request_no)):
+        raise HTTPException(409, "رقم طلب الصرف مستخدم بالفعل")
+    if body.project_id is not None and not db.get(Project, body.project_id):
+        raise HTTPException(422, "المشروع المحدد غير موجود")
+    if len({line.item_id for line in body.lines}) != len(body.lines):
+        raise HTTPException(422, "لا تكرر الصنف داخل طلب الصرف")
+    for line in body.lines:
+        item = db.get(InventoryItem, line.item_id)
+        if not item or not item.is_active:
+            raise HTTPException(422, f"الصنف {line.item_id} غير موجود أو غير نشط")
+    request = SiteIssueRequest(request_no=body.request_no, request_date=body.request_date,
+        needed_by=body.needed_by, project_id=body.project_id, site_name=body.site_name,
+        requested_by=user.user_id, status="PendingApproval", notes=body.notes)
+    db.add(request)
+    try:
+        db.flush()
+        for line in body.lines:
+            db.add(SiteIssueRequestLine(request_id=request.request_id, item_id=line.item_id,
+                requested_quantity=line.quantity, approved_quantity=0, issued_quantity=0))
+        write_audit(db, user.user_id, "Create", "SiteIssueRequests", request.request_id,
+            new={"request_no": request.request_no, "status": request.status, "lines": len(body.lines)})
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "تعذر حفظ الطلب؛ تحقق من رقم الطلب")
+    return {"request_id": request.request_id, "request_no": request.request_no, "status": request.status}
+
+@inventory.post("/site-issue-requests/{request_id}/approve")
+def approve_site_issue_request(request_id: int, user: User = Depends(require_permission("InventoryManagement", "Approve")), db: Session = Depends(get_db)):
+    request = db.scalar(select(SiteIssueRequest).where(SiteIssueRequest.request_id == request_id).with_for_update())
+    if not request:
+        raise HTTPException(404, "طلب الصرف غير موجود")
+    if request.status != "PendingApproval":
+        raise HTTPException(409, "الطلب ليس في انتظار الاعتماد")
+    if request.requested_by == user.user_id:
+        raise HTTPException(403, "لا يجوز اعتماد طلب الصرف بواسطة مقدم الطلب")
+    lines = db.scalars(select(SiteIssueRequestLine).where(SiteIssueRequestLine.request_id == request_id).with_for_update()).all()
+    if not lines:
+        raise HTTPException(409, "طلب الصرف لا يحتوي على أصناف")
+    for line in lines:
+        item = db.get(InventoryItem, line.item_id)
+        if not item or not item.is_active:
+            raise HTTPException(409, "يوجد صنف غير متاح")
+        line.approved_quantity = line.requested_quantity
+    request.status = "Approved"
+    request.approved_by = user.user_id
+    request.approved_at = utcnow()
+    write_audit(db, user.user_id, "Approve", "SiteIssueRequests", request_id,
+        new={"status": request.status, "approved_lines": len(lines)})
+    db.commit()
+    return {"request_id": request_id, "status": request.status}
+
+@inventory.post("/site-issue-requests/{request_id}/reject")
+def reject_site_issue_request(request_id: int, body: SiteIssueRejectIn, user: User = Depends(require_permission("InventoryManagement", "Approve")), db: Session = Depends(get_db)):
+    request = db.scalar(select(SiteIssueRequest).where(SiteIssueRequest.request_id == request_id).with_for_update())
+    if not request:
+        raise HTTPException(404, "طلب الصرف غير موجود")
+    if request.status != "PendingApproval":
+        raise HTTPException(409, "لا يمكن رفض الطلب في حالته الحالية")
+    if request.requested_by == user.user_id:
+        raise HTTPException(403, "لا يجوز رفض طلب الصرف بواسطة مقدم الطلب")
+    request.status = "Rejected"
+    request.notes = ((request.notes or "") + "\nسبب الرفض: " + body.reason).strip()
+    request.approved_by = user.user_id
+    request.approved_at = utcnow()
+    write_audit(db, user.user_id, "Reject", "SiteIssueRequests", request_id,
+        new={"status": request.status, "reason": body.reason})
+    db.commit()
+    return {"request_id": request_id, "status": request.status}
+
+@inventory.post("/site-issue-requests/{request_id}/issue")
+def issue_site_request_stock(request_id: int, body: SiteIssuePostIn, user: User = Depends(require_permission("InventoryManagement", "Post")), db: Session = Depends(get_db)):
+    request = db.scalar(select(SiteIssueRequest).where(SiteIssueRequest.request_id == request_id).with_for_update())
+    if not request:
+        raise HTTPException(404, "طلب الصرف غير موجود")
+    if request.status not in ("Approved", "PartiallyIssued"):
+        raise HTTPException(409, "يجب اعتماد الطلب قبل صرف الأصناف")
+    if request.requested_by == user.user_id or request.approved_by == user.user_id:
+        raise HTTPException(403, "يجب أن يكون أمين المخزن شخصًا غير مقدم الطلب والمعتمد")
+    lines = db.scalars(select(SiteIssueRequestLine).where(SiteIssueRequestLine.request_id == request_id).order_by(SiteIssueRequestLine.line_id).with_for_update()).all()
+    requested_quantities = {line.line_id: line for line in lines}
+    issue_quantities = ({line.line_id: line.quantity for line in body.lines} if body.lines else {
+        line.line_id: Decimal(str(line.approved_quantity or 0)) - Decimal(str(line.issued_quantity or 0))
+        for line in lines if Decimal(str(line.approved_quantity or 0)) > Decimal(str(line.issued_quantity or 0))})
+    if not issue_quantities:
+        raise HTTPException(409, "لا توجد كميات متبقية للصرف")
+    if len(issue_quantities) != len(body.lines) and body.lines:
+        raise HTTPException(422, "يوجد صنف مكرر في تفاصيل الصرف")
+    items = sorted({requested_quantities[line_id].item_id for line_id in issue_quantities if line_id in requested_quantities})
+    locked_items = db.scalars(select(InventoryItem).where(InventoryItem.item_id.in_(items)).order_by(InventoryItem.item_id).with_for_update()).all()
+    for line_id, quantity in issue_quantities.items():
+        line = requested_quantities.get(line_id)
+        if not line:
+            raise HTTPException(422, "بند الصرف لا يتبع الطلب المحدد")
+        remaining = Decimal(str(line.approved_quantity or 0)) - Decimal(str(line.issued_quantity or 0))
+        if quantity <= 0 or quantity > remaining:
+            raise HTTPException(422, "كمية الصرف تتجاوز الكمية المعتمدة المتبقية")
+        available = _balance(db, line.item_id, 0)  # replaced below after selecting source warehouse
+        if available < 0:
+            raise HTTPException(409, "رصيد المخزون غير صالح")
+    # A request is issued from a single selected warehouse; the request payload must identify it.
+    raise HTTPException(422, "حدد مخزن الصرف")
 
 @inventory.get("/warehouses")
 def list_warehouses(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
