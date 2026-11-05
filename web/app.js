@@ -27,7 +27,8 @@ const SCREENS = {
   "/contracts": L("./pages/contracts.js?v=20261105-contract-bilingual-data-2"),
   "/contract-requests": L("./pages/contract_requests.js?v=20261105-contract-requests-bilingual-2"),
   "/settlements": L("./pages/settlements.js?v=20261105-settlements-bilingual-2"),
-  "/inventory": L("./pages/inventory.js?v=20261105-inventory-returns-fix-1"),
+  "/inventory": L("./pages/inventory.js?v=20261105-inventory-screens-1"),
+  "/inventory/items": L("./pages/inventory.js?v=20261105-inventory-screens-1"),
   "/purchases": L("./pages/purchases.js?v=20261105-purchases-print-i18n-1"),
   "/counterparties": L("./pages/counterparties.js?v=20261105-counterparty-names-i18n-2"),
   // Preserve the older type-specific links while using the unified party registry.
@@ -129,6 +130,14 @@ function titleOf(path) {
   if (path === "/contract-requests") return tr("طلبات التعاقد", "Contract Requests");
   if (path === "/settlements") return tr("مستخلصات العملاء ومقاولي الباطن", "Customer & Subcontractor Statements");
   if (path === "/inventory") return tr("إدارة المخزون", "Inventory Management");
+  if (path === "/inventory/items") return tr("الأصناف", "Items");
+  if (path === "/inventory/warehouses") return tr("المخازن", "Warehouses");
+  if (path === "/inventory/balances") return tr("أرصدة المخزون", "Stock Balances");
+  if (path === "/inventory/movements") return tr("حركة المخزون", "Stock Movements");
+  if (path === "/inventory/transfers") return tr("التحويلات بين المخازن", "Warehouse Transfers");
+  if (path === "/inventory/site-issues") return tr("طلبات صرف المواقع", "Site Issue Requests");
+  if (path === "/inventory/stocktakes") return tr("الجرد والتسويات", "Stocktakes & Adjustments");
+  if (path === "/inventory/returns") return tr("المرتجعات", "Inventory Returns");
   if (path === "/purchases") return tr("دورة المشتريات", "Purchasing Cycle");
   for (const s of sectionsOrdered()) for (const x of s.screens) if (x.route === path) return tOf(x);
   return "";
@@ -148,6 +157,7 @@ function navHtml(path) {
   };
   for (const g of NAV_GROUPS) {
     const screens = all.filter(x => (g.routes || []).includes(x.route) || (g.sectionCodes || []).includes(x._section));
+    if ((g.routes || []).includes("/inventory") && screens.some(x => x.route === "/inventory")) screens.push({route:"/inventory/items",title_ar:"الأصناف",title_en:"Items"},{route:"/inventory/warehouses",title_ar:"المخازن",title_en:"Warehouses"},{route:"/inventory/balances",title_ar:"أرصدة المخزون",title_en:"Stock Balances"},{route:"/inventory/movements",title_ar:"حركة المخزون",title_en:"Stock Movements"},{route:"/inventory/transfers",title_ar:"التحويلات بين المخازن",title_en:"Warehouse Transfers"},{route:"/inventory/site-issues",title_ar:"طلبات صرف المواقع",title_en:"Site Issue Requests"},{route:"/inventory/stocktakes",title_ar:"الجرد والتسويات",title_en:"Stocktakes & Adjustments"},{route:"/inventory/returns",title_ar:"المرتجعات",title_en:"Inventory Returns"});
     h += renderGroup(isEN() ? g.en : g.ar, g.icon, screens);
   }
   for (const s of sectionsOrdered()) {
