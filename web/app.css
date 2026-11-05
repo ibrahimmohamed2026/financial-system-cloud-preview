@@ -1123,3 +1123,13 @@ dialog .journal-lines textarea{min-width:150px;resize:vertical}
  .trial-balance-page>.toolbar .w{flex-basis:100%}
  .wrap:has(#b):has(#add):has(#rows)>.toolbar .w,.wrap:has(#go):has(#acc):has(#bank):has(#rows)>.toolbar .w,.wrap:has(#df):has(#dt):has(#q):has(#hz):has(#rows)>.toolbar .w{flex-basis:100%}
 }
+
+
+/* ADEX inventory dedicated module navigation */
+.inventory-subnav{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin:0 0 14px;padding:10px;border:1px solid var(--line);border-radius:13px;background:var(--card)}
+.inventory-subnav-link{display:flex;align-items:center;justify-content:center;min-height:42px;padding:8px 11px;border:1px solid var(--line);border-radius:9px;color:var(--ink);text-decoration:none;text-align:center;font-size:13px;font-weight:700;background:var(--bg)}
+.inventory-subnav-link:hover,.inventory-subnav-link.active{border-color:var(--brand);background:var(--brand-soft);color:var(--ink)}
+.inventory-view-heading{margin:0 0 13px;padding:13px 16px;border-inline-start:4px solid var(--brand);border-radius:10px;background:var(--card);border-top:1px solid var(--line);border-bottom:1px solid var(--line);border-inline-end:1px solid var(--line)}
+.inventory-view-heading h3{margin:0 0 4px;font-size:17px}.inventory-view-heading p{margin:0;color:var(--muted);font-size:12px;line-height:1.7}
+.inventory-toolbar{align-items:center}
+@media(max-width:600px){.inventory-subnav{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;padding:8px}.inventory-subnav-link{font-size:12px;min-height:40px;padding:7px 5px}.inventory-view-heading{padding:11px}}
