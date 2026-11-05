@@ -8,7 +8,7 @@ from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user
 from ..models import User, effective_permissions, utcnow
-from ..schemas import LoginIn, MeOut, PermissionOut, RefreshIn, TokenOut, UserOut
+from ..schemas import LanguagePreferenceIn, LoginIn, MeOut, PermissionOut, RefreshIn, TokenOut, UserOut
 from ..security import create_token, decode_token, verify_password
 from ..client_ip import get_client_ip
 from collections import defaultdict, deque
@@ -112,3 +112,10 @@ def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     ).all()
     return MeOut(**UserOut.model_validate(user).model_dump(),
                  permissions=[PermissionOut(screen=s, action=a) for s, a in rows])
+
+
+@router.put("/language")
+def update_language(body: LanguagePreferenceIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    user.preferred_language = body.language
+    db.commit()
+    return {"preferred_language": user.preferred_language}
