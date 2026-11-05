@@ -45,7 +45,7 @@ const columns = {
   inventory: [["code", "كود الصنف"], ["name", "الصنف"], ["category", "التصنيف"], ["unit", "الوحدة"], ["balance", "الرصيد الحالي"], ["minimum", "حد الطلب"], ["low_stock", "تنبيه النقص"]],
   contractor: [["date", "التاريخ"], ["kind", "النوع"], ["number", "رقم المستخلص"], ["contract_no", "رقم العقد"], ["contract_title", "العقد"], ["counterparty_name", "الطرف كما سُجل"], ["status", "الحالة"], ["work_value", "قيمة الأعمال"], ["deductions", "الخصومات"], ["vat", "الضريبة"], ["net", "الصافي"], ["paid", "المدفوع"], ["outstanding", "المتبقي"]],
 };
-const statusLabel = value => ({ Draft: "مسودة", Approved: "معتمد ماليًا", Posted: "مرحّل محاسبيًا", Received: "تم الاستلام", Cancelled: "ملغي", UnderReview: "تحت المراجعة", TechnicallyApproved: "معتمد هندسيًا" })[value] || value;
+const statusLabel = value => T(({ Draft: "مسودة", Approved: "معتمد ماليًا", Posted: "مرحّل محاسبيًا", Received: "تم الاستلام", Cancelled: "ملغي", UnderReview: "تحت المراجعة", TechnicallyApproved: "معتمد هندسيًا", "جديد":"جديد", "مطبوع":"مطبوع", "تم التسليم":"تم التسليم", "تم الصرف":"تم الصرف", "مرتد":"مرتد" })[value] || value);
 
 const kpis = entries => `<div class="kpis">${entries.map(([label, value]) => `<div class="kpi"><div class="kpi-h">${esc(T(label))}</div><div class="kpi-v">${esc(value)}</div></div>`).join("")}</div>`;
 const dataTable = (key, items) => {
