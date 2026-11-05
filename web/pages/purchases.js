@@ -56,7 +56,7 @@ $('#invoice-rows').innerHTML=invoices.map(x=>{const remaining=Math.max(0,Number(
  const viewTitles={requisitions:tr("طلبات الشراء","Purchase Requisitions"),quotations:tr("عروض أسعار الموردين","Supplier Quotations"),orders:tr("أوامر الشراء","Purchase Orders"),receipts:tr("استلام التوريدات","Goods Receipts"),invoices:tr("فواتير الموردين","Supplier Invoices"),payments:tr("سداد الموردين","Supplier Payments"),reports:tr("تقارير الموردين","Supplier Reports")};
  const heading=document.createElement('div');heading.className='inventory-view-heading';heading.innerHTML="<h3>"+(viewTitles[activeView]||tr("دورة المشتريات","Purchasing Cycle"))+"</h3><p>"+tr("كل مرحلة من دورة المشتريات لها شاشة مستقلة، مع استمرار الربط بين الموردين والمخازن والحسابات.","Each purchasing stage has its own screen while preserving links to suppliers, inventory and accounting.")+"</p>";
  const nav=main.querySelector('.purchasing-subnav');if(nav)nav.after(heading);
- main.querySelectorAll('[data-purchase-view]').forEach(el=>{el.hidden=!((el.dataset.purchaseView||'').split(/\\s+/).includes(activeView));});
+ main.querySelectorAll('[data-purchase-view]').forEach(el=>{el.hidden=!((el.dataset.purchaseView||'').split(/\s+/).includes(activeView));});
  main.querySelectorAll('[data-purchase-route]').forEach(link=>{const active=link.dataset.purchaseRoute===route;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current','page');});
  await load();
 }
