@@ -51,6 +51,20 @@ class MovementBatchIn(BaseModel):
     lines: list[MovementBatchLineIn] = Field(min_length=1)
     reference: str | None = None
     notes: str | None = None
+class StockTransferLineIn(BaseModel):
+    item_id: int
+    quantity: Decimal = Field(gt=0)
+    unit_cost: Decimal = Field(default=Decimal("0"), ge=0)
+
+class StockTransferIn(BaseModel):
+    transfer_no: str = Field(min_length=1, max_length=35)
+    transfer_date: date = Field(default_factory=date.today)
+    source_warehouse_id: int
+    destination_warehouse_id: int
+    lines: list[StockTransferLineIn] = Field(min_length=1)
+    reference: str | None = None
+    notes: str | None = None
+
 class POLineIn(BaseModel):
     item_id: int
     quantity: Decimal = Field(gt=0)
@@ -235,6 +249,69 @@ def create_movement_batch(body: MovementBatchIn, user: User = Depends(require_pe
         created.append({"movement_id":movement.movement_id,"movement_no":ref,"item_id":line.item_id,"quantity":str(line.quantity)})
     db.commit()
     return {"movement_no":body.movement_no,"items":created,"message":"تم حفظ مستند المخزون متعدد البنود"}
+
+@inventory.post("/transfers", status_code=201)
+def create_stock_transfer(body: StockTransferIn, user: User = Depends(require_permission("InventoryManagement", "Add")), db: Session = Depends(get_db)):
+    """Post paired OUT/IN movements as one atomic warehouse transfer document."""
+    if body.source_warehouse_id == body.destination_warehouse_id:
+        raise HTTPException(422, "يجب اختيار مخزنين مختلفين للتحويل")
+    source = db.get(InventoryWarehouse, body.source_warehouse_id)
+    destination = db.get(InventoryWarehouse, body.destination_warehouse_id)
+    if not source or not destination or not source.is_active or not destination.is_active:
+        raise HTTPException(422, "المخزن المصدر أو المستلم غير موجود أو غير نشط")
+    totals: dict[int, Decimal] = {}
+    for line in body.lines:
+        totals[line.item_id] = totals.get(line.item_id, Decimal("0")) + line.quantity
+    # Lock item master rows in a stable order to serialize competing transfers on databases
+    # that support row locks; all paired ledger entries are committed in one transaction.
+    locked_items = db.scalars(select(InventoryItem).where(InventoryItem.item_id.in_(sorted(totals)))
+        .order_by(InventoryItem.item_id).with_for_update()).all()
+    found = {item.item_id: item for item in locked_items}
+    for item_id, quantity in totals.items():
+        item = found.get(item_id)
+        if not item or not item.is_active:
+            raise HTTPException(422, f"الصنف {item_id} غير موجود أو غير نشط")
+        available = _balance(db, item_id, body.source_warehouse_id)
+        if available < quantity:
+            raise HTTPException(409, f"الرصيد غير كافٍ للصنف {item.code}: المتاح {available} والمطلوب {quantity}")
+    movement_numbers = []
+    for index in range(1, len(body.lines) + 1):
+        movement_numbers.extend((f"{body.transfer_no}-OUT-{index:03d}", f"{body.transfer_no}-IN-{index:03d}"))
+    duplicate = db.scalar(select(InventoryMovement.movement_id).where(InventoryMovement.movement_no.in_(movement_numbers)).limit(1))
+    if duplicate:
+        raise HTTPException(409, "رقم مستند التحويل مستخدم من قبل")
+    created = []
+    for index, line in enumerate(body.lines, start=1):
+        item = found[line.item_id]
+        for suffix, warehouse_id, movement_type in (
+            ("OUT", body.source_warehouse_id, "OUT"),
+            ("IN", body.destination_warehouse_id, "IN"),
+        ):
+            number = f"{body.transfer_no}-{suffix}-{index:03d}"
+            movement = InventoryMovement(movement_no=number, item_id=line.item_id,
+                warehouse_id=warehouse_id, movement_date=body.transfer_date,
+                movement_type=movement_type, quantity=line.quantity, unit_cost=line.unit_cost,
+                reference=body.reference or body.transfer_no,
+                notes=body.notes or f"تحويل مخزني {body.transfer_no}: {source.name} ← {destination.name}",
+                created_by=user.user_id)
+            db.add(movement)
+            db.flush()
+            write_audit(db, user.user_id, "Create", "InventoryMovements", movement.movement_id,
+                new={"movement_no": number, "transfer_no": body.transfer_no, "item_id": line.item_id,
+                     "quantity": str(line.quantity), "movement_type": movement_type,
+                     "warehouse_id": warehouse_id, "source_warehouse_id": body.source_warehouse_id,
+                     "destination_warehouse_id": body.destination_warehouse_id})
+            created.append({"movement_id": movement.movement_id, "movement_no": number,
+                "item_id": line.item_id, "warehouse_id": warehouse_id, "type": movement_type,
+                "quantity": str(line.quantity)})
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "تعذر حفظ التحويل؛ راجع رقم المستند وحاول مرة أخرى")
+    return {"transfer_no": body.transfer_no, "source_warehouse": source.name,
+        "destination_warehouse": destination.name, "movements": created,
+        "message": "تم ترحيل التحويل وتحديث رصيد المخزنين"}
 
 @purchases.get("")
 def list_orders(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
