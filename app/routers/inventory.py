@@ -1103,7 +1103,7 @@ def supplier_aging_report(_: User = Depends(require_permission("PurchaseCycle", 
             "supplier_id": supplier_id, "supplier": row["supplier"], "invoice_date": str(invoice.invoice_date),
             "age_days": age, "total_amount": str(invoice.total_amount), "paid_amount": str(paid),
             "remaining_amount": str(remaining), "bucket": bucket})
-    items = [{**row, key: str(value) for key, value in row.items()} for row in grouped.values()]
+    items = [{key: (str(value) if isinstance(value, Decimal) else value) for key, value in row.items()} for row in grouped.values()]
     items.sort(key=lambda row: Decimal(row["total"]), reverse=True)
     return {"as_of": str(today), "aging_basis": "invoice_date", "items": items, "invoices": details,
         "totals": {key: str(sum((row[key] for row in grouped.values()), Decimal("0")))
