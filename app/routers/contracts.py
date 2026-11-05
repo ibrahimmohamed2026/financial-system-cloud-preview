@@ -321,6 +321,10 @@ def delete_contract(contract_id: int, cascade: bool = False,
             write_audit(db, user.user_id, "DeleteCascade", "TechnicalSettlementEstimates", estimate.estimate_id,
                         {"estimate_no": estimate.estimate_no, "status": estimate.status}, None)
             db.delete(estimate)
+        # Flush settlement/estimate detail deletions before deleting ContractItems.
+        # These child rows reference ContractItems through restrictive foreign keys,
+        # and there are no ORM relationships for SQLAlchemy to order automatically.
+        db.flush()
         for attachment in db.scalars(select(ContractAttachment).where(ContractAttachment.contract_id == contract_id)).all(): db.delete(attachment)
         for model, column in ((ContractItem, ContractItem.contract_id), (ContractAddendum, ContractAddendum.contract_id),
                 (ProgressBilling, ProgressBilling.contract_id), (ContractDeductionRule, ContractDeductionRule.contract_id),
