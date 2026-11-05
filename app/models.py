@@ -77,6 +77,7 @@ class AccountClassification(Base):
     __tablename__ = "AccountClassifications"
     classification_id: Mapped[int] = C("ClassificationId", Integer, primary_key=True)
     name_ar: Mapped[str] = C("NameAr", Unicode(200), unique=True)
+    name_en: Mapped[Optional[str]] = C("NameEn", Unicode(200), nullable=True)
     statement_type: Mapped[str] = C("StatementType", Unicode(30))  # BalanceSheet | IncomeStatement
 
 
@@ -96,6 +97,7 @@ class Account(Base):
     account_id: Mapped[int] = C("AccountId", Integer, primary_key=True)
     account_code: Mapped[str] = C("AccountCode", Unicode(30), unique=True)
     account_name_ar: Mapped[str] = C("AccountNameAr", Unicode(300))
+    account_name_en: Mapped[Optional[str]] = C("AccountNameEn", Unicode(300), nullable=True)
     parent_account_id: Mapped[Optional[int]] = C(
         "ParentAccountId", ForeignKey("ChartOfAccounts.AccountId"), nullable=True)
     classification_id: Mapped[int] = C("ClassificationId", ForeignKey("AccountClassifications.ClassificationId"))
