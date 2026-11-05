@@ -817,3 +817,78 @@ dialog .actions{border-top:1px solid var(--line);padding-top:12px;margin-top:14p
  .toolbar>.btn{flex-basis:calc(50% - 8px)}
  .tag{padding:3px 8px}
 }
+
+
+/* ===== ADEX ERP — contract & settlement workspace refinement ===== */
+#detail{min-width:0;overflow:hidden}
+#detail>.toolbar{align-items:center;padding:16px 18px;border-inline-start:4px solid var(--brand)}
+#detail>.toolbar h3{margin:0 0 5px;font-size:16px;line-height:1.5;color:var(--ink)}
+#detail>h4{margin:20px 2px 10px;font-size:14px;font-weight:850;color:var(--ink)}
+#detail .contract-notes{padding:15px 17px;background:linear-gradient(120deg,var(--card),var(--brand-soft))}
+#detail .contract-notes h4{margin:0 0 9px;color:var(--brand);font-size:13px}
+#detail .contract-notes-content{line-height:1.9;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink)}
+#detail .panel{min-width:0;border-radius:15px}
+#detail .tbl-wrap{max-width:100%;overflow-x:auto}
+#detail table{min-width:620px}
+#detail .toolbar .btn{white-space:normal}
+.settlements-page{min-width:0}
+.st-hero{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:20px 22px;border:1px solid var(--line);border-radius:17px;background:linear-gradient(115deg,#10243d,#1b3552);color:#f5ead3;box-shadow:var(--shadow);margin-bottom:15px}
+.st-hero>div{display:flex;align-items:center;gap:15px;min-width:0}
+.st-hero>div>img{flex:0 0 auto}
+.st-hero small{display:block;margin-bottom:5px;color:#e5c274;font-weight:800}
+.st-hero h2{margin:0 0 5px;color:#fff;font-size:19px}
+.st-hero p{margin:0;color:#d4dbea;font-size:12px;line-height:1.7}
+.st-hero>.btn{flex:0 0 auto}
+.st-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:14px 0 18px}
+.st-kpis article{min-width:0;padding:15px 16px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(145deg,var(--card),var(--brand-soft));box-shadow:var(--shadow)}
+.st-kpis article small{display:block;color:var(--muted);font-size:11px;font-weight:750}
+.st-kpis article strong{display:block;margin-top:9px;color:var(--ink);font-size:clamp(19px,2.1vw,26px);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.st-panel{margin:0 0 16px;padding:0;overflow:hidden}
+.st-panel-head{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:15px 17px;border-bottom:1px solid var(--line);background:linear-gradient(100deg,var(--card),var(--brand-soft))}
+.st-panel-head h3{margin:0 0 4px;font-size:15px;color:var(--ink)}
+.st-panel-head p{margin:0;color:var(--muted);font-size:11px;line-height:1.65}
+.st-panel-head select{min-width:180px;max-width:100%;background:var(--card);color:var(--ink)}
+.st-panel>.tbl-wrap{border:0;border-radius:0;box-shadow:none}
+.st-panel table{min-width:850px}
+.st-panel:nth-of-type(2) table{min-width:1080px}
+.st-panel td:last-child{white-space:normal;min-width:170px}
+.st-panel td .btn{margin:2px}
+.st-dialog{max-width:min(920px,calc(100vw - 24px));width:calc(100% - 24px);max-height:90vh;overflow:auto}
+.st-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.st-form-grid label{min-width:0;display:flex;flex-direction:column;gap:6px}
+.st-form-grid .wide{grid-column:1/-1}
+.st-form-grid input,.st-form-grid select,.st-form-grid textarea{width:100%;min-width:0}
+.st-items{min-width:0;margin-top:14px}
+.st-items .tbl-wrap{max-width:100%;overflow-x:auto}
+.st-items table{min-width:760px}
+@media(max-width:900px){
+ .st-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .st-hero{align-items:flex-start}
+}
+@media(max-width:600px){
+ #detail>.toolbar{align-items:stretch;padding:12px}
+ #detail>.toolbar>div:first-child{flex:1 1 100%;min-width:0}
+ #detail>.toolbar .sp{display:none}
+ #detail>.toolbar .btn{flex:1 1 calc(50% - 8px);min-width:0;font-size:11px;padding:8px}
+ #detail>h4{font-size:13px}
+ .st-hero{display:flex;flex-direction:column;align-items:stretch;padding:14px;gap:12px}
+ .st-hero>div{align-items:flex-start;gap:10px}
+ .st-hero>div>img{max-width:82px!important;max-height:52px!important}
+ .st-hero h2{font-size:16px}
+ .st-hero p{font-size:11px}
+ .st-hero>.btn{width:100%;justify-content:center}
+ .st-kpis{gap:8px;margin:10px 0 14px}
+ .st-kpis article{padding:11px 12px}
+ .st-kpis article small{font-size:10px}
+ .st-kpis article strong{font-size:19px;margin-top:7px}
+ .st-panel-head{align-items:flex-start;padding:12px;flex-wrap:wrap}
+ .st-panel-head>div{min-width:0;flex:1 1 100%}
+ .st-panel-head select{width:100%;min-width:0}
+ .st-dialog{padding:0!important}
+ .st-form-grid{grid-template-columns:minmax(0,1fr);gap:10px}
+ .st-form-grid .wide{grid-column:auto}
+ .st-items{margin-inline:-4px}
+ .st-items table{min-width:720px}
+}
+:root[data-theme="dark"] .st-panel-head{background:linear-gradient(100deg,#172941,#1b2d43)}
+:root[data-theme="dark"] #detail .contract-notes{background:linear-gradient(120deg,#172941,#1d3048)}
