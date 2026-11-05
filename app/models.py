@@ -699,6 +699,34 @@ class InventoryStocktakeLine(Base):
     counted_quantity: Mapped[Decimal] = C("CountedQuantity", Numeric(18, 3))
     variance_quantity: Mapped[Decimal] = C("VarianceQuantity", Numeric(18, 3))
 
+class InventoryReturn(Base):
+    __tablename__ = "InventoryReturns"
+    return_id: Mapped[int] = C("ReturnId", Integer, primary_key=True)
+    return_no: Mapped[str] = C("ReturnNo", Unicode(60), unique=True, index=True)
+    return_type: Mapped[str] = C("ReturnType", Unicode(20))  # Supplier / Site
+    return_date: Mapped[date] = C("ReturnDate", Date, default=date.today)
+    warehouse_id: Mapped[int] = C("WarehouseId", ForeignKey("InventoryWarehouses.WarehouseId"))
+    counterparty_name: Mapped[Optional[str]] = C("CounterpartyName", Unicode(250), nullable=True)
+    source_document: Mapped[Optional[str]] = C("SourceDocument", Unicode(100), nullable=True)
+    notes: Mapped[Optional[str]] = C("Notes", UnicodeText, nullable=True)
+    status: Mapped[str] = C("Status", Unicode(30), default="PendingApproval", index=True)
+    created_by: Mapped[int] = C("CreatedBy", ForeignKey("Users.UserId"))
+    approved_by: Mapped[Optional[int]] = C("ApprovedBy", ForeignKey("Users.UserId"), nullable=True)
+    approved_at: Mapped[Optional[datetime]] = C("ApprovedAt", DateTime, nullable=True)
+    posted_by: Mapped[Optional[int]] = C("PostedBy", ForeignKey("Users.UserId"), nullable=True)
+    posted_at: Mapped[Optional[datetime]] = C("PostedAt", DateTime, nullable=True)
+    created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
+
+class InventoryReturnLine(Base):
+    __tablename__ = "InventoryReturnLines"
+    line_id: Mapped[int] = C("LineId", Integer, primary_key=True)
+    return_id: Mapped[int] = C("ReturnId", ForeignKey("InventoryReturns.ReturnId", ondelete="CASCADE"), index=True)
+    item_id: Mapped[int] = C("ItemId", ForeignKey("InventoryItems.ItemId"))
+    quantity: Mapped[Decimal] = C("Quantity", Numeric(18, 3))
+    unit_cost: Mapped[Decimal] = C("UnitCost", Numeric(18, 4), default=0)
+    purchase_order_line_id: Mapped[Optional[int]] = C("PurchaseOrderLineId", ForeignKey("PurchaseOrderLines.LineId"), nullable=True)
+    site_issue_line_id: Mapped[Optional[int]] = C("SiteIssueLineId", ForeignKey("SiteIssueRequestLines.LineId"), nullable=True)
+
 class PurchaseOrder(Base):
     __tablename__ = "PurchaseOrders"
     purchase_order_id: Mapped[int] = C("PurchaseOrderId", Integer, primary_key=True)
