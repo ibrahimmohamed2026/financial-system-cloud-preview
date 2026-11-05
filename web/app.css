@@ -775,3 +775,45 @@ body.login-mode .login input:focus{border-color:#d6b56c;outline-color:#d6b56c}
  .home-panel .chart{padding:10px 6px;min-height:0}
  .home-recent table{min-width:500px}
 }
+
+
+/* ===== ADEX ERP — contracts, settlements and data screens ===== */
+.toolbar{gap:10px;padding:13px 14px;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);align-items:end}
+.toolbar label,.f label{font-size:12px;font-weight:750;color:var(--muted);margin-bottom:5px}
+.toolbar .w{min-width:150px}
+.toolbar .grow{min-width:min(100%,220px)}
+.toolbar input,.toolbar select{border-radius:10px;background:var(--bg);border-color:var(--line)}
+.sec{border-radius:15px;overflow:hidden}
+.sec h3{background:linear-gradient(90deg,var(--card),var(--brand-soft));color:var(--ink);padding:14px 17px}
+.tbl-wrap,.tablewrap{border-radius:14px;box-shadow:0 4px 16px rgba(27,37,52,.045)}
+table{font-size:13px}
+th,td{padding:11px 13px}
+th{font-size:12px;font-weight:800;letter-spacing:.1px}
+tbody tr{transition:background .12s}
+tbody tr:hover td{background:color-mix(in srgb,var(--brand-soft) 78%,var(--card))}
+.tag{border-radius:20px;padding:4px 10px;font-weight:700;font-size:11px}
+.btn{font-weight:700;min-height:38px}
+.btn.primary{box-shadow:0 3px 9px color-mix(in srgb,var(--brand) 22%,transparent)}
+input,select,textarea{border-radius:9px}
+input:focus,select:focus,textarea:focus{border-color:var(--brand)!important;box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 15%,transparent);outline:0}
+dialog{border:1px solid var(--line)!important;border-radius:18px!important;box-shadow:0 22px 70px rgba(8,20,38,.28)!important}
+dialog::backdrop{background:rgba(7,17,31,.58);backdrop-filter:blur(3px)}
+dialog form{background:var(--card);border-radius:18px}
+dialog h2,dialog h3{color:var(--ink)}
+dialog .actions{border-top:1px solid var(--line);padding-top:12px;margin-top:14px}
+@media(max-width:760px){
+ .toolbar{padding:10px;gap:8px}
+ .toolbar .w{width:auto!important;flex:1 1 135px;min-width:0}
+ .toolbar .grow{flex:1 1 100%;min-width:0}
+ .toolbar>.btn{flex:1 1 auto;justify-content:center}
+ .tbl-wrap,.tablewrap{max-width:100%;overscroll-behavior-x:contain}
+ th,td{padding:9px 10px;font-size:12px}
+ .sec{margin-bottom:12px}
+ .sec h3{padding:12px}
+ .pagebar h2{font-size:18px}
+}
+@media(max-width:420px){
+ .toolbar .w{flex-basis:calc(50% - 8px)}
+ .toolbar>.btn{flex-basis:calc(50% - 8px)}
+ .tag{padding:3px 8px}
+}
