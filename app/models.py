@@ -727,6 +727,52 @@ class InventoryReturnLine(Base):
     purchase_order_line_id: Mapped[Optional[int]] = C("PurchaseOrderLineId", ForeignKey("PurchaseOrderLines.LineId"), nullable=True)
     site_issue_line_id: Mapped[Optional[int]] = C("SiteIssueLineId", ForeignKey("SiteIssueRequestLines.LineId"), nullable=True)
 
+class PurchaseRequisition(Base):
+    __tablename__ = "PurchaseRequisitions"
+    requisition_id: Mapped[int] = C("RequisitionId", Integer, primary_key=True)
+    requisition_no: Mapped[str] = C("RequisitionNo", Unicode(60), unique=True, index=True)
+    request_date: Mapped[date] = C("RequestDate", Date, default=date.today)
+    required_date: Mapped[Optional[date]] = C("RequiredDate", Date, nullable=True)
+    warehouse_id: Mapped[int] = C("WarehouseId", ForeignKey("InventoryWarehouses.WarehouseId"))
+    project_id: Mapped[Optional[int]] = C("ProjectId", ForeignKey("Projects.ProjectId"), nullable=True, index=True)
+    requested_by: Mapped[Optional[int]] = C("RequestedBy", ForeignKey("Users.UserId"), nullable=True)
+    approved_by: Mapped[Optional[int]] = C("ApprovedBy", ForeignKey("Users.UserId"), nullable=True)
+    status: Mapped[str] = C("Status", Unicode(24), default="Draft")
+    notes: Mapped[Optional[str]] = C("Notes", UnicodeText, nullable=True)
+    created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
+
+class PurchaseRequisitionLine(Base):
+    __tablename__ = "PurchaseRequisitionLines"
+    line_id: Mapped[int] = C("LineId", Integer, primary_key=True)
+    requisition_id: Mapped[int] = C("RequisitionId", ForeignKey("PurchaseRequisitions.RequisitionId", ondelete="CASCADE"), index=True)
+    item_id: Mapped[int] = C("ItemId", ForeignKey("InventoryItems.ItemId"))
+    quantity: Mapped[Decimal] = C("Quantity", Numeric(18, 3))
+    notes: Mapped[Optional[str]] = C("Notes", Unicode(500), nullable=True)
+
+class SupplierQuotation(Base):
+    __tablename__ = "SupplierQuotations"
+    quotation_id: Mapped[int] = C("QuotationId", Integer, primary_key=True)
+    quotation_no: Mapped[str] = C("QuotationNo", Unicode(60), unique=True, index=True)
+    requisition_id: Mapped[int] = C("RequisitionId", ForeignKey("PurchaseRequisitions.RequisitionId"), index=True)
+    supplier_name: Mapped[str] = C("SupplierName", Unicode(250))
+    quotation_date: Mapped[date] = C("QuotationDate", Date, default=date.today)
+    valid_until: Mapped[Optional[date]] = C("ValidUntil", Date, nullable=True)
+    delivery_days: Mapped[Optional[int]] = C("DeliveryDays", Integer, nullable=True)
+    payment_terms: Mapped[Optional[str]] = C("PaymentTerms", Unicode(500), nullable=True)
+    notes: Mapped[Optional[str]] = C("Notes", UnicodeText, nullable=True)
+    status: Mapped[str] = C("Status", Unicode(24), default="Submitted")
+    created_by: Mapped[Optional[int]] = C("CreatedBy", ForeignKey("Users.UserId"), nullable=True)
+    converted_purchase_order_id: Mapped[Optional[int]] = C("ConvertedPurchaseOrderId", ForeignKey("PurchaseOrders.PurchaseOrderId"), nullable=True, unique=True)
+    created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
+
+class SupplierQuotationLine(Base):
+    __tablename__ = "SupplierQuotationLines"
+    line_id: Mapped[int] = C("LineId", Integer, primary_key=True)
+    quotation_id: Mapped[int] = C("QuotationId", ForeignKey("SupplierQuotations.QuotationId", ondelete="CASCADE"), index=True)
+    item_id: Mapped[int] = C("ItemId", ForeignKey("InventoryItems.ItemId"))
+    quantity: Mapped[Decimal] = C("Quantity", Numeric(18, 3))
+    unit_price: Mapped[Decimal] = C("UnitPrice", Numeric(18, 4))
+
 class PurchaseOrder(Base):
     __tablename__ = "PurchaseOrders"
     purchase_order_id: Mapped[int] = C("PurchaseOrderId", Integer, primary_key=True)
