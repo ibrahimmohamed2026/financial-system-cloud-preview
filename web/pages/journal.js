@@ -1,6 +1,7 @@
 import { esc, money, today, toast, safe, errText, formDialog } from "../ui.js";
+import { translate as t } from "../i18n.js";
 const SCREEN = "JournalBook", PAGE = 50;
-const ST = { Draft: "مسودة", Posted: "مرحّل", Reversed: "ملغي" };
+const ST = { Draft: t("مسودة","Draft"), Posted: t("مرحّل","Posted"), Reversed: t("ملغي","Reversed") };
 
 export async function render(main, { api, auth }) {
   const can = a => auth.can(SCREEN, a);
@@ -8,12 +9,12 @@ export async function render(main, { api, auth }) {
   const accByLabel = Object.fromEntries(accs.map(a => [a.label, a.account_id]));
   const st = { q: "", status: "", df: "", dt: "", skip: 0 };
   main.innerHTML = `<div class="toolbar">
-    <div class="grow"><label>بحث (رقم القيد / البيان)</label><input id="q"></div>
-    <div class="w" style="width:130px"><label>الحالة</label><select id="s"><option value="">الكل</option>${Object.entries(ST).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></div>
-    <div class="w" style="width:150px"><label>من</label><input type="date" id="df"></div><div class="w" style="width:150px"><label>إلى</label><input type="date" id="dt"></div>
-    ${can("Add") ? '<button class="btn primary" id="add">+ قيد جديد</button>' : ""}${can("Approve") ? '<button class="btn" id="fy">السنوات المالية</button>' : ""}</div>
-    <div class="tbl-wrap"><table><thead><tr><th>رقم القيد</th><th>التاريخ</th><th>البيان</th><th>مدين</th><th>دائن</th><th>الحالة</th></tr></thead><tbody id="rows"></tbody></table></div>
-    <div class="pager"><button class="btn sm" id="prev">السابق</button><span id="info"></span><button class="btn sm" id="next">التالي</button></div>`;
+    <div class="grow"><label>${t("بحث (رقم القيد / البيان)","Search (entry number / description)")}</label><input id="q"></div>
+    <div class="w" style="width:130px"><label>${t("الحالة","Status")}</label><select id="s"><option value="">${t("الكل","All")}</option>${Object.entries(ST).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></div>
+    <div class="w" style="width:150px"><label>${t("من","From")}</label><input type="date" id="df"></div><div class="w" style="width:150px"><label>${t("إلى","To")}</label><input type="date" id="dt"></div>
+    ${can("Add") ? '<button class="btn primary" id="add">+ ${t("قيد جديد","New journal entry")}</button>' : ""}${can("Approve") ? '<button class="btn" id="fy">${t("السنوات المالية","Fiscal years")}</button>' : ""}</div>
+    <div class="tbl-wrap"><table><thead><tr><th>${t("رقم القيد","Entry No.")}</th><th>${t("التاريخ","Date")}</th><th>${t("البيان","Description")}</th><th>${t("مدين","Debit")}</th><th>${t("دائن","Credit")}</th><th>${t("الحالة","Status")}</th></tr></thead><tbody id="rows"></tbody></table></div>
+    <div class="pager"><button class="btn sm" id="prev">${t("السابق","Previous")}</button><span id="info"></span><button class="btn sm" id="next">${t("التالي","Next")}</button></div>`;
   const $ = s => main.querySelector(s); let items = [], total = 0;
   const load = async () => {
     const p = new URLSearchParams({ skip: st.skip, limit: PAGE });
@@ -21,9 +22,9 @@ export async function render(main, { api, auth }) {
     const r = await api("/journal?" + p); items = r.items; total = r.total;
     $("#rows").innerHTML = items.map(e => `<tr style="cursor:pointer" data-id="${e.journal_entry_id}" class="${e.status === "Reversed" ? "off" : ""}"><td>${esc(e.entry_no)}</td><td>${e.entry_date}</td><td>${(e.line_descriptions || []).map((l, i) => `<div class="journal-desc-line"${i ? ' style="border-top:1px solid var(--line);margin-top:5px;padding-top:5px"' : ""}>${esc(l.description || "—")}</div>`).join("") || esc(e.description || "—")}</td>
       <td class="num">${money(e.total_debit)}</td><td class="num">${money(e.total_credit)}</td><td><span class="tag ${{ Posted: "ok", Reversed: "bad", Draft: "warn" }[e.status] || ""}">${ST[e.status]}</span></td></tr>`).join("")
-      || `<tr><td colspan="6" class="muted">لا توجد قيود</td></tr>`;
+      || `<tr><td colspan="6" class="muted">${t("لا توجد قيود","No journal entries")}</td></tr>`;
     const to = Math.min(st.skip + PAGE, total);
-    $("#info").textContent = total ? `${st.skip + 1}–${to} من ${total}` : "0"; $("#prev").disabled = !st.skip; $("#next").disabled = to >= total;
+    $("#info").textContent = total ? `${st.skip + 1}–${to} ${t("من","of")} ${total}` : "0"; $("#prev").disabled = !st.skip; $("#next").disabled = to >= total;
   };
   const reload = safe(load);
   let t; $("#q").oninput = e => { clearTimeout(t); t = setTimeout(() => { st.q = e.target.value.trim(); st.skip = 0; reload(); }, 300); };
@@ -37,16 +38,16 @@ export async function render(main, { api, auth }) {
   // ---------- عرض وطباعة قيد ----------
   function printEntry(e) {
     const w = window.open("", "_blank");
-    if (!w) return toast("اسمح بالنوافذ المنبثقة لطباعة القيد");
+    if (!w) return toast(t("اسمح بالنوافذ المنبثقة لطباعة القيد","Allow pop-ups to print the journal entry"));
     const logoUrl = `${window.location.origin}/static/company-logos.png?v=20261104-journal-print-logo-1`;
     const companyLogo = company?.logo_data || logoUrl;
-    const companyInfo = [company?.name_en, company?.address_ar, company?.phone && `هاتف: ${company.phone}`, company?.email && `بريد: ${company.email}`, company?.website, company?.tax_number && `رقم ضريبي: ${company.tax_number}`, company?.commercial_register && `سجل تجاري: ${company.commercial_register}`].filter(Boolean).map(esc).join(" | ");
+    const companyInfo = [company?.name_en, company?.address_ar, company?.phone && `${t("هاتف","Phone")}: ${company.phone}`, company?.email && `${t("بريد","Email")}: ${company.email}`, company?.website, company?.tax_number && `${t("رقم ضريبي","Tax No.")}: ${company.tax_number}`, company?.commercial_register && `${t("سجل تجاري","Commercial Reg.")}: ${company.commercial_register}`].filter(Boolean).map(esc).join(" | ");
     const rows = e.lines.map(l => `<tr><td>${l.line_no}</td><td>${esc(l.account_code)} — ${esc(l.account_name)}</td><td>${esc(l.project_name || "—")}</td><td>${esc(l.description || "—")}</td><td class="num">${money(l.debit_amount)}</td><td class="num">${money(l.credit_amount)}</td></tr>`).join("");
     w.document.open();
-    w.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>قيد ${esc(e.entry_no)}</title><style>
+    w.document.write(`<!doctype html><html lang="${t("ar","en")}" dir="${t("rtl","ltr")}"><head><meta charset="utf-8"><title>قيد ${esc(e.entry_no)}</title><style>
       @page{size:A4 portrait;margin:12mm}*{box-sizing:border-box}body{font:14px/1.7 Tahoma,Arial,sans-serif;color:#111;margin:0}.print-header{display:flex;align-items:center;gap:18px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #bbb}.print-header img{display:block;width:190px;max-height:65px;object-fit:contain}.print-header h1{font-size:22px;margin:0;text-align:right}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}.meta div{border:1px solid #bbb;padding:8px 10px}.meta b{margin-inline-start:6px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #555;padding:7px 8px;text-align:right;vertical-align:top}th{background:#eee}.num{text-align:left;white-space:nowrap;font-variant-numeric:tabular-nums}.total td{font-weight:bold;background:#f1f1f1}.signs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-top:55px;text-align:center}.signs div{border-top:1px solid #555;padding-top:8px}@media print{tr{break-inside:avoid}}
-      </style></head><body><header class="print-header"><img src="${esc(companyLogo)}" alt="شعار الشركة"><div style="display:flex;flex-direction:column;gap:3px"><div style="display:flex;flex-direction:column;gap:2px;color:#17375f;font-size:10px;line-height:1.35"><b style="font-size:13px;color:#a77b22">تحالف شركات</b><strong>المقاولون العرب (عثمان احمد عثمان وشركاه)</strong><strong>الغرابلي للأعمال الهندسية المتكاملة</strong><strong>أبناء سيناء للتشييد والبناء</strong></div><h1>${esc(company?.name_ar||'الشركة')}</h1><small>${companyInfo}</small></div><h1>قيد يومية</h1></header><div class="meta"><div>رقم القيد: <b>${esc(e.entry_no)}</b></div><div>التاريخ: <b>${esc(e.entry_date)}</b></div><div>الحالة: <b>${esc(ST[e.status] || e.status)}</b></div></div>
-      <table><thead><tr><th>#</th><th>الحساب</th><th>مركز التكلفة</th><th>بيان السطر</th><th>مدين</th><th>دائن</th></tr></thead><tbody>${rows}<tr class="total"><td colspan="4">الإجمالي</td><td class="num">${money(e.total_debit)}</td><td class="num">${money(e.total_credit)}</td></tr></tbody></table><div class="signs"><div>إعداد</div><div>مراجعة</div><div>اعتماد</div></div><script>window.onload=()=>window.print()<\/script></body></html>`);
+      </style></head><body><header class="print-header"><img src="${esc(companyLogo)}" alt="شعار الشركة"><div style="display:flex;flex-direction:column;gap:3px"><div style="display:flex;flex-direction:column;gap:2px;color:#17375f;font-size:10px;line-height:1.35"><b style="font-size:13px;color:#a77b22">تحالف شركات</b><strong>المقاولون العرب (عثمان احمد عثمان وشركاه)</strong><strong>الغرابلي للأعمال الهندسية المتكاملة</strong><strong>أبناء سيناء للتشييد والبناء</strong></div><h1>${esc(company?.name_ar||'الشركة')}</h1><small>${companyInfo}</small></div><h1>${t("قيد يومية","Journal Entry")}</h1></header><div class="meta"><div>${t("رقم القيد","Entry No.")}: <b>${esc(e.entry_no)}</b></div><div>${t("التاريخ","Date")}: <b>${esc(e.entry_date)}</b></div><div>${t("الحالة","Status")}: <b>${esc(ST[e.status] || e.status)}</b></div></div>
+      <table><thead><tr><th>#</th><th>${t("الحساب","Account")}</th><th>${t("مركز التكلفة","Cost Center")}</th><th>${t("بيان السطر","Line description")}</th><th>${t("مدين","Debit")}</th><th>${t("دائن","Credit")}</th></tr></thead><tbody>${rows}<tr class="total"><td colspan="4">${t("الإجمالي","Total")}</td><td class="num">${money(e.total_debit)}</td><td class="num">${money(e.total_credit)}</td></tr></tbody></table><div class="signs"><div>${t("إعداد","Prepared by")}</div><div>${t("مراجعة","Reviewed by")}</div><div>${t("اعتماد","Approved by")}</div></div><script>window.onload=()=>window.print()<\/script></body></html>`);
     w.document.close();
   }
 
@@ -55,24 +56,24 @@ export async function render(main, { api, auth }) {
     const e = await api("/journal/" + id);
     const dlg = document.createElement("dialog"); dlg.style.width = "min(900px,96vw)";
     dlg.innerHTML = `<form method="dialog"><h3>${esc(e.entry_no)} — ${e.entry_date} <span class="tag">${ST[e.status]}</span></h3><p>${esc(e.description)}</p>
-      <div class="tbl-wrap"><table><thead><tr><th>#</th><th>الحساب</th><th>مركز التكلفة</th><th>مدين</th><th>دائن</th><th>البيان</th></tr></thead><tbody>
+      <div class="tbl-wrap"><table><thead><tr><th>#</th><th>${t("الحساب","Account")}</th><th>${t("مركز التكلفة","Cost Center")}</th><th>${t("مدين","Debit")}</th><th>${t("دائن","Credit")}</th><th>${t("البيان","Description")}</th></tr></thead><tbody>
       ${e.lines.map(l => `<tr><td>${l.line_no}</td><td>${esc(l.account_code)} — ${esc(l.account_name)}</td><td>${esc(l.project_name)}</td><td class="num">${money(l.debit_amount)}</td><td class="num">${money(l.credit_amount)}</td><td>${esc(l.description)}</td></tr>`).join("")}
       <tr class="total"><td colspan="3">الإجمالي</td><td class="num">${money(e.total_debit)}</td><td class="num">${money(e.total_credit)}</td><td></td></tr></tbody></table></div>
-      <div class="actions">${e.status === "Draft" && can("Post") ? '<button class="btn primary" type="button" data-a="post">ترحيل</button>' : ""}
-      ${e.status === "Draft" && can("Edit") ? '<button class="btn" type="button" data-a="edit">تعديل</button>' : ""}
-      ${can("Print") ? '<button class="btn" type="button" data-a="print">طباعة</button>' : ""}
-      ${(e.status === "Draft" || e.status === "Reversed") && can("Delete") ? '<button class="btn danger" type="button" data-a="del">' + (e.status === "Reversed" ? "حذف القيد الملغي" : "حذف المسودة") + '</button>' : ""}
-      ${e.status === "Posted" && can("Approve") ? '<button class="btn danger" type="button" data-a="cancel">إلغاء القيد</button>' : ""}
-      <button class="btn" value="x">إغلاق</button></div></form>`;
+      <div class="actions">${e.status === "Draft" && can("Post") ? '<button class="btn primary" type="button" data-a="post">${t("ترحيل","Post")}</button>' : ""}
+      ${e.status === "Draft" && can("Edit") ? '<button class="btn" type="button" data-a="edit">${t("تعديل","Edit")}</button>' : ""}
+      ${can("Print") ? '<button class="btn" type="button" data-a="print">${t("طباعة","Print")}</button>' : ""}
+      ${(e.status === "Draft" || e.status === "Reversed") && can("Delete") ? '<button class="btn danger" type="button" data-a="del">' + (e.status === "Reversed" ? t("حذف القيد الملغي","Delete reversed entry") : t("حذف المسودة","Delete draft")) + '</button>' : ""}
+      ${e.status === "Posted" && can("Approve") ? '<button class="btn danger" type="button" data-a="cancel">${t("إلغاء القيد","Reverse entry")}</button>' : ""}
+      <button class="btn" value="x">${t("إغلاق","Close")}</button></div></form>`;
     document.body.appendChild(dlg); dlg.addEventListener("close", () => dlg.remove());
     dlg.onclick = safe(async ev => {
       const a = ev.target.dataset?.a; if (!a) return;
       if (a === "print") return printEntry(e);
       if (a === "edit") { dlg.close(); return editor(e); }
-      const msg = { post: "ترحيل القيد؟ بعد الترحيل مينفعش يتعدّل.", del: e.status === "Reversed" ? "حذف القيد الملغي نهائيًا؟ سيظل تسجيل عملية الحذف موجودًا في سجل المراجعة." : "حذف المسودة؟", cancel: "إلغاء القيد؟ هيخرج من ميزان المراجعة." }[a];
+      const msg = { post: t("ترحيل القيد؟ بعد الترحيل مينفعش يتعدّل.","Post this entry? It cannot be edited after posting."), del: e.status === "Reversed" ? t("حذف القيد الملغي نهائيًا؟ سيظل تسجيل عملية الحذف موجودًا في سجل المراجعة.","Permanently delete this reversed entry? The deletion will remain in the audit log.") : t("حذف المسودة؟","Delete this draft?"), cancel: t("إلغاء القيد؟ هيخرج من ميزان المراجعة.","Reverse this entry? It will be excluded from the trial balance.") }[a];
       if (!confirm(msg)) return;
       if (a === "del") await api("/journal/" + id, { method: "DELETE" }); else await api(`/journal/${id}/${a}`, { method: "POST" });
-      dlg.close(); toast("تم"); await load();
+      dlg.close(); toast(t("تم","Done")); await load();
     });
     dlg.showModal();
   }
@@ -83,12 +84,12 @@ export async function render(main, { api, auth }) {
     const lines = e ? e.lines.map(l => ({ account_id: l.account_id, label: `${l.account_code} — ${l.account_name}`, project_id: l.project_id || "", d: Number(l.debit_amount) || "", c: Number(l.credit_amount) || "", desc: l.description || e.description || "" }))
       : [{ account_id: null, label: "", project_id: "", d: "", c: "", desc: "" }, { account_id: null, label: "", project_id: "", d: "", c: "", desc: "" }];
     dlg.innerHTML = `<form method="dialog"><h3>${e ? "تعديل " + esc(e.entry_no) : "قيد جديد"}</h3>
-      <div class="grid2"><div class="f"><label>التاريخ</label><input type="date" id="dt" value="${e ? e.entry_date : today()}" required></div>
-      <div class="f"><label>المستخلص المرتبط (اختياري — لمنع تكرار القيد)</label><select id="settlement"><option value="">قيد عام — بدون مستخلص</option>${settlements.map(s => `<option value="${s.settlement_id}" ${s.settlement_id === e?.source_settlement_id ? "selected" : ""}>${esc(s.settlement_no)} — ${esc(s.contract_no || s.contract_title || "عقد غير معروف")} — ${s.settlement_side === "Customer" ? "عميل" : "مقاول باطن"} — ${esc(s.status)}${s.journal_entry_id ? " — مرحّل" : ""}</option>`).join("")}</select><small class="muted">عند اختيار مستخلص سبق ترحيله، سيرفض النظام حفظ القيد أو ترحيله.</small></div></div>
-      <div class="tbl-wrap" style="margin-top:10px;width:100%"><table class="journal-lines"><thead><tr><th>الحساب</th><th>مركز التكلفة</th><th>مدين</th><th>دائن</th><th>بيان السطر</th><th></th></tr></thead><tbody id="ln"></tbody>
-      <tfoot><tr class="total"><td colspan="2">الإجمالي <span id="bal"></span></td><td class="num" id="td"></td><td class="num" id="tc"></td><td colspan="2"></td></tr></tfoot></table></div>
-      <button class="btn sm" type="button" id="addl" style="margin-top:8px">+ سطر</button>
-      <div class="err" id="er"></div><div class="actions"><button class="btn primary" value="ok">حفظ كمسودة</button><button class="btn" value="x" formnovalidate>إلغاء</button></div></form>`;
+      <div class="grid2"><div class="f"><label>${t("التاريخ","Date")}</label><input type="date" id="dt" value="${e ? e.entry_date : today()}" required></div>
+      <div class="f"><label>${t("المستخلص المرتبط (اختياري — لمنع تكرار القيد)","Linked statement (optional — prevents duplicate entries)")}</label><select id="settlement"><option value="">${t("قيد عام — بدون مستخلص","General entry — no statement")}</option>${settlements.map(s => `<option value="${s.settlement_id}" ${s.settlement_id === e?.source_settlement_id ? "selected" : ""}>${esc(s.settlement_no)} — ${esc(s.contract_no || s.contract_title || t("عقد غير معروف","Unknown contract"))} — ${s.settlement_side === "Customer" ? t("عميل","Customer") : t("مقاول باطن","Subcontractor")} — ${esc(s.status)}${s.journal_entry_id ? ` — ${t("مرحّل","Posted")}` : ""}</option>`).join("")}</select><small class="muted">عند اختيار مستخلص سبق ترحيله، سيرفض النظام حفظ القيد أو ترحيله.</small></div></div>
+      <div class="tbl-wrap" style="margin-top:10px;width:100%"><table class="journal-lines"><thead><tr><th>${t("الحساب","Account")}</th><th>${t("مركز التكلفة","Cost Center")}</th><th>${t("مدين","Debit")}</th><th>${t("دائن","Credit")}</th><th>${t("بيان السطر","Line description")}</th><th></th></tr></thead><tbody id="ln"></tbody>
+      <tfoot><tr class="total"><td colspan="2">${t("الإجمالي","Total")} <span id="bal"></span></td><td class="num" id="td"></td><td class="num" id="tc"></td><td colspan="2"></td></tr></tfoot></table></div>
+      <button class="btn sm" type="button" id="addl" style="margin-top:8px">+ ${t("سطر","Line")}</button>
+      <div class="err" id="er"></div><div class="actions"><button class="btn primary" value="ok">${t("حفظ كمسودة","Save as draft")}</button><button class="btn" value="x" formnovalidate>${t("إلغاء","Cancel")}</button></div></form>`;
     document.body.appendChild(dlg); dlg.addEventListener("close", () => dlg.remove());
     const q = s => dlg.querySelector(s);
     const chooseAccount = (i, id) => {
