@@ -9,7 +9,7 @@ from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..common import money
@@ -50,7 +50,7 @@ def _settlement_paid(db: Session, settlement: ContractSettlement) -> Decimal:
         else TreasuryTransaction.inflow
     ), 0)).where(
         TreasuryTransaction.settlement_id == settlement.settlement_id,
-        TreasuryTransaction.status.notin_(tuple(CANCELLED)),
+        or_(TreasuryTransaction.status.is_(None), TreasuryTransaction.status.notin_(tuple(CANCELLED))),
     )
     if settlement.settlement_side == "Subcontractor":
         stmt = stmt.where(TreasuryTransaction.status == "تم الصرف")
