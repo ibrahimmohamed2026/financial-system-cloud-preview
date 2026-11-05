@@ -58,12 +58,12 @@ export async function render(main, { api, auth }) {
     dlg.innerHTML = `<form method="dialog"><h3>${esc(e.entry_no)} — ${e.entry_date} <span class="tag">${ST[e.status]}</span></h3><p>${esc(e.description)}</p>
       <div class="tbl-wrap"><table><thead><tr><th>#</th><th>${trn("الحساب","Account")}</th><th>${trn("مركز التكلفة","Cost Center")}</th><th>${trn("مدين","Debit")}</th><th>${trn("دائن","Credit")}</th><th>${trn("البيان","Description")}</th></tr></thead><tbody>
       ${e.lines.map(l => `<tr><td>${l.line_no}</td><td>${esc(l.account_code)} — ${esc(l.account_name)}</td><td>${esc(l.project_name)}</td><td class="num">${money(l.debit_amount)}</td><td class="num">${money(l.credit_amount)}</td><td>${esc(l.description)}</td></tr>`).join("")}
-      <tr class="total"><td colspan="3">الإجمالي</td><td class="num">${money(e.total_debit)}</td><td class="num">${money(e.total_credit)}</td><td></td></tr></tbody></table></div>
-      <div class="actions">${e.status === "Draft" && can("Post") ? '<button class="btn primary" type="button" data-a="post">${trn("ترحيل","Post")}</button>' : ""}
-      ${e.status === "Draft" && can("Edit") ? '<button class="btn" type="button" data-a="edit">${trn("تعديل","Edit")}</button>' : ""}
-      ${can("Print") ? '<button class="btn" type="button" data-a="print">${trn("طباعة","Print")}</button>' : ""}
+      <tr class="total"><td colspan="3">${trn("الإجمالي","Total")}</td><td class="num">${money(e.total_debit)}</td><td class="num">${money(e.total_credit)}</td><td></td></tr></tbody></table></div>
+      <div class="actions">${e.status === "Draft" && can("Post") ? `<button class="btn primary" type="button" data-a="post">${trn("ترحيل","Post")}</button>` : ""}
+      ${e.status === "Draft" && can("Edit") ? `<button class="btn" type="button" data-a="edit">${trn("تعديل","Edit")}</button>` : ""}
+      ${can("Print") ? `<button class="btn" type="button" data-a="print">${trn("طباعة","Print")}</button>` : ""}
       ${(e.status === "Draft" || e.status === "Reversed") && can("Delete") ? '<button class="btn danger" type="button" data-a="del">' + (e.status === "Reversed" ? trn("حذف القيد الملغي","Delete reversed entry") : trn("حذف المسودة","Delete draft")) + '</button>' : ""}
-      ${e.status === "Posted" && can("Approve") ? '<button class="btn danger" type="button" data-a="cancel">${trn("إلغاء القيد","Reverse entry")}</button>' : ""}
+      ${e.status === "Posted" && can("Approve") ? `<button class="btn danger" type="button" data-a="cancel">${trn("إلغاء القيد","Reverse entry")}</button>` : ""}
       <button class="btn" value="x">${trn("إغلاق","Close")}</button></div></form>`;
     document.body.appendChild(dlg); dlg.addEventListener("close", () => dlg.remove());
     dlg.onclick = safe(async ev => {
