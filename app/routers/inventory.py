@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import require_permission, write_audit
 from ..models import (Account, Counterparty, FiscalYear, InventoryItem, InventoryWarehouse,
-    InventoryMovement, SiteIssueRequest, SiteIssueRequestLine, JournalEntry, JournalEntryDetail, PurchaseOrder, PurchaseOrderLine,
+    InventoryMovement, InventoryStocktake, InventoryStocktakeLine, SiteIssueRequest, SiteIssueRequestLine, JournalEntry, JournalEntryDetail, PurchaseOrder, PurchaseOrderLine,
     SupplierInvoice, SupplierInvoiceLine, TreasuryAccount, TreasuryTransaction, Project, User, utcnow)
 from ..counterparties import resolve_counterparty
 
@@ -51,6 +51,16 @@ class MovementBatchIn(BaseModel):
     lines: list[MovementBatchLineIn] = Field(min_length=1)
     reference: str | None = None
     notes: str | None = None
+class StocktakeLineIn(BaseModel):
+    item_id: int
+    counted_quantity: Decimal = Field(ge=0)
+class StocktakeIn(BaseModel):
+    stocktake_no: str = Field(min_length=1, max_length=60)
+    warehouse_id: int
+    stocktake_date: date = Field(default_factory=date.today)
+    notes: str | None = None
+    lines: list[StocktakeLineIn] = Field(min_length=1)
+
 class SiteIssueRequestLineIn(BaseModel):
     item_id: int
     quantity: Decimal = Field(gt=0)
@@ -306,6 +316,131 @@ def issue_site_request_stock(request_id: int, body: SiteIssuePostIn, user: User 
         raise HTTPException(409, "تعذر ترحيل الصرف؛ لم يتم تعديل الأرصدة")
     return {"request_id": request_id, "status": request.status, "warehouse": warehouse.name,
         "movements": created, "message": "تم صرف الكميات وتحديث رصيد المخزن"}
+
+@inventory.get("/stocktakes")
+def list_stocktakes(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
+    rows = db.scalars(select(InventoryStocktake).order_by(InventoryStocktake.stocktake_date.desc(), InventoryStocktake.stocktake_id.desc()).limit(300)).all()
+    result = []
+    for x in rows:
+        warehouse = db.get(InventoryWarehouse, x.warehouse_id)
+        creator = db.get(User, x.created_by)
+        approver = db.get(User, x.approved_by) if x.approved_by else None
+        lines = []
+        for line in db.scalars(select(InventoryStocktakeLine).where(InventoryStocktakeLine.stocktake_id == x.stocktake_id).order_by(InventoryStocktakeLine.line_id)).all():
+            item = db.get(InventoryItem, line.item_id)
+            lines.append({"line_id": line.line_id, "item_id": line.item_id, "item_code": item.code if item else "",
+                "item": item.name if item else "", "unit": item.unit if item else "",
+                "system_quantity": str(line.system_quantity), "counted_quantity": str(line.counted_quantity),
+                "variance_quantity": str(line.variance_quantity)})
+        result.append({"stocktake_id": x.stocktake_id, "stocktake_no": x.stocktake_no,
+            "warehouse_id": x.warehouse_id, "warehouse": warehouse.name if warehouse else "",
+            "stocktake_date": str(x.stocktake_date), "status": x.status, "notes": x.notes,
+            "created_by": getattr(creator, "username", None) or str(x.created_by),
+            "approved_by": getattr(approver, "username", None) if approver else "", "lines": lines})
+    return {"items": result}
+
+@inventory.post("/stocktakes", status_code=201)
+def create_stocktake(body: StocktakeIn, user: User = Depends(require_permission("InventoryManagement", "Add")), db: Session = Depends(get_db)):
+    if db.scalar(select(InventoryStocktake.stocktake_id).where(InventoryStocktake.stocktake_no == body.stocktake_no)):
+        raise HTTPException(409, "رقم محضر الجرد مستخدم بالفعل")
+    warehouse = db.get(InventoryWarehouse, body.warehouse_id)
+    if not warehouse or not warehouse.is_active:
+        raise HTTPException(422, "المخزن غير موجود أو غير نشط")
+    if len({line.item_id for line in body.lines}) != len(body.lines):
+        raise HTTPException(422, "لا تكرر الصنف في محضر الجرد")
+    prepared = []
+    for line in body.lines:
+        item = db.get(InventoryItem, line.item_id)
+        if not item or not item.is_active:
+            raise HTTPException(422, f"الصنف {line.item_id} غير موجود أو غير نشط")
+        prepared.append((line, _balance(db, line.item_id, body.warehouse_id)))
+    x = InventoryStocktake(stocktake_no=body.stocktake_no, warehouse_id=body.warehouse_id,
+        stocktake_date=body.stocktake_date, status="PendingApproval", notes=body.notes, created_by=user.user_id)
+    db.add(x)
+    try:
+        db.flush()
+        for line, system_qty in prepared:
+            counted = Decimal(str(line.counted_quantity))
+            db.add(InventoryStocktakeLine(stocktake_id=x.stocktake_id, item_id=line.item_id,
+                system_quantity=system_qty, counted_quantity=counted, variance_quantity=counted-system_qty))
+        write_audit(db, user.user_id, "Create", "InventoryStocktakes", x.stocktake_id,
+            new={"stocktake_no": x.stocktake_no, "warehouse_id": x.warehouse_id, "lines": len(prepared), "status": x.status})
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "تعذر حفظ محضر الجرد؛ تحقق من رقم المحضر")
+    return {"stocktake_id": x.stocktake_id, "stocktake_no": x.stocktake_no, "status": x.status}
+
+@inventory.post("/stocktakes/{stocktake_id}/approve")
+def approve_stocktake(stocktake_id: int, user: User = Depends(require_permission("InventoryManagement", "Approve")), db: Session = Depends(get_db)):
+    x = db.scalar(select(InventoryStocktake).where(InventoryStocktake.stocktake_id == stocktake_id).with_for_update())
+    if not x:
+        raise HTTPException(404, "محضر الجرد غير موجود")
+    if x.status != "PendingApproval":
+        raise HTTPException(409, "محضر الجرد ليس في انتظار الاعتماد")
+    if x.created_by == user.user_id:
+        raise HTTPException(403, "لا يجوز اعتماد محضر الجرد بواسطة معدّه")
+    lines = db.scalars(select(InventoryStocktakeLine).where(InventoryStocktakeLine.stocktake_id == stocktake_id)).all()
+    if not lines:
+        raise HTTPException(409, "محضر الجرد لا يحتوي على أصناف")
+    x.status = "Approved"
+    x.approved_by = user.user_id
+    x.approved_at = utcnow()
+    write_audit(db, user.user_id, "Approve", "InventoryStocktakes", stocktake_id,
+        new={"status": x.status, "line_count": len(lines), "total_variance": str(sum((Decimal(str(z.variance_quantity)) for z in lines), Decimal("0")))})
+    db.commit()
+    return {"stocktake_id": stocktake_id, "status": x.status}
+
+@inventory.post("/stocktakes/{stocktake_id}/post")
+def post_stocktake(stocktake_id: int, user: User = Depends(require_permission("InventoryManagement", "Post")), db: Session = Depends(get_db)):
+    x = db.scalar(select(InventoryStocktake).where(InventoryStocktake.stocktake_id == stocktake_id).with_for_update())
+    if not x:
+        raise HTTPException(404, "محضر الجرد غير موجود")
+    if x.status != "Approved":
+        raise HTTPException(409, "يجب اعتماد محضر الجرد قبل التسوية")
+    if x.created_by == user.user_id or x.approved_by == user.user_id:
+        raise HTTPException(403, "يجب أن يكون مرحّل التسوية شخصًا غير معدّ المحضر والمعتمد")
+    lines = db.scalars(select(InventoryStocktakeLine).where(InventoryStocktakeLine.stocktake_id == stocktake_id).order_by(InventoryStocktakeLine.line_id).with_for_update()).all()
+    if not lines:
+        raise HTTPException(409, "محضر الجرد لا يحتوي على أصناف")
+    item_ids = [line.item_id for line in lines]
+    # Any movement after the count snapshot invalidates the comparison; recount rather than post stale variances.
+    newer = db.scalar(select(InventoryMovement.movement_id).where(
+        InventoryMovement.warehouse_id == x.warehouse_id, InventoryMovement.item_id.in_(item_ids),
+        InventoryMovement.created_at > x.created_at).limit(1))
+    if newer:
+        raise HTTPException(409, "تم تسجيل حركات مخزنية بعد إعداد محضر الجرد؛ أعد الجرد لضمان صحة الفروق")
+    for line in lines:
+        current = _balance(db, line.item_id, x.warehouse_id)
+        if current != Decimal(str(line.system_quantity)):
+            raise HTTPException(409, "تغير رصيد أحد الأصناف منذ إعداد الجرد؛ أعد الجرد")
+        variance = Decimal(str(line.counted_quantity)) - current
+        if variance < 0 and current < abs(variance):
+            raise HTTPException(409, "فرق الجرد سيؤدي إلى رصيد سالب")
+    created = []
+    for line in lines:
+        variance = Decimal(str(line.counted_quantity)) - Decimal(str(line.system_quantity))
+        if variance == 0:
+            continue
+        movement_type = "IN" if variance > 0 else "OUT"
+        movement_no = f"STK-{x.stocktake_id}-{line.line_id}-{uuid4().hex[:8]}"
+        movement = InventoryMovement(movement_no=movement_no, item_id=line.item_id,
+            warehouse_id=x.warehouse_id, movement_date=x.stocktake_date, movement_type=movement_type,
+            quantity=abs(variance), unit_cost=Decimal("0"), reference=x.stocktake_no,
+            notes=f"تسوية فرق جرد {x.stocktake_no}", created_by=user.user_id)
+        db.add(movement)
+        created.append({"movement_no": movement_no, "item_id": line.item_id, "movement_type": movement_type, "quantity": str(abs(variance))})
+    x.status = "Posted"
+    x.posted_by = user.user_id
+    x.posted_at = utcnow()
+    write_audit(db, user.user_id, "Post", "InventoryStocktakes", stocktake_id,
+        new={"status": x.status, "warehouse_id": x.warehouse_id, "adjustments": created})
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "تعذر ترحيل تسويات الجرد؛ لم يتم تعديل الأرصدة")
+    return {"stocktake_id": stocktake_id, "status": x.status, "adjustments": created}
 
 @inventory.get("/warehouses")
 def list_warehouses(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
