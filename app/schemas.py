@@ -11,6 +11,10 @@ class LoginIn(BaseModel):
     password: str = Field(min_length=1, max_length=200)
 
 
+class LanguagePreferenceIn(BaseModel):
+    language: Literal["ar", "en"]
+
+
 class RefreshIn(BaseModel):
     refresh_token: str
 
@@ -20,6 +24,7 @@ class UserOut(BaseModel):
     user_id: int
     username: str
     full_name: str
+    preferred_language: str = "ar"
     avatar_updated_at: datetime | None = None
 
 
