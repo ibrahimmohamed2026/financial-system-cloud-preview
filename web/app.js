@@ -19,7 +19,7 @@ const SCREENS = {
   "/accounts": L("./pages/accounts.js?v=20261105-accounts-i18n-1"),
   "/projects": L("./pages/projects.js?v=20261105-projects-i18n-1"),
   "/journal": L("./pages/journal.js?v=20261105-journal-i18n-2"),
-  "/trial-balance": L("./pages/trial_balance.js"),
+  "/trial-balance": L("./pages/trial_balance.js?v=20261105-trial-balance-i18n-1"),
   "/reports/balance-sheet": L("./pages/reports.js?v=20261105-reports-i18n-1"),
   "/reports/income-statement": L("./pages/reports.js?v=20261105-reports-i18n-1"),
   "/reports": L("./pages/reports_analytics.js?v=20261104-searchable-account-1"),
