@@ -675,6 +675,30 @@ class SiteIssueRequestLine(Base):
     approved_quantity: Mapped[Decimal] = C("ApprovedQuantity", Numeric(18, 3), default=0)
     issued_quantity: Mapped[Decimal] = C("IssuedQuantity", Numeric(18, 3), default=0)
 
+class InventoryStocktake(Base):
+    __tablename__ = "InventoryStocktakes"
+    stocktake_id: Mapped[int] = C("StocktakeId", Integer, primary_key=True)
+    stocktake_no: Mapped[str] = C("StocktakeNo", Unicode(60), unique=True, index=True)
+    warehouse_id: Mapped[int] = C("WarehouseId", ForeignKey("InventoryWarehouses.WarehouseId"))
+    stocktake_date: Mapped[date] = C("StocktakeDate", Date, default=date.today)
+    status: Mapped[str] = C("Status", Unicode(30), default="PendingApproval", index=True)
+    notes: Mapped[Optional[str]] = C("Notes", UnicodeText, nullable=True)
+    created_by: Mapped[int] = C("CreatedBy", ForeignKey("Users.UserId"))
+    approved_by: Mapped[Optional[int]] = C("ApprovedBy", ForeignKey("Users.UserId"), nullable=True)
+    approved_at: Mapped[Optional[datetime]] = C("ApprovedAt", DateTime, nullable=True)
+    posted_by: Mapped[Optional[int]] = C("PostedBy", ForeignKey("Users.UserId"), nullable=True)
+    posted_at: Mapped[Optional[datetime]] = C("PostedAt", DateTime, nullable=True)
+    created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
+
+class InventoryStocktakeLine(Base):
+    __tablename__ = "InventoryStocktakeLines"
+    line_id: Mapped[int] = C("LineId", Integer, primary_key=True)
+    stocktake_id: Mapped[int] = C("StocktakeId", ForeignKey("InventoryStocktakes.StocktakeId", ondelete="CASCADE"), index=True)
+    item_id: Mapped[int] = C("ItemId", ForeignKey("InventoryItems.ItemId"))
+    system_quantity: Mapped[Decimal] = C("SystemQuantity", Numeric(18, 3))
+    counted_quantity: Mapped[Decimal] = C("CountedQuantity", Numeric(18, 3))
+    variance_quantity: Mapped[Decimal] = C("VarianceQuantity", Numeric(18, 3))
+
 class PurchaseOrder(Base):
     __tablename__ = "PurchaseOrders"
     purchase_order_id: Mapped[int] = C("PurchaseOrderId", Integer, primary_key=True)
