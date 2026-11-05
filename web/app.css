@@ -711,3 +711,67 @@ body.login-mode .login .btn.primary{background:linear-gradient(135deg,#bd9140,#e
 body.login-mode .login input:focus{border-color:#d6b56c;outline-color:#d6b56c}
 .home-eyebrow,.home-kpi .kpi-h .ico,.home-kpi .kpi-mark{color:var(--brand)!important}
 @media(max-width:600px){.brand-t{font-size:17px!important}.brand-sub{font-size:8px}}
+
+
+/* ===== ADEX ERP — Dashboard experience ===== */
+.content{min-width:0}
+.hdr{backdrop-filter:blur(14px);background:color-mix(in srgb,var(--bg) 92%,transparent);box-shadow:0 2px 12px rgba(20,30,45,.035)}
+.sidebar{background:linear-gradient(180deg,#0a192d 0%,#122640 58%,#0b1b30 100%);border-left:1px solid rgba(214,181,108,.24)}
+.brand{padding:10px 9px 18px;margin-bottom:8px;border-bottom:1px solid rgba(214,181,108,.2)}
+.brand img{max-width:174px;max-height:58px;margin-inline:auto}
+.brand-t{text-align:center;margin-top:9px!important;font-size:21px!important;letter-spacing:2.4px!important}
+.brand-sub{text-align:center}
+.nav-i{color:#d7deea;border-radius:11px;margin:2px 0;transition:background .16s,border-color .16s,color .16s}
+.nav-i:hover{background:rgba(214,181,108,.11);color:#f4dfad}
+.nav-i.on{background:linear-gradient(100deg,rgba(214,181,108,.2),rgba(214,181,108,.07));border-color:rgba(214,181,108,.28);color:#f2d28a}
+.pagebar{padding-top:16px}
+.home-hero{padding:25px 27px;border-radius:18px;border-color:rgba(184,137,46,.28);background:linear-gradient(115deg,var(--card) 0%,var(--brand-soft) 100%);box-shadow:0 8px 26px rgba(35,43,54,.055)}
+.home-heading h1{letter-spacing:-.7px}
+.home-heading p{max-width:560px;line-height:1.8}
+.alliance-heading{background:color-mix(in srgb,var(--card) 88%,var(--brand-soft))!important;border-color:var(--line)!important;border-inline-start:4px solid var(--brand)!important;border-right:1px solid var(--line)!important;box-shadow:0 4px 16px rgba(30,35,45,.035)}
+.home-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,215px),1fr));gap:15px}
+.home-kpi{position:relative;border-radius:16px;border-color:color-mix(in srgb,var(--brand) 22%,var(--line));box-shadow:0 5px 18px rgba(35,43,54,.045);min-width:0}
+.home-kpi:before{content:"";position:absolute;inset-block:14px;inset-inline-start:0;width:3px;border-radius:3px;background:linear-gradient(180deg,var(--brand2),transparent)}
+.home-kpi .kpi-v{overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.home-section-title{margin-top:5px}
+.home-section-title h2{font-size:17px}
+.home-panel{border-radius:16px;border-color:var(--line);box-shadow:0 5px 18px rgba(35,43,54,.04)}
+.home-panel .card-h{border-bottom:1px solid color-mix(in srgb,var(--line) 72%,transparent)}
+.home-panel .card-h h3{font-size:16px}
+.home-panel-foot{background:color-mix(in srgb,var(--bg) 72%,var(--card))}
+.home-recent tbody tr:hover{background:var(--brand-soft)}
+:root[data-theme="dark"] .home-hero{background:linear-gradient(115deg,#142238,#1c2d43)}
+:root[data-theme="dark"] .alliance-heading{background:#172941!important}
+:root[data-theme="dark"] .home-kpi,:root[data-theme="dark"] .home-panel{box-shadow:0 8px 24px rgba(0,0,0,.13)}
+@media(max-width:900px){
+ .app{grid-template-columns:minmax(0,1fr)}
+ .content{width:100%;min-width:0}
+ .wrap{padding:14px}
+ .home-kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+ .home-kpi{padding:14px;min-height:128px}
+ .home-kpi .kpi-v{font-size:clamp(17px,4vw,24px)}
+}
+@media(max-width:560px){
+ .hdr{height:58px;padding:0 10px;gap:7px}
+ .who{display:none}
+ .gsearch{width:min(38vw,190px)}
+ .gsearch input{height:38px}
+ .pagebar{padding:12px 12px 8px}
+ .wrap{padding:10px}
+ .home-hero{padding:14px;border-radius:14px}
+ .home-hero h1{font-size:20px}
+ .alliance-heading{align-items:flex-start}
+ .alliance-logo{width:58px;height:54px}
+ .alliance-copy{font-size:9px;line-height:1.45}
+ .home-kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+ .home-kpi{padding:11px 10px;min-height:118px}
+ .home-kpi .kpi-h{font-size:11px;gap:5px}
+ .home-kpi .kpi-mark{width:29px;height:29px;border-radius:9px}
+ .home-kpi .kpi-mark .ico{width:16px;height:16px}
+ .home-kpi .kpi-v{font-size:clamp(15px,4.2vw,21px);margin-top:12px}
+ .home-kpi .kpi-s{font-size:10px}
+ .home-section-title h2{font-size:15px}
+ .home-panel .card-h{padding:13px}
+ .home-panel .chart{padding:10px 6px;min-height:0}
+ .home-recent table{min-width:500px}
+}
