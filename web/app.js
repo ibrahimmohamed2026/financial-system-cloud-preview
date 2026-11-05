@@ -37,14 +37,14 @@ const SCREENS = {
   "/inventory/site-issues": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
   "/inventory/stocktakes": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
   "/inventory/returns": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
-  "/purchases": L("./pages/purchases.js?v=20261105-auto-document-numbers-1"),
-  "/purchases/requisitions": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
-  "/purchases/quotations": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
-  "/purchases/orders": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
-  "/purchases/receipts": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
-  "/purchases/invoices": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
-  "/purchases/payments": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
-  "/purchases/reports": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
+  "/purchases": L("./pages/purchases.js?v=20261105-purchasing-nav-fix-2"),
+  "/purchases/requisitions": L("./pages/purchases.js?v=20261105-purchasing-nav-fix-2"),
+  "/purchases/quotations": L("./pages/purchases.js?v=20261105-purchasing-nav-fix-2"),
+  "/purchases/orders": L("./pages/purchases.js?v=20261105-purchasing-nav-fix-2"),
+  "/purchases/receipts": L("./pages/purchases.js?v=20261105-purchasing-nav-fix-2"),
+  "/purchases/invoices": L("./pages/purchases.js?v=20261105-purchasing-nav-fix-2"),
+  "/purchases/payments": L("./pages/purchases.js?v=20261105-purchasing-nav-fix-2"),
+  "/purchases/reports": L("./pages/purchases.js?v=20261105-purchasing-nav-fix-2"),
   "/counterparties": L("./pages/counterparties.js?v=20261105-counterparty-names-i18n-2"),
   // Preserve the older type-specific links while using the unified party registry.
   "/customers": L("./pages/counterparties.js?v=20261105-counterparties-i18n-1"),
@@ -126,6 +126,16 @@ function navItems() {          // كل الوجهات (للبحث العام)
   const out = [{ route: "/", title: tr("الرئيسية", "Home"), sub: "Home" }];
   for (const s of sectionsOrdered()) for (const x of screensOf(s)) out.push({ route: x.route, title: tOf(x), sub: x.title_en });
   if (auth.can("AnalyticsReports", "View")) out.push({ route: "/reports/financial-control", title: tr("لوحة الرقابة المالية", "Financial Control"), sub: "Financial Control" });
+  if (auth.can("PurchaseCycle", "View")) out.push(
+    {route:"/purchases",title:tr("دورة المشتريات","Purchasing Cycle"),sub:"Purchasing"},
+    {route:"/purchases/requisitions",title:tr("طلبات الشراء","Purchase Requisitions"),sub:"Purchasing"},
+    {route:"/purchases/quotations",title:tr("عروض أسعار الموردين","Supplier Quotations"),sub:"Purchasing"},
+    {route:"/purchases/orders",title:tr("أوامر الشراء","Purchase Orders"),sub:"Purchasing"},
+    {route:"/purchases/receipts",title:tr("استلام التوريدات","Goods Receipts"),sub:"Purchasing"},
+    {route:"/purchases/invoices",title:tr("فواتير الموردين","Supplier Invoices"),sub:"Purchasing"},
+    {route:"/purchases/payments",title:tr("سداد الموردين","Supplier Payments"),sub:"Purchasing"},
+    {route:"/purchases/reports",title:tr("تقارير الموردين","Supplier Reports"),sub:"Purchasing"}
+  );
   if (IS_ADMIN) for (const a of ADMIN_ITEMS) out.push({ route: a.route, title: isEN() ? a.title_en : a.title, sub: "Admin" });
   return out;
 }
@@ -181,7 +191,10 @@ function navHtml(path) {
   for (const g of NAV_GROUPS) {
     const screens = all.filter(x => (g.routes || []).includes(x.route) || (g.sectionCodes || []).includes(x._section));
     if ((g.routes || []).includes("/inventory") && screens.some(x => x.route === "/inventory")) screens.push({route:"/inventory/receipts",title_ar:"استلام التوريدات",title_en:"Goods Receipts"},{route:"/inventory/items",title_ar:"الأصناف",title_en:"Items"},{route:"/inventory/warehouses",title_ar:"المخازن",title_en:"Warehouses"},{route:"/inventory/balances",title_ar:"أرصدة المخزون",title_en:"Stock Balances"},{route:"/inventory/movements",title_ar:"حركة المخزون",title_en:"Stock Movements"},{route:"/inventory/transfers",title_ar:"التحويلات بين المخازن",title_en:"Warehouse Transfers"},{route:"/inventory/site-issues",title_ar:"طلبات صرف المواقع",title_en:"Site Issue Requests"},{route:"/inventory/stocktakes",title_ar:"الجرد والتسويات",title_en:"Stocktakes & Adjustments"},{route:"/inventory/returns",title_ar:"المرتجعات",title_en:"Inventory Returns"});
-    if ((g.routes || []).includes("/purchases") && screens.some(x => x.route === "/purchases")) screens.push({route:"/purchases/requisitions",title_ar:"طلبات الشراء",title_en:"Purchase Requisitions"},{route:"/purchases/quotations",title_ar:"عروض أسعار الموردين",title_en:"Supplier Quotations"},{route:"/purchases/orders",title_ar:"أوامر الشراء",title_en:"Purchase Orders"},{route:"/purchases/receipts",title_ar:"استلام التوريدات",title_en:"Goods Receipts"},{route:"/purchases/invoices",title_ar:"فواتير الموردين",title_en:"Supplier Invoices"},{route:"/purchases/payments",title_ar:"سداد الموردين",title_en:"Supplier Payments"},{route:"/purchases/reports",title_ar:"تقارير الموردين",title_en:"Supplier Reports"});
+    if ((g.routes || []).includes("/purchases") && (screens.some(x => x.route === "/purchases") || auth.can("PurchaseCycle", "View"))) {
+      if (!screens.some(x => x.route === "/purchases")) screens.push({route:"/purchases",title_ar:"دورة المشتريات",title_en:"Purchasing Cycle"});
+      screens.push({route:"/purchases/requisitions",title_ar:"طلبات الشراء",title_en:"Purchase Requisitions"},{route:"/purchases/quotations",title_ar:"عروض أسعار الموردين",title_en:"Supplier Quotations"},{route:"/purchases/orders",title_ar:"أوامر الشراء",title_en:"Purchase Orders"},{route:"/purchases/receipts",title_ar:"استلام التوريدات",title_en:"Goods Receipts"},{route:"/purchases/invoices",title_ar:"فواتير الموردين",title_en:"Supplier Invoices"},{route:"/purchases/payments",title_ar:"سداد الموردين",title_en:"Supplier Payments"},{route:"/purchases/reports",title_ar:"تقارير الموردين",title_en:"Supplier Reports"});
+    }
     h += renderGroup(isEN() ? g.en : g.ar, g.icon, screens);
   }
   for (const s of sectionsOrdered()) {
