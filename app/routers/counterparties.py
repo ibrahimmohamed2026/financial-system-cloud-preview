@@ -317,3 +317,50 @@ def merge_parties(source_id: int, target_id: int,
                 {"source_id": source_id, "source_name": old_name}, {"target_id": target_id, "target_name": target_name})
     db.delete(source); db.commit()
     return _out(db, target)
+
+def _party_delete_readiness(db: Session, x: Counterparty) -> dict:
+    linked = _out(db, x)["linked_records"]
+    blockers = [f"يوجد {count} سجل مرتبط في {table}" for table, count in linked.items() if count]
+    account = db.get(Account, x.linked_account_id) if x.linked_account_id else None
+    if account:
+        journal_count = db.scalar(select(func.count()).select_from(JournalEntryDetail).where(
+            JournalEntryDetail.account_id == account.account_id)) or 0
+        check_count = db.scalar(select(func.count()).select_from(FinancialCheck).where(
+            FinancialCheck.party_account_id == account.account_id)) or 0
+        if journal_count:
+            blockers.append(f"حساب الأستاذ المرتبط يحتوي على {journal_count} حركة/سطر محاسبي؛ لا يمكن حذف الطرف")
+        if check_count:
+            blockers.append(f"يوجد {check_count} شيك مرتبط بحساب الأستاذ")
+    return {"counterparty_id": x.party_id, "party_name": x.legal_name,
+            "linked_records": linked, "blockers": blockers, "can_delete": not blockers}
+
+
+@router.get("/{party_id}/delete-readiness")
+def delete_readiness(party_id: int, _: User = Depends(require_permission("Counterparties", "Delete")),
+                     db: Session = Depends(get_db)):
+    x = db.get(Counterparty, party_id)
+    if not x:
+        raise HTTPException(404, "الطرف غير موجود")
+    return _party_delete_readiness(db, x)
+
+
+@router.delete("/{party_id}")
+def delete_party(party_id: int, user: User = Depends(require_permission("Counterparties", "Delete")),
+                 db: Session = Depends(get_db)):
+    x = db.get(Counterparty, party_id)
+    if not x:
+        raise HTTPException(404, "الطرف غير موجود")
+    readiness = _party_delete_readiness(db, x)
+    if not readiness["can_delete"]:
+        raise HTTPException(409, "لا يمكن حذف الطرف: " + "؛ ".join(readiness["blockers"]))
+    old = {"code": x.code, "legal_name": x.legal_name, "party_type": x.party_type,
+           "linked_account_id": x.linked_account_id, "is_active": x.is_active}
+    aliases = db.scalars(select(CounterpartyAlias).where(
+        CounterpartyAlias.counterparty_id == party_id)).all()
+    for alias in aliases:
+        db.delete(alias)
+    write_audit(db, user.user_id, "Delete", "Counterparties", party_id, old=old,
+                new={"deleted": True, "linked_records": readiness["linked_records"]})
+    db.delete(x)
+    db.commit()
+    return {"deleted": True, "counterparty_id": party_id, "legal_name": old["legal_name"]}
