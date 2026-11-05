@@ -13,7 +13,7 @@ const SCREENS = {
   "/checks/register": L("./pages/financial_checks.js?v=20261104-check-project-link-1"),
   "/financial-checks": L("./pages/financial_checks.js?v=20261104-check-project-link-1"),
   "/checks-register": L("./pages/financial_checks.js?v=20261104-check-project-link-1"),
-  "/admin/users": L("./pages/admin.js?v=20261019-user-avatar-1"),
+  "/admin/users": L("./pages/admin.js?v=20261105-admin-i18n-1"),
   "/admin/backup": L("./pages/backup.js"),
   "/admin/company": L("./pages/company.js?v=20261105-company-i18n-1"),
   "/accounts": L("./pages/accounts.js?v=20261105-accounts-i18n-1"),
