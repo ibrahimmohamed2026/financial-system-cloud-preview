@@ -3,7 +3,7 @@ import { translate as tr } from "../i18n.js";
 const SCREEN = "CostCenters";
 export async function render(main, { api, auth }) {
   const can = a => auth.can(SCREEN, a);
-  main.innerHTML = `<div class="toolbar"><div class="grow"><label>${tr("بحث","Search")}</label><input id="q"></div>${can("Add") ? '<button class="btn primary" id="add">+ ${tr("مركز تكلفة / مشروع","Cost Center / Project")}</button>' : ""}</div>
+  main.innerHTML = `<div class="toolbar"><div class="grow"><label>${tr("بحث","Search")}</label><input id="q"></div>${can("Add") ? `<button class="btn primary" id="add">+ ${tr("مركز تكلفة / مشروع","Cost Center / Project")}</button>` : ""}</div>
     <div class="tbl-wrap"><table><thead><tr><th>#</th><th>${tr("الاسم","Name")}</th><th>${tr("الاسم بالإنجليزي","English name")}</th><th>${tr("مكتب رئيسي","Head office")}</th><th>${tr("الحالة","Status")}</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
   const $ = s => main.querySelector(s); let items = [];
   const load = async () => {
