@@ -13,7 +13,7 @@ from .database import engine, SessionLocal
 from .db_setup import ensure_schema
 from .bootstrap import seed_screens, sync_permissions
 from .routers import (accounts, admin, auth, audit_logs, backup, checks, dashboard, journal, projects, reconciliation, reports, contracts, contract_erp, contract_requests, contract_attachments, technical_settlements, inventory, counterparties,
-                      treasury, trial_balance, data_exchange, pg_backup, financial_checks)
+                      treasury, trial_balance, data_exchange, pg_backup, financial_checks, financial_control)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -87,6 +87,7 @@ app.include_router(inventory.inventory)
 app.include_router(inventory.purchases)
 app.include_router(counterparties.router)
 app.include_router(reports.api_router)
+app.include_router(financial_control.router)
 
 
 @app.get("/health", tags=["System"])
