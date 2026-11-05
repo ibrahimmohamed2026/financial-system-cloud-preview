@@ -1,12 +1,12 @@
 import { api, auth, login, userAvatarUrl } from "./api.js";
 import { esc, toast, errText } from "./ui.js";
 import { mountDataExchange } from "./data_exchange.js";
+import { getLanguage, isEnglish, translate, applyLanguage } from "./i18n.js";
 
 const root = document.getElementById("app");
-let LANG = (() => { try { return localStorage.getItem("fs_lang") === "en" ? "en" : "ar"; } catch { return "ar"; } })();
-const isEN = () => LANG === "en";
-const tr = (ar, en) => isEN() ? en : ar;
-const applyLanguage = () => { document.documentElement.lang = LANG; document.documentElement.dir = isEN() ? "ltr" : "rtl"; };
+let LANG = getLanguage();
+const isEN = isEnglish;
+const tr = translate;
 // سجل الشاشات: route → وحدة الواجهة. أي شاشة جديدة تتضاف هنا.
 const L = f => () => import(f);
 const SCREENS = {
