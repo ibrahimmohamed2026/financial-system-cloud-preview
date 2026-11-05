@@ -1303,6 +1303,7 @@ def approve_order(order_id:int,user:User=Depends(require_permission("PurchaseCyc
     po=db.scalar(select(PurchaseOrder).where(PurchaseOrder.purchase_order_id==order_id).with_for_update())
     if not po: raise HTTPException(404,"أمر الشراء غير موجود")
     if po.status!="Draft": raise HTTPException(409,"لا يمكن اعتماد أمر الشراء بهذه الحالة")
+    if po.created_by == user.user_id: raise HTTPException(403,"لا يجوز اعتماد أمر الشراء بواسطة منشئه")
     po.status="Approved";write_audit(db,user.user_id,"Approve","PurchaseOrders",po.purchase_order_id,new={"status":po.status});db.commit()
     return {"purchase_order_id":po.purchase_order_id,"status":po.status}
 
