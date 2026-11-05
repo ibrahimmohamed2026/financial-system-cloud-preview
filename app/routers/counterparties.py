@@ -19,6 +19,7 @@ PartyType = Literal["Customer", "Contractor", "Supplier", "Mixed", "Other"]
 class PartyIn(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     legal_name: str = Field(min_length=1, max_length=250)
+    name_en: str | None = Field(default=None, max_length=250)
     party_type: PartyType = "Other"
     tax_no: str | None = Field(default=None, max_length=50)
     commercial_registration: str | None = Field(default=None, max_length=50)
@@ -41,7 +42,7 @@ def _out(db: Session, x: Counterparty):
         counts[model.__tablename__] = db.scalar(select(func.count()).select_from(model).where(
             party_col == x.party_id)) or 0
     linked_account = db.get(Account, x.linked_account_id) if x.linked_account_id else None
-    return {"counterparty_id": x.party_id, "code": x.code, "legal_name": x.legal_name,
+    return {"counterparty_id": x.party_id, "code": x.code, "legal_name": x.legal_name, "name_ar": x.legal_name, "name_en": x.name_en,
             "party_type": x.party_type, "tax_no": x.tax_no, "commercial_registration": x.commercial_registration,
             "phone": x.phone, "email": x.email, "address": x.address,
             "linked_account_id": x.linked_account_id, "is_active": x.is_active,
@@ -74,7 +75,7 @@ def list_parties(q: str | None = None, party_type: PartyType | None = None,
     if q and q.strip():
         key = f"%{q.strip()}%"
         alias_ids = select(CounterpartyAlias.counterparty_id).where(CounterpartyAlias.alias_name.ilike(key))
-        stmt = stmt.where(Counterparty.legal_name.ilike(key) | Counterparty.code.ilike(key) |
+        stmt = stmt.where(Counterparty.legal_name.ilike(key) | Counterparty.name_en.ilike(key) | Counterparty.code.ilike(key) |
                           Counterparty.party_id.in_(alias_ids))
     if party_type:
         stmt = stmt.where(Counterparty.party_type == party_type)
