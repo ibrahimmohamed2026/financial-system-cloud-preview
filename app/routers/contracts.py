@@ -47,7 +47,9 @@ class ContractActivationIn(BaseModel):
 class ContractIn(BaseModel):
     contract_no: Optional[str] = Field(default=None, max_length=50)
     title: str = Field(min_length=1, max_length=250)
+    title_en: str | None = Field(default=None, max_length=250)
     client_name: str = Field(min_length=1, max_length=200)
+    client_name_en: str | None = Field(default=None, max_length=200)
     project_id: Optional[int] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
@@ -84,7 +86,7 @@ class BillingIn(BaseModel):
         return self
 
 def _contract(c):
-    return {"contract_id":c.contract_id,"request_id":getattr(c,"request_id",None),"contract_no":c.contract_no,"title":c.title,"client_name":c.client_name,
+    return {"contract_id":c.contract_id,"request_id":getattr(c,"request_id",None),"contract_no":c.contract_no,"title":c.title,"title_en":c.title_en,"client_name":c.client_name,"client_name_en":c.client_name_en,
             "project_id":c.project_id,"start_date":c.start_date,"end_date":c.end_date,"original_value":str(c.original_value),
             "status":c.status,"notes":c.notes,"created_at":c.created_at}
 def _addendum(a):
@@ -102,7 +104,7 @@ def list_contracts(q: str | None = None, skip: int = Query(0, ge=0), limit: int 
     count = select(func.count()).select_from(Contract).where(func.lower(Contract.status) == "active")
     if q:
         like = f"%{q.strip()}%"
-        stmt = stmt.where((Contract.contract_no.ilike(like)) | (Contract.title.ilike(like)) | (Contract.client_name.ilike(like)))
+        stmt = stmt.where((Contract.contract_no.ilike(like)) | (Contract.title.ilike(like)) | (Contract.title_en.ilike(like)) | (Contract.client_name.ilike(like)) | (Contract.client_name_en.ilike(like)))
         count = count.where((Contract.contract_no.ilike(like)) | (Contract.title.ilike(like)) | (Contract.client_name.ilike(like)))
     rows = db.scalars(stmt.order_by(Contract.contract_id.desc()).offset(skip).limit(limit)).all()
     return {"items":[_contract(x) for x in rows],"total":db.scalar(count) or 0}
