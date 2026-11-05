@@ -18,7 +18,7 @@ const SCREENS = {
   "/admin/company": L("./pages/company.js?v=20261105-company-i18n-1"),
   "/accounts": L("./pages/accounts.js?v=20261105-accounts-i18n-1"),
   "/projects": L("./pages/projects.js?v=20261105-projects-i18n-1"),
-  "/journal": L("./pages/journal.js?v=20261105-journal-description-separators-1"),
+  "/journal": L("./pages/journal.js?v=20261105-journal-i18n-1"),
   "/trial-balance": L("./pages/trial_balance.js"),
   "/reports/balance-sheet": L("./pages/reports.js?v=20261105-reports-i18n-1"),
   "/reports/income-statement": L("./pages/reports.js?v=20261105-reports-i18n-1"),
