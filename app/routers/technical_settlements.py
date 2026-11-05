@@ -32,6 +32,7 @@ class EstimateIn(BaseModel):
     estimate_no: str | None = Field(default=None, max_length=50)
     estimate_date: date | None = None
     counterparty_name: str = Field(min_length=1, max_length=200)
+    counterparty_name_en: str | None = Field(default=None, max_length=200)
     items: list[EstimateLine] = Field(min_length=1)
     notes: str | None = None
 
@@ -39,8 +40,8 @@ def estimate_out(x, db):
     c = db.get(Contract, x.contract_id)
     lines = db.scalars(select(TechnicalSettlementEstimateItem).where(TechnicalSettlementEstimateItem.estimate_id == x.estimate_id)).all()
     return {"estimate_id":x.estimate_id,"contract_id":x.contract_id,"contract_no":c.contract_no if c else "",
-        "contract_title":c.title if c else "","settlement_side":x.settlement_side,"estimate_no":x.estimate_no,
-        "estimate_date":x.estimate_date,"counterparty_name":x.counterparty_name,"work_value":str(x.work_value),
+        "contract_title":c.title if c else "", "contract_title_en":c.title_en if c else None,"settlement_side":x.settlement_side,"estimate_no":x.estimate_no,
+        "estimate_date":x.estimate_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),
         "status":x.status,"notes":x.notes,"financial_settlement_id":x.financial_settlement_id,
         "items":[{"estimate_item_id":i.estimate_item_id,"contract_item_id":i.contract_item_id,
           "item_no":(db.get(ContractItem,i.contract_item_id).item_no if db.get(ContractItem,i.contract_item_id) else ""),
@@ -95,7 +96,7 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     total=money(total)
     if total<=0: raise HTTPException(422,"قيمة الأعمال يجب أن تكون أكبر من صفر")
     x=TechnicalSettlementEstimate(contract_id=c.contract_id,settlement_side=body.settlement_side,estimate_no=estimate_no,
-       estimate_date=(body.estimate_date if body.estimate_date else datetime.utcnow().date()),counterparty_name=body.counterparty_name,
+       estimate_date=(body.estimate_date if body.estimate_date else datetime.utcnow().date()),counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,
        work_value=total,status="UnderReview",notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
     for item,prev,qty,amount in prepared:
