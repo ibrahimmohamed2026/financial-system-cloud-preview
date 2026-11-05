@@ -3,6 +3,10 @@ import { esc, toast, errText } from "./ui.js";
 import { mountDataExchange } from "./data_exchange.js";
 
 const root = document.getElementById("app");
+let LANG = (() => { try { return localStorage.getItem("fs_lang") === "en" ? "en" : "ar"; } catch { return "ar"; } })();
+const isEN = () => LANG === "en";
+const tr = (ar, en) => isEN() ? en : ar;
+const applyLanguage = () => { document.documentElement.lang = LANG; document.documentElement.dir = isEN() ? "ltr" : "rtl"; };
 // سجل الشاشات: route → وحدة الواجهة. أي شاشة جديدة تتضاف هنا.
 const L = f => () => import(f);
 const SCREENS = {
@@ -84,7 +88,7 @@ const FLAT = new Set(["ACCOUNTING"]);
 const SCR_ORDER = ["ChartOfAccounts", "JournalBook", "TrialBalance", "CostCenters"];
 const SEC_ICON = { REPORTS: "chart", TREASURY: "bank", CHECKS: "card" };
 const SCR_ICON = { ChartOfAccounts: "list", JournalBook: "book", TrialBalance: "scale", CostCenters: "target", BalanceSheet: "file", IncomeStatement: "chart", AnalyticsReports: "chart", AuditLogs: "receipt", CashAnalysis: "pie", BankReconciliation: "check" };
-const tOf = x => x.title_ar || x.title_en;
+const tOf = x => isEN() ? (x.title_en || x.title_ar) : (x.title_ar || x.title_en);
 const rank = (arr, v) => { const i = arr.indexOf(v); return i < 0 ? 99 : i; };
 const isHrSection = s => /^(hr|human[_ -]?resources)$/i.test(String(s.code || "").trim())
   || /موارد\s*بشرية|human\s*resources/i.test(`${s.name_ar || ""} ${s.name_en || ""}`);
@@ -97,10 +101,10 @@ const ADMIN_ITEMS = [
 ];
 
 function navItems() {          // كل الوجهات (للبحث العام)
-  const out = [{ route: "/", title: "الرئيسية", sub: "Home" }];
+  const out = [{ route: "/", title: tr("الرئيسية", "Home"), sub: "Home" }];
   for (const s of sectionsOrdered()) for (const x of screensOf(s)) out.push({ route: x.route, title: tOf(x), sub: x.title_en });
-  if (auth.can("AnalyticsReports", "View")) out.push({ route: "/reports/financial-control", title: "لوحة الرقابة المالية", sub: "Financial Control" });
-  if (IS_ADMIN) for (const a of ADMIN_ITEMS) out.push({ route: a.route, title: a.title, sub: "Admin" });
+  if (auth.can("AnalyticsReports", "View")) out.push({ route: "/reports/financial-control", title: tr("لوحة الرقابة المالية", "Financial Control"), sub: "Financial Control" });
+  if (IS_ADMIN) for (const a of ADMIN_ITEMS) out.push({ route: a.route, title: isEN() ? a.title_en : a.title, sub: "Admin" });
   return out;
 }
 function titleOf(path) {
@@ -126,15 +130,15 @@ function titleOf(path) {
 
 function navHtml(path) {
   const link = (it, sub) => `<a class="nav-i${it.route === path ? " on" : ""}${SCREENS[it.route] || it.route === "/" ? "" : " soon"}" href="#${esc(it.route)}">${sub ? "" : ico(it.icon)}<span>${esc(it.title)}</span></a>`;
-  let h = link({ route: "/", title: "الرئيسية", icon: "home" });
+  let h = link({ route: "/", title: tr("الرئيسية", "Home"), icon: "home" });
   for (const s of sectionsOrdered()) {
     const scr = screensOf(s);
     if (FLAT.has(s.code)) { h += scr.map(x => link({ route: x.route, title: tOf(x), icon: SCR_ICON[x.code] || "dot" })).join(""); continue; }
     const open = scr.some(x => x.route === path);
-    h += `<div class="nav-g${open ? " open" : ""}"><button class="nav-i nav-gh" type="button">${ico(SEC_ICON[s.code] || "dot")}<span>${esc(s.name_ar || s.name_en)}</span>${ico("chevron", "chev")}</button>
+    h += `<div class="nav-g${open ? " open" : ""}"><button class="nav-i nav-gh" type="button">${ico(SEC_ICON[s.code] || "dot")}<span>${esc(isEN() ? (s.name_en || s.name_ar) : (s.name_ar || s.name_en))}</span>${ico("chevron", "chev")}</button>
       <div class="nav-sub">${scr.map(x => link({ route: x.route, title: tOf(x) }, true)).join("")}</div></div>`;
   }
-  if (auth.can("AnalyticsReports", "View")) h += link({ route: "/reports/financial-control", title: "لوحة الرقابة المالية", icon: "chart" });
+  if (auth.can("AnalyticsReports", "View")) h += link({ route: "/reports/financial-control", title: tr("لوحة الرقابة المالية", "Financial Control"), icon: "chart" });
   if (IS_ADMIN) h += `<div class="nav-sep"></div>` + ADMIN_ITEMS.map(a => link(a)).join("");
   return h;
 }
@@ -144,26 +148,28 @@ const curTheme = () => document.documentElement.dataset.theme === "light" ? "lig
 const draftCount = () => SUMMARY?.kpis?.draft_entries || 0;
 
 function shell(title, path = "") {
+  applyLanguage();
   document.body.classList.remove("login-mode");
   const name = auth.user?.full_name || auth.user?.username || "";
   const initial = [...name.trim()][0] || "؟";
   root.innerHTML = `<div class="app">
-    <aside class="sidebar" aria-label="القائمة الرئيسية">
-      <a class="brand" href="#/"><img src="/static/company-logos.png?v=20261017" alt="شعارات الشركات"><div class="brand-t">النظام المالي</div></a>
+    <aside class="sidebar" aria-label="${tr("القائمة الرئيسية", "Main navigation")}">
+      <a class="brand" href="#/"><img src="/static/company-logos.png?v=20261017" alt="شعارات الشركات"><div class="brand-t">${tr("النظام المالي", "Financial System")}</div></a>
       ${navHtml(path)}
     </aside>
     <div class="content">
       <header class="hdr">
         <button class="icon-btn menu" id="menubtn" type="button" aria-label="القائمة">${ico("menu")}</button>
-        <div class="gsearch"><input id="gs" placeholder="البحث العام" autocomplete="off" aria-label="البحث العام"><span class="gs-ico">${ico("search")}</span><div class="gs-res" id="gsr" hidden></div></div>
+        <div class="gsearch"><input id="gs" placeholder="${tr("البحث العام", "Search")}" autocomplete="off" aria-label="${tr("البحث العام", "Search")}"><span class="gs-ico">${ico("search")}</span><div class="gs-res" id="gsr" hidden></div></div>
         <span class="sp"></span>
+        <button class="btn sm" id="langbtn" type="button" title="${tr("تغيير اللغة", "Change language")}">${isEN() ? "العربية" : "English"}</button>
         <button class="icon-btn" id="themebtn" type="button" title="تبديل الوضع الفاتح/الداكن" aria-label="تبديل الوضع">${ico(curTheme() === "dark" ? "sun" : "moon")}</button>
         <button class="icon-btn" id="bell" type="button" title="القيود غير المرحّلة" aria-label="الإشعارات">${ico("bell")}${draftCount() > 0 ? '<i class="dot"></i>' : ""}</button>
         <span class="avatar" id="profile-avatar" title="${esc(name)}">${esc(initial)}</span><span class="who">${esc(name)}</span>
-        <button class="btn sm" id="out" type="button">${ico("logout")}<span>خروج</span></button>
+        <button class="btn sm" id="out" type="button">${ico("logout")}<span>${tr("خروج", "Logout")}</span></button>
       </header>
       <div class="print-head" id="printhead"></div>
-      <div class="pagebar">${title ? `<h2>${esc(title)}</h2>` : ""}<span class="sp"></span><span id="pageact"></span><button class="btn sm" id="printbtn" type="button" hidden>${ico("printer")}<span>طباعة الشاشة</span></button></div>
+      <div class="pagebar">${title ? `<h2>${esc(title)}</h2>` : ""}<span class="sp"></span><span id="pageact"></span><button class="btn sm" id="printbtn" type="button" hidden>${ico("printer")}<span>${tr("طباعة الشاشة", "Print screen")}</span></button></div>
       <main class="wrap"></main>
     </div>
     <div class="scrim"></div></div>`;
@@ -176,8 +182,9 @@ function shell(title, path = "") {
   $("#menubtn").onclick = () => app.classList.toggle("open");
   $(".scrim").onclick = () => app.classList.remove("open");
   $("#printbtn").onclick = () => window.print();
+  $("#langbtn").onclick = () => { LANG = isEN() ? "ar" : "en"; try { localStorage.setItem("fs_lang", LANG); } catch {} applyLanguage(); route(); };
   $("#out").onclick = async () => { try { await api("/auth/logout", { method: "POST" }); } catch {} auth.clear(); resetSession(); location.hash = "#/login"; };
-  $("#bell").onclick = () => draftCount() > 0 ? (location.hash = "#/journal") : toast("لا توجد قيود غير مرحّلة");
+  $("#bell").onclick = () => draftCount() > 0 ? (location.hash = "#/journal") : toast(tr("لا توجد قيود غير مرحّلة", "No unposted journal entries"));
   $("#themebtn").onclick = () => {
     const t = curTheme() === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = t;
@@ -206,10 +213,10 @@ function shell(title, path = "") {
 function loginPage() {
   resetSession();
   document.body.classList.add("login-mode");
-  root.innerHTML = `<form class="login"><h2>تسجيل الدخول</h2>
-    <div class="f"><label>اسم المستخدم</label><input name="u" autocomplete="username" required autofocus></div>
-    <div class="f"><label>كلمة المرور</label><input name="p" type="password" autocomplete="current-password" required></div>
-    <div class="err" id="e"></div><button class="btn primary" style="width:100%">دخول</button></form>`;
+  root.innerHTML = `<form class="login"><div style="display:flex;justify-content:flex-end"><button class="btn sm" id="loginlang" type="button">${isEN() ? "العربية" : "English"}</button></div><h2>${tr("تسجيل الدخول", "Sign in")}</h2>
+    <div class="f"><label>${tr("اسم المستخدم", "Username")}</label><input name="u" autocomplete="username" required autofocus></div>
+    <div class="f"><label>${tr("كلمة المرور", "Password")}</label><input name="p" type="password" autocomplete="current-password" required></div>
+    <div class="err" id="e"></div><button class="btn primary" style="width:100%">${tr("دخول", "Sign in")}</button></form>`;
   const f = root.querySelector("form");
   f.onsubmit = async ev => {
     ev.preventDefault(); const b = f.querySelector("button"); b.disabled = true;
@@ -219,7 +226,7 @@ function loginPage() {
 }
 
 // ---------------------------------------------------------------- الشاشة الرئيسية
-const fmt0 = v => Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmt0 = v => Number(v).toLocaleString(isEN() ? "en-US" : "ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtDate = d => String(d || "").split("-").reverse().join("/");
 const compact = v => {
   const a = Math.abs(v);
@@ -227,7 +234,7 @@ const compact = v => {
   return (v < 0 ? "-" : "") + s.replace(".0", "");
 };
 const MONTHS = ["ينا", "فبر", "مار", "أبر", "ماي", "يون", "يول", "أغس", "سبت", "أكت", "نوف", "ديس"];
-const ST = { Posted: ["مرحّل", "ok"], Draft: ["مسودة", "warn"], Reversed: ["ملغي", "bad"] };
+const ST = { Posted: [tr("مرحّل", "Posted"), "ok"], Draft: [tr("مسودة", "Draft"), "warn"], Reversed: [tr("ملغي", "Reversed"), "bad"] };
 
 function niceTicks(min, max, n = 4) {
   if (min === max) { if (min === 0) max = 1; else { min = Math.min(0, min); max = Math.max(0, max); } }
@@ -266,19 +273,19 @@ const kpi = (label, icon, val, cls, sub) => `<div class="kpi"><div class="kpi-h"
 
 function homeHtml(s) {
   const k = s.kpis, cards = [];
-  if (k.total_debit != null) cards.push(kpi("إجمالي المدين", "dollar", fmt0(k.total_debit), "", "القيود المرحّلة"));
+  if (k.total_debit != null) cards.push(kpi(tr("إجمالي المدين", "Total Debit"), "dollar", fmt0(k.total_debit), "", tr("القيود المرحّلة", "Posted entries")));
   if (k.treasury_balance != null) {
     const v = +k.treasury_balance;
     const others = (s.other_balances || []).map(o => `${esc(o.currency)} ${fmt0(o.balance)}`).join(" · ");
-    cards.push(kpi("رصيد الخزينة", "bank", (v > 0 ? "+" : "") + fmt0(v), v > 0 ? "pos" : v < 0 ? "neg" : "", esc(s.currency) + (others ? " · " + others : "")));
+    cards.push(kpi(tr("رصيد الخزينة", "Treasury Balance"), "bank", (v > 0 ? "+" : "") + fmt0(v), v > 0 ? "pos" : v < 0 ? "neg" : "", esc(s.currency) + (others ? " · " + others : "")));
   }
-  if (k.total_credit != null) cards.push(kpi("إجمالي الدائن", "swap", fmt0(k.total_credit), "", "القيود المرحّلة"));
-  if (k.draft_entries != null) cards.push(kpi("عدد القيود غير المرحّلة", "receipt", fmt0(k.draft_entries), "", "مسودات تنتظر الترحيل"));
-  const table = s.latest_entries == null ? "" : `<section class="card"><div class="card-h"><h3>آخر القيود</h3>
-      <div class="seg"><button class="btn sm primary" type="button" data-f="all">الكل</button><button class="btn sm" type="button" data-f="Draft">مسودة</button></div></div>
-      <div class="tbl-wrap"><table><thead><tr><th>رقم القيد</th><th>التاريخ</th><th>البيان</th><th>الحالة</th></tr></thead><tbody id="lastrows"></tbody></table></div></section>`;
-  const chart = s.cash_series == null ? "" : `<section class="card"><div class="card-h"><h3>حالة الخزينة</h3><small>رصيد تراكمي بالـ${esc(s.currency)} — آخر 12 شهر</small></div><div class="chart">${lineChart(s.cash_series)}</div></section>`;
-  if (!cards.length && !table && !chart) return `<p class="empty">لا توجد بيانات متاحة لصلاحياتك — استخدم القائمة الجانبية للتنقل.</p>`;
+  if (k.total_credit != null) cards.push(kpi(tr("إجمالي الدائن", "Total Credit"), "swap", fmt0(k.total_credit), "", tr("القيود المرحّلة", "Posted entries")));
+  if (k.draft_entries != null) cards.push(kpi(tr("عدد القيود غير المرحّلة", "Unposted Entries"), "receipt", fmt0(k.draft_entries), "", tr("مسودات تنتظر الترحيل", "Drafts awaiting posting")));
+  const table = s.latest_entries == null ? "" : `<section class="card"><div class="card-h"><h3>${tr("آخر القيود", "Recent Journal Entries")}</h3>
+      <div class="seg"><button class="btn sm primary" type="button" data-f="all">${tr("الكل", "All")}</button><button class="btn sm" type="button" data-f="Draft">${tr("مسودة", "Draft")}</button></div></div>
+      <div class="tbl-wrap"><table><thead><tr><th>${tr("رقم القيد", "Entry No.")}</th><th>${tr("التاريخ", "Date")}</th><th>${tr("البيان", "Description")}</th><th>${tr("الحالة", "Status")}</th></tr></thead><tbody id="lastrows"></tbody></table></div></section>`;
+  const chart = s.cash_series == null ? "" : `<section class="card"><div class="card-h"><h3>${tr("حالة الخزينة", "Treasury Status")}</h3><small>رصيد تراكمي بالـ${esc(s.currency)} — آخر 12 شهر</small></div><div class="chart">${lineChart(s.cash_series)}</div></section>`;
+  if (!cards.length && !table && !chart) return `<p class="empty">${tr("لا توجد بيانات متاحة لصلاحياتك — استخدم القائمة الجانبية للتنقل.", "No data is available for your permissions. Use the sidebar to navigate.")}</p>`;
   return `<div class="kpis">${cards.join("")}</div><div class="dash">${table}${chart}</div>`;
 }
 
@@ -286,13 +293,13 @@ function drawRows(main, entries, only) {
   const tb = main.querySelector("#lastrows"); if (!tb) return;
   const rows = entries.filter(e => only === "all" || e.status === only).slice(0, 8);
   tb.innerHTML = rows.length ? rows.map(e => { const [t, c] = ST[e.status] || [e.status, ""]; return `<tr data-id="${e.journal_entry_id}"><td>${esc(e.entry_no)}</td><td>${fmtDate(e.entry_date)}</td><td>${esc(e.description || "")}</td><td><span class="tag ${c}">${esc(t)}</span></td></tr>`; }).join("")
-    : `<tr><td colspan="4" class="empty">لا توجد قيود</td></tr>`;
+    : `<tr><td colspan="4" class="empty">${tr("لا توجد قيود", "No entries")}</td></tr>`;
   tb.querySelectorAll("tr[data-id]").forEach(tr => tr.onclick = () => (location.hash = "#/journal"));
 }
 
 async function dashboard() {
-  const main = shell("الرئيسية", "/");
-  root.querySelector("#pageact").innerHTML = `<button class="btn primary sm" id="refresh" type="button">${ico("refresh")}<span>تحديث</span></button>`;
+  const main = shell(tr("الرئيسية", "Home"), "/");
+  root.querySelector("#pageact").innerHTML = `<button class="btn primary sm" id="refresh" type="button">${ico("refresh")}<span>${tr("تحديث", "Refresh")}</span></button>`;
   main.innerHTML = `<p class="muted">جاري التحميل…</p>`;
   const draw = async () => {
     const s = await api("/dashboard/summary");
