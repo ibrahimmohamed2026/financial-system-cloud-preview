@@ -126,6 +126,9 @@ const NAV_GROUPS = [
 ];
 function navItems() {          // كل الوجهات (للبحث العام)
   const out = [{ route: "/", title: tr("الرئيسية", "Home"), sub: "Home" }];
+  const dashboardScreens = (NAV?.sections || []).flatMap(section => section.screens || []);
+  if (dashboardScreens.some(x => String(x.route || "").startsWith("/inventory")) || auth.can("PurchaseCycle", "View") || dashboardScreens.some(x => String(x.route || "").startsWith("/purchases")))
+    out.push({ route: "/dashboard", title: tr("لوحة التحكم", "Dashboard"), sub: "Operational Dashboard" });
   for (const s of sectionsOrdered()) for (const x of screensOf(s)) out.push({ route: x.route, title: tOf(x), sub: x.title_en });
   if (auth.can("AnalyticsReports", "View")) out.push({ route: "/reports/financial-control", title: tr("لوحة الرقابة المالية", "Financial Control"), sub: "Financial Control" });
   if (auth.can("PurchaseCycle", "View")) out.push(
@@ -143,6 +146,7 @@ function navItems() {          // كل الوجهات (للبحث العام)
 }
 function titleOf(path) {
   if (path === "/") return tr("الرئيسية", "Home");
+  if (path === "/dashboard") return tr("لوحة التحكم", "Dashboard");
   if (path === "/customers") return tr("العملاء", "Customers");
   if (path === "/contractors") return tr("المقاولون", "Contractors");
   if (path === "/suppliers") return tr("الموردون", "Suppliers");
@@ -183,6 +187,9 @@ function navHtml(path) {
   const all = sectionsOrdered().flatMap(s => screensOf(s).map(x => ({ ...x, _section: s.code })));
   const used = new Set();
   let h = link({ route: "/", title: tr("الرئيسية", "Home"), icon: "home" }, false);
+  const dashboardScreens = (NAV?.sections || []).flatMap(section => section.screens || []);
+  if (dashboardScreens.some(x => String(x.route || "").startsWith("/inventory")) || auth.can("PurchaseCycle", "View") || dashboardScreens.some(x => String(x.route || "").startsWith("/purchases")))
+    h += link({ route: "/dashboard", title: tr("لوحة التحكم", "Dashboard"), icon: "chart" }, false);
   const renderGroup = (title, icon, screens) => {
     const unique = screens.filter(x => x?.route && !used.has(x.route));
     if (!unique.length) return "";
@@ -347,17 +354,7 @@ const kpi = (label, icon, val, cls, sub) => `<article class="kpi home-kpi"><div 
 
 function homeHtml(s) {
   const k = s.kpis || {}, cards = [];
-  const navScreens = (NAV?.sections || []).flatMap(section => section.screens || []);
-  const hasInventoryAccess = navScreens.some(x => String(x.route || "").startsWith("/inventory"));
-  const hasPurchasesAccess = auth.can("PurchaseCycle", "View") || navScreens.some(x => String(x.route || "").startsWith("/purchases"));
-  const moduleCards = (hasInventoryAccess || hasPurchasesAccess) ? `<section class="home-modules" aria-label="${tr("الوحدات التشغيلية", "Operational modules")}">
-    ${hasInventoryAccess ? `<a class="home-module-card inventory" href="#/inventory" aria-label="${tr("فتح إدارة المخازن", "Open Inventory Management")}">
-      <span class="home-module-icon">${ico("warehouse")}</span><span class="home-module-copy"><strong>${tr("إدارة المخازن", "Inventory Management")}</strong><small>${tr("الأصناف والأرصدة والاستلام والصرف والتحويلات والجرد", "Items, balances, receipts, issues, transfers and stocktakes")}</small><em>${tr("دخول إلى المخازن", "Open Inventory")} <b>←</b></em></span>
-    </a>` : ""}
-    ${hasPurchasesAccess ? `<a class="home-module-card purchasing" href="#/purchases" aria-label="${tr("فتح إدارة المشتريات", "Open Purchasing Management")}">
-      <span class="home-module-icon">${ico("cart")}</span><span class="home-module-copy"><strong>${tr("إدارة المشتريات", "Purchasing Management")}</strong><small>${tr("طلبات الشراء وعروض الأسعار وأوامر الشراء وفواتير الموردين والسداد", "Requisitions, quotations, purchase orders, supplier invoices and payments")}</small><em>${tr("دخول إلى المشتريات", "Open Purchasing")} <b>←</b></em></span>
-    </a>` : ""}
-  </section>` : "";
+
   if (k.total_debit != null) cards.push(kpi(tr("إجمالي المدين", "Total Debit"), "dollar", fmt0(k.total_debit), "", tr("القيود المرحّلة", "Posted entries")));
   if (k.treasury_balance != null) {
     const v = +k.treasury_balance;
@@ -371,14 +368,37 @@ function homeHtml(s) {
       <div class="tbl-wrap"><table><thead><tr><th>${tr("رقم القيد", "Entry No.")}</th><th>${tr("التاريخ", "Date")}</th><th>${tr("البيان", "Description")}</th><th>${tr("الحالة", "Status")}</th></tr></thead><tbody id="lastrows"></tbody></table></div>
       <div class="home-panel-foot">${tr("اضغط على أي قيد للانتقال إلى دفتر اليومية", "Select an entry to open the journal")}</div></section>`;
   const chart = s.cash_series == null ? "" : `<section class="card home-panel home-chart"><div class="card-h"><div><span class="home-eyebrow">${tr("الموقف النقدي", "CASH POSITION")}</span><h3>${tr("حركة رصيد الخزينة", "Treasury Balance Trend")}</h3></div><span class="home-period">${tr("آخر 12 شهر", "Last 12 months")}</span></div>${s.cash_series.length ? `<div class="chart">${lineChart(s.cash_series)}</div>` : `<div class="home-empty">${tr("لا توجد حركة خزينة مسجلة خلال الفترة", "No treasury activity recorded for this period")}</div>`}<div class="home-panel-foot">${tr("الرصيد التراكمي بعملة", "Cumulative balance in")} ${esc(s.currency || "")}</div></section>`;
-  if (!cards.length && !table && !chart) return moduleCards || `<p class="empty">${tr("لا توجد بيانات متاحة لصلاحياتك — استخدم القائمة الجانبية للتنقل.", "No data is available for your permissions. Use the sidebar to navigate.")}</p>`;
+  if (!cards.length && !table && !chart) return `<p class="empty">${tr("لا توجد بيانات متاحة لصلاحياتك — استخدم القائمة الجانبية للتنقل.", "No data is available for your permissions. Use the sidebar to navigate.")}</p>`;
   const dateLabel = new Date().toLocaleDateString(isEN() ? "en-US" : "ar-EG", {weekday:"long",year:"numeric",month:"long",day:"numeric"});
   return `<section class="home-hero"><div class="alliance-heading"><img class="alliance-logo" src="/static/company-logos.png?v=20261017" alt="شعار التحالف"><div class="alliance-copy"><strong>تحالف شركات</strong><span>المقاولون العرب (عثمان احمد عثمان وشركاه)</span><span>الغرابلي للأعمال الهندسية المتكاملة</span><span>أبناء سيناء للتشييد والبناء</span></div></div><div class="home-heading"><span class="home-eyebrow">${tr("نظرة عامة", "OVERVIEW")}</span><h1>${tr("لوحة تحكم ADEX", "ADEX Dashboard")}</h1><p>${tr("ملخص سريع لأهم الأرصدة والحركة المحاسبية في النظام.", "A concise view of key balances and accounting activity.")}</p><div class="home-date">${ico("calendar")}<span>${dateLabel}</span></div></div></section>
-    ${moduleCards}
     <div class="home-section-title"><div><h2>${tr("المؤشرات الرئيسية", "Key Financial Indicators")}</h2><p>${tr("القيم المعروضة حسب البيانات والصلاحيات المتاحة", "Figures based on available data and permissions")}</p></div></div>
     <div class="kpis home-kpis">${cards.join("")}</div><div class="home-section-title home-activity-title"><div><h2>${tr("ملخص النشاط", "Activity Overview")}</h2><p>${tr("تابع أحدث القيود واتجاه رصيد الخزينة", "Review recent entries and treasury trends")}</p></div></div>
     <div class="dash home-dash">${table}${chart}</div>`;
 }
+async function modulesDashboard() {
+  const main = shell(tr("لوحة التحكم", "Dashboard"), "/dashboard");
+  const screens = (NAV?.sections || []).flatMap(section => section.screens || []);
+  const hasInventoryAccess = screens.some(x => String(x.route || "").startsWith("/inventory"));
+  const hasPurchasesAccess = auth.can("PurchaseCycle", "View") || screens.some(x => String(x.route || "").startsWith("/purchases"));
+  const cards = `
+    <section class="home-hero">
+      <div class="home-heading">
+        <span class="home-eyebrow">${tr("إدارة العمليات", "OPERATIONS")}</span>
+        <h1>${tr("لوحة التحكم التشغيلية", "Operational Dashboard")}</h1>
+        <p>${tr("اختر الوحدة التي تريد العمل عليها. لكل وحدة شاشاتها وإجراءاتها المستقلة.", "Choose a module. Each module has its own screens and workflows.")}</p>
+      </div>
+    </section>
+    <section class="home-modules" aria-label="${tr("الوحدات التشغيلية", "Operational modules")}">
+      ${hasInventoryAccess ? `<a class="home-module-card inventory" href="#/inventory" aria-label="${tr("فتح إدارة المخازن", "Open Inventory Management")}">
+        <span class="home-module-icon">${ico("warehouse")}</span><span class="home-module-copy"><strong>${tr("إدارة المخازن", "Inventory Management")}</strong><small>${tr("الأصناف والأرصدة والاستلام والصرف والتحويلات والجرد", "Items, balances, receipts, issues, transfers and stocktakes")}</small><em>${tr("دخول إلى المخازن", "Open Inventory")} <b>←</b></em></span>
+      </a>` : ""}
+      ${hasPurchasesAccess ? `<a class="home-module-card purchasing" href="#/purchases" aria-label="${tr("فتح إدارة المشتريات", "Open Purchasing Management")}">
+        <span class="home-module-icon">${ico("cart")}</span><span class="home-module-copy"><strong>${tr("إدارة المشتريات", "Purchasing Management")}</strong><small>${tr("طلبات الشراء وعروض الأسعار وأوامر الشراء وفواتير الموردين والسداد", "Requisitions, quotations, purchase orders, supplier invoices and payments")}</small><em>${tr("دخول إلى المشتريات", "Open Purchasing")} <b>←</b></em></span>
+      </a>` : ""}
+    </section>`;
+  main.innerHTML = hasInventoryAccess || hasPurchasesAccess ? cards : `<p class="empty">${tr("لا توجد وحدات تشغيلية متاحة حسب صلاحيات المستخدم.", "No operational modules are available for this user.")}</p>`;
+}
+
 function drawRows(main, entries, only) {
   const tb = main.querySelector("#lastrows"); if (!tb) return;
   const rows = entries.filter(e => only === "all" || e.status === only).slice(0, 8);
@@ -424,6 +444,7 @@ async function route() {
   try {
     await ensureNav();
     if (path === "/") return await dashboard();
+    if (path === "/dashboard") return await modulesDashboard();
     const loader = SCREENS[path];
     if (!loader) { shell(titleOf(path), path).innerHTML = `<p>هذه الشاشة قيد التنفيذ.</p><button class="btn" onclick="location.hash='#/'">رجوع</button>`; return; }
     const mod = await loader();

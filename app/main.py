@@ -1,17 +1,20 @@
 from contextlib import asynccontextmanager
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
 
 from . import backup_service
 from .config import settings
 from .client_ip import get_client_ip, request_ip
 from .database import engine, SessionLocal
 from .db_setup import ensure_schema
-from .bootstrap import seed_screens, sync_permissions
+from .bootstrap import seed_screens, sync_permissions, create_admin
+from .models import User
 from .routers import (accounts, admin, auth, audit_logs, backup, checks, dashboard, journal, projects, reconciliation, reports, contracts, contract_erp, contract_requests, contract_attachments, technical_settlements, inventory, counterparties,
                       treasury, trial_balance, data_exchange, pg_backup, financial_checks, financial_control)
 
@@ -23,6 +26,11 @@ async def lifespan(_: FastAPI):
     with SessionLocal() as db:
         seed_screens(db)
         sync_permissions(db)
+        # Render preview: create the first administrator only when explicitly configured.
+        bootstrap_username = os.getenv("ADEX_BOOTSTRAP_ADMIN_USERNAME", "").strip()
+        bootstrap_password = os.getenv("ADEX_BOOTSTRAP_ADMIN_PASSWORD", "")
+        if bootstrap_username and bootstrap_password and db.scalar(select(User).where(User.username == bootstrap_username)) is None:
+            create_admin(db, bootstrap_username, bootstrap_password, "ADEX Preview Admin")
     # الجدولة اليومية من داخل النظام (صفحة النسخ الاحتياطي) هي المسار التلقائي الوحيد.
     # pg_dump يظل متاحًا كنسخ يدوي، ولا يبدأ تلقائيًا لتجنب تعارض الأقفال والنسخ المتزامنة.
     backup_service.start_scheduler()

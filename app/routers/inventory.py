@@ -127,6 +127,9 @@ class RequisitionIn(BaseModel):
     project_id: int | None = None
     notes: str | None = None
     lines: list[RequisitionLineIn] = Field(min_length=1)
+class RequisitionRejectIn(BaseModel):
+    reason: str = Field(min_length=8, max_length=500)
+
 class QuotationLineIn(BaseModel):
     item_id: int
     quantity: Decimal = Field(gt=0)
@@ -148,6 +151,7 @@ class PurchaseIn(BaseModel):
     supplier_name: str = Field(min_length=1, max_length=250)
     warehouse_id: int
     project_id: int | None = None
+    exception_reason: str | None = Field(default=None, min_length=8, max_length=500)
     notes: str | None = None
     lines: list[POLineIn] = Field(min_length=1)
 
@@ -182,6 +186,9 @@ class SupplierInvoicePaymentIn(BaseModel):
     transaction_date: date
     amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
     voucher_no: str | None = Field(default=None, max_length=50)
+
+class SupplierInvoiceCancelIn(BaseModel):
+    reason: str = Field(min_length=8, max_length=500)
 
 def _cent(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -939,6 +946,24 @@ def approve_requisition(requisition_id: int, user: User = Depends(require_permis
     db.commit()
     return {"requisition_id": requisition_id, "status": x.status}
 
+@purchases.post("/requisitions/{requisition_id}/reject")
+def reject_requisition(requisition_id: int, body: RequisitionRejectIn,
+        user: User = Depends(require_permission("PurchaseCycle", "Approve")), db: Session = Depends(get_db)):
+    x = db.scalar(select(PurchaseRequisition).where(
+        PurchaseRequisition.requisition_id == requisition_id).with_for_update())
+    if not x:
+        raise HTTPException(404, "طلب الشراء غير موجود")
+    if x.status != "PendingApproval":
+        raise HTTPException(409, "لا يمكن رفض طلب الشراء في حالته الحالية")
+    if x.requested_by == user.user_id:
+        raise HTTPException(403, "لا يجوز رفض طلب الشراء بواسطة مقدمه")
+    x.status = "Rejected"
+    x.notes = ((x.notes or "") + "\nسبب الرفض: " + body.reason.strip()).strip()
+    write_audit(db, user.user_id, "Reject", "PurchaseRequisitions", requisition_id,
+        new={"status": x.status, "reason": body.reason.strip()})
+    db.commit()
+    return {"requisition_id": requisition_id, "status": x.status}
+
 @purchases.get("/quotations")
 def list_quotations(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
     rows = db.scalars(select(SupplierQuotation).order_by(SupplierQuotation.quotation_date.desc(), SupplierQuotation.quotation_id.desc()).limit(500)).all()
@@ -983,6 +1008,7 @@ def select_quotation(quotation_id: int, user: User = Depends(require_permission(
     q = db.scalar(select(SupplierQuotation).where(SupplierQuotation.quotation_id == quotation_id).with_for_update())
     if not q: raise HTTPException(404, "عرض السعر غير موجود")
     if q.status != "Submitted": raise HTTPException(409, "عرض السعر غير متاح للاختيار")
+    if q.valid_until and q.valid_until < date.today(): raise HTTPException(409, "انتهت صلاحية عرض السعر ولا يمكن اختياره")
     req = db.scalar(select(PurchaseRequisition).where(PurchaseRequisition.requisition_id == q.requisition_id).with_for_update())
     if not req or req.status not in ("Approved", "Quoting"): raise HTTPException(409, "حالة طلب الشراء لا تسمح بالاختيار")
     peers = db.scalars(select(SupplierQuotation).where(SupplierQuotation.requisition_id == q.requisition_id).with_for_update()).all()
@@ -1039,13 +1065,17 @@ def list_pending_purchase_receipts(_: User = Depends(require_permission("Invento
             "order_date": str(order.order_date), "supplier_name": order.supplier_name,
             "project": db.get(Project, order.project_id).name_ar if order.project_id and db.get(Project, order.project_id) else "",
             "warehouse": warehouse.name if warehouse else "", "total_amount": str(order.total_amount),
-            "lines": [{"item": (db.get(InventoryItem, line.item_id).name if db.get(InventoryItem, line.item_id) else ""),
+            "lines": [{"line_id": line.line_id, "item_id": line.item_id,
+                "item": (db.get(InventoryItem, line.item_id).name if db.get(InventoryItem, line.item_id) else ""),
                 "quantity": str(line.quantity), "received_quantity": str(line.received_quantity or 0),
+                "remaining_quantity": str(Decimal(str(line.quantity)) - Decimal(str(line.received_quantity or 0))),
                 "unit_price": str(line.unit_price)} for line in remaining]})
     return {"items": pending}
 
 @purchases.post("", status_code=201)
 def create_order(body: PurchaseIn, user: User = Depends(require_permission("PurchaseCycle", "Add")), db: Session = Depends(get_db)):
+    if not body.exception_reason or len(body.exception_reason.strip()) < 8:
+        raise HTTPException(422,"سبب إنشاء أمر الشراء المباشر الاستثنائي إلزامي (8 أحرف على الأقل)")
     if not db.get(InventoryWarehouse,body.warehouse_id): raise HTTPException(422,"المخزن غير موجود")
     if body.project_id is not None:
         project=db.get(Project,body.project_id)
@@ -1056,11 +1086,11 @@ def create_order(body: PurchaseIn, user: User = Depends(require_permission("Purc
     # The database-generated ID is the concurrency-safe sequence; client-supplied
     # order numbers are intentionally ignored so every new order is numbered uniformly.
     party=resolve_counterparty(db,body.supplier_name,"Supplier")
-    po=PurchaseOrder(order_no=f"PO-PENDING-{uuid4().hex}",order_date=body.order_date,supplier_name=party.legal_name if party else body.supplier_name,counterparty_id=party.counterparty_id if party else None,warehouse_id=body.warehouse_id,project_id=body.project_id,status="Draft",notes=body.notes,total_amount=total,created_by=user.user_id)
+    po=PurchaseOrder(order_no=f"PO-PENDING-{uuid4().hex}",order_date=body.order_date,supplier_name=party.legal_name if party else body.supplier_name,counterparty_id=party.counterparty_id if party else None,warehouse_id=body.warehouse_id,project_id=body.project_id,status="Draft",notes=("شراء مباشر استثنائي: "+body.exception_reason.strip()+("\n"+body.notes.strip() if body.notes and body.notes.strip() else "")),total_amount=total,created_by=user.user_id)
     db.add(po);db.flush()
     po.order_no=f"PO-{body.order_date.year}-{po.purchase_order_id:06d}"
     for line in body.lines: db.add(PurchaseOrderLine(purchase_order_id=po.purchase_order_id,item_id=line.item_id,quantity=line.quantity,unit_price=line.unit_price,received_quantity=0))
-    write_audit(db,user.user_id,"Create","PurchaseOrders",po.purchase_order_id,new={"order_no":po.order_no,"total_amount":str(total),"project_id":po.project_id});db.commit()
+    write_audit(db,user.user_id,"Create","PurchaseOrders",po.purchase_order_id,new={"order_no":po.order_no,"total_amount":str(total),"project_id":po.project_id,"exception_reason":body.exception_reason.strip()});db.commit()
     return {"purchase_order_id":po.purchase_order_id,"order_no":po.order_no,"status":po.status,"total_amount":str(total)}
 
 @purchases.get("/invoices")
@@ -1211,11 +1241,22 @@ def create_supplier_invoice(body:SupplierInvoiceIn,user:User=Depends(require_per
     write_audit(db,user.user_id,"Create","SupplierInvoices",inv.invoice_id,new={"invoice_no":inv.invoice_no,"total_amount":str(total)})
     db.commit();return {"invoice_id":inv.invoice_id,"invoice_no":inv.invoice_no,"status":inv.status,"total_amount":str(total)}
 
+@purchases.post("/invoices/{invoice_id}/cancel")
+def cancel_supplier_invoice(invoice_id:int,body:SupplierInvoiceCancelIn,user:User=Depends(require_permission("PurchaseCycle","Delete")),db:Session=Depends(get_db)):
+    inv=db.scalar(select(SupplierInvoice).where(SupplierInvoice.invoice_id==invoice_id).with_for_update())
+    if not inv:raise HTTPException(404,"فاتورة المورد غير موجودة")
+    if inv.status!="Draft" or inv.journal_entry_id:raise HTTPException(409,"يمكن إلغاء مسودة الفاتورة فقط قبل الاعتماد أو الترحيل")
+    inv.status="Cancelled"
+    write_audit(db,user.user_id,"Cancel","SupplierInvoices",invoice_id,new={"status":inv.status,"reason":body.reason.strip()})
+    db.commit()
+    return {"invoice_id":invoice_id,"status":inv.status}
+
 @purchases.post("/invoices/{invoice_id}/approve")
 def approve_supplier_invoice(invoice_id:int,user:User=Depends(require_permission("PurchaseCycle","Approve")),db:Session=Depends(get_db)):
     inv=db.scalar(select(SupplierInvoice).where(SupplierInvoice.invoice_id==invoice_id).with_for_update())
     if not inv:raise HTTPException(404,"فاتورة المورد غير موجودة")
     if inv.status!="Draft":raise HTTPException(409,"الفاتورة ليست مسودة")
+    if inv.created_by == user.user_id:raise HTTPException(403,"لا يجوز اعتماد فاتورة المورد بواسطة منشئها")
     supplier=db.get(Counterparty,inv.supplier_id)
     if not supplier or not supplier.linked_account_id:raise HTTPException(409,"اربط حساب الدائنين للمورد من سجل المورد")
     _invoice_account(db,supplier.linked_account_id,"CR","حساب الدائنين للمورد")
@@ -1298,25 +1339,14 @@ def approve_order(order_id:int,user:User=Depends(require_permission("PurchaseCyc
     po=db.scalar(select(PurchaseOrder).where(PurchaseOrder.purchase_order_id==order_id).with_for_update())
     if not po: raise HTTPException(404,"أمر الشراء غير موجود")
     if po.status!="Draft": raise HTTPException(409,"لا يمكن اعتماد أمر الشراء بهذه الحالة")
+    if po.created_by == user.user_id: raise HTTPException(403,"لا يجوز اعتماد أمر الشراء بواسطة منشئه")
     po.status="Approved";write_audit(db,user.user_id,"Approve","PurchaseOrders",po.purchase_order_id,new={"status":po.status});db.commit()
     return {"purchase_order_id":po.purchase_order_id,"status":po.status}
 
 @purchases.post("/{order_id}/receive")
 def receive_order(order_id:int,user:User=Depends(require_permission("InventoryManagement","Post")),db:Session=Depends(get_db)):
-    po=db.scalar(select(PurchaseOrder).where(PurchaseOrder.purchase_order_id==order_id).with_for_update())
-    if not po: raise HTTPException(404,"أمر الشراء غير موجود")
-    if po.status not in ("Approved","PartiallyReceived"): raise HTTPException(409,"يجب اعتماد أمر الشراء قبل الاستلام")
-    lines=db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==order_id)).all()
-    for line in lines:
-        remaining=Decimal(str(line.quantity))-Decimal(str(line.received_quantity or 0))
-        if remaining>0:
-            movement_no=f"PO-{po.order_no}-{line.line_id}"
-            if not db.scalar(select(InventoryMovement.movement_id).where(InventoryMovement.movement_no==movement_no)):
-                db.add(InventoryMovement(movement_no=movement_no,item_id=line.item_id,warehouse_id=po.warehouse_id,movement_date=date.today(),movement_type="IN",quantity=remaining,unit_cost=line.unit_price,reference=po.order_no,notes="استلام أمر شراء",created_by=user.user_id))
-            line.received_quantity=line.quantity
-    po.status="Received";write_audit(db,user.user_id,"Receive","PurchaseOrders",po.purchase_order_id,new={"status":po.status});db.commit()
-    return {"purchase_order_id":po.purchase_order_id,"status":po.status,"message":"تم الاستلام وتحديث أرصدة المخزون"}
-
+    raise HTTPException(status_code=410, detail="تم إيقاف الاستلام المباشر. استخدم محضر الاستلام التفصيلي / Legacy full receipt is disabled; use detailed goods receipts.")
+ 
 @purchases.get("/receipts")
 def list_purchase_receipts(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
     receipts = db.scalars(select(PurchaseGoodsReceipt).order_by(PurchaseGoodsReceipt.receipt_date.desc(), PurchaseGoodsReceipt.receipt_id.desc()).limit(500)).all()
@@ -1348,6 +1378,8 @@ def create_purchase_receipt(order_id: int, body: PurchaseGoodsReceiptIn,
         raise HTTPException(409, "يجب اعتماد أمر الشراء قبل تسجيل محضر الاستلام")
     if body.receipt_date < po.order_date:
         raise HTTPException(422, "تاريخ الاستلام لا يمكن أن يسبق تاريخ أمر الشراء")
+    if body.receipt_date > date.today():
+        raise HTTPException(422, "تاريخ الاستلام لا يمكن أن يكون في المستقبل")
     if len({line.purchase_order_line_id for line in body.lines}) != len(body.lines):
         raise HTTPException(422, "لا تكرر بند أمر الشراء في محضر الاستلام")
     po_lines = {line.line_id: line for line in db.scalars(
