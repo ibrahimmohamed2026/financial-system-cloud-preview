@@ -97,38 +97,44 @@ class ImportPlan:
 
 # ----------------------------- قراءة الملف -----------------------------
 def read_rows(data: bytes) -> list[tuple[int, dict]]:
-    """بيرجّع [(رقم الصف في الإكسيل، {field: القيمة الخام})] من أول شيت."""
+    """بيرجّع صفوف ورقة الحسابات بعد اختيار الورقة التي تحتوي عناوين الحساب والتصنيف."""
     from openpyxl import load_workbook
 
     try:
         wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    except Exception as exc:  # zip تالف / مش xlsx
+    except Exception as exc:
         raise ImportFileError("الملف مش Excel (.xlsx) سليم") from exc
     try:
-        # Prefer the workbook's account-balance sheet when the original finance workbook is supplied.
-        ws = wb["Trial balance"] if "Trial balance" in wb.sheetnames else wb.worksheets[0]
-        header: dict[int, str] | None = None
-        rows: list[tuple[int, dict]] = []
-        for idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
-            if header is None:
-                if idx > 15:
+        candidates = []
+        for ws in wb.worksheets:
+            for idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+                if idx > 20:
                     break
                 found: dict[int, str] = {}
                 for col, cell in enumerate(row):
                     f = ALIASES.get(norm(cell)) if cell is not None else None
                     if f and f not in found.values():
                         found[col] = f
-                if {"account_code", "account_name_ar"} <= set(found.values()):
-                    header = found
-                continue
+                fields = set(found.values())
+                if {"account_code", "account_name_ar"} <= fields:
+                    # Prefer the sheet that explicitly contains the financial-statement classification.
+                    score = 2 if "classification" in fields else 1
+                    if ws.title == "Trial balance":
+                        score += 1
+                    candidates.append((score, ws, idx, found))
+                    break
+
+        if not candidates:
+            raise ImportFileError("مش لاقي صف العناوين: لازم يبقى فيه عمودي «رمز الحساب» و«اسم الحساب»")
+        _, ws, header_row, header = max(candidates, key=lambda item: item[0])
+        rows: list[tuple[int, dict]] = []
+        for idx, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
             values = {f: (row[col] if col < len(row) else None) for col, f in header.items()}
             if all(v is None or (isinstance(v, str) and not v.strip()) for v in values.values()):
                 continue
             if len(rows) >= MAX_ROWS:
                 raise ImportFileError(f"الملف فيه أكتر من {MAX_ROWS} صف — قسّمه على أكتر من ملف")
             rows.append((idx, values))
-        if header is None:
-            raise ImportFileError("مش لاقي صف العناوين: لازم يبقى فيه عمودي «كود الحساب» و«اسم الحساب»")
         return rows
     finally:
         wb.close()
