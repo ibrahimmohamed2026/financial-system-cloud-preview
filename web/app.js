@@ -19,6 +19,7 @@ const SCREENS = {
   "/reports/balance-sheet": L("./pages/reports.js"),
   "/reports/income-statement": L("./pages/reports.js"),
   "/reports": L("./pages/reports_analytics.js?v=20261104-searchable-account-1"),
+  "/reports/financial-control": L("./pages/financial_control.js?v=20261105-financial-control-1"),
   "/contracts": L("./pages/contracts.js?v=20261104-company-print-1"),
   "/contract-requests": L("./pages/contract_requests.js?v=20261018-contract-auto-number-1"),
   "/settlements": L("./pages/settlements.js?v=20261104-company-print-1"),
@@ -98,6 +99,7 @@ const ADMIN_ITEMS = [
 function navItems() {          // كل الوجهات (للبحث العام)
   const out = [{ route: "/", title: "الرئيسية", sub: "Home" }];
   for (const s of sectionsOrdered()) for (const x of screensOf(s)) out.push({ route: x.route, title: tOf(x), sub: x.title_en });
+  if (auth.can("AnalyticsReports", "View")) out.push({ route: "/reports/financial-control", title: "لوحة الرقابة المالية", sub: "Financial Control" });
   if (IS_ADMIN) for (const a of ADMIN_ITEMS) out.push({ route: a.route, title: a.title, sub: "Admin" });
   return out;
 }
@@ -112,6 +114,7 @@ function titleOf(path) {
   if (path === "/admin/company") return "بيانات الشركة";
   if (path === "/audit-logs") return "سجل المراجعة والنشاطات";
   if (path === "/reports") return "مركز التقارير";
+  if (path === "/reports/financial-control") return "لوحة الرقابة المالية";
   if (path === "/contracts") return "العقود والمكتب الفني";
   if (path === "/contract-requests") return "طلبات التعاقد";
   if (path === "/settlements") return "مستخلصات العملاء ومقاولي الباطن";
@@ -131,6 +134,7 @@ function navHtml(path) {
     h += `<div class="nav-g${open ? " open" : ""}"><button class="nav-i nav-gh" type="button">${ico(SEC_ICON[s.code] || "dot")}<span>${esc(s.name_ar || s.name_en)}</span>${ico("chevron", "chev")}</button>
       <div class="nav-sub">${scr.map(x => link({ route: x.route, title: tOf(x) }, true)).join("")}</div></div>`;
   }
+  if (auth.can("AnalyticsReports", "View")) h += link({ route: "/reports/financial-control", title: "لوحة الرقابة المالية", icon: "chart" });
   if (IS_ADMIN) h += `<div class="nav-sep"></div>` + ADMIN_ITEMS.map(a => link(a)).join("");
   return h;
 }
