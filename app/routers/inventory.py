@@ -1243,6 +1243,7 @@ def approve_supplier_invoice(invoice_id:int,user:User=Depends(require_permission
     inv=db.scalar(select(SupplierInvoice).where(SupplierInvoice.invoice_id==invoice_id).with_for_update())
     if not inv:raise HTTPException(404,"فاتورة المورد غير موجودة")
     if inv.status!="Draft":raise HTTPException(409,"الفاتورة ليست مسودة")
+    if inv.created_by == user.user_id:raise HTTPException(403,"لا يجوز اعتماد فاتورة المورد بواسطة منشئها")
     supplier=db.get(Counterparty,inv.supplier_id)
     if not supplier or not supplier.linked_account_id:raise HTTPException(409,"اربط حساب الدائنين للمورد من سجل المورد")
     _invoice_account(db,supplier.linked_account_id,"CR","حساب الدائنين للمورد")
@@ -1331,20 +1332,8 @@ def approve_order(order_id:int,user:User=Depends(require_permission("PurchaseCyc
 
 @purchases.post("/{order_id}/receive")
 def receive_order(order_id:int,user:User=Depends(require_permission("InventoryManagement","Post")),db:Session=Depends(get_db)):
-    po=db.scalar(select(PurchaseOrder).where(PurchaseOrder.purchase_order_id==order_id).with_for_update())
-    if not po: raise HTTPException(404,"أمر الشراء غير موجود")
-    if po.status not in ("Approved","PartiallyReceived"): raise HTTPException(409,"يجب اعتماد أمر الشراء قبل الاستلام")
-    lines=db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==order_id)).all()
-    for line in lines:
-        remaining=Decimal(str(line.quantity))-Decimal(str(line.received_quantity or 0))
-        if remaining>0:
-            movement_no=f"PO-{po.order_no}-{line.line_id}"
-            if not db.scalar(select(InventoryMovement.movement_id).where(InventoryMovement.movement_no==movement_no)):
-                db.add(InventoryMovement(movement_no=movement_no,item_id=line.item_id,warehouse_id=po.warehouse_id,movement_date=date.today(),movement_type="IN",quantity=remaining,unit_cost=line.unit_price,reference=po.order_no,notes="استلام أمر شراء",created_by=user.user_id))
-            line.received_quantity=line.quantity
-    po.status="Received";write_audit(db,user.user_id,"Receive","PurchaseOrders",po.purchase_order_id,new={"status":po.status});db.commit()
-    return {"purchase_order_id":po.purchase_order_id,"status":po.status,"message":"تم الاستلام وتحديث أرصدة المخزون"}
-
+    raise HTTPException(status_code=410, detail="تم إيقاف الاستلام المباشر. استخدم محضر الاستلام التفصيلي / Legacy full receipt is disabled; use detailed goods receipts.")
+ 
 @purchases.get("/receipts")
 def list_purchase_receipts(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
     receipts = db.scalars(select(PurchaseGoodsReceipt).order_by(PurchaseGoodsReceipt.receipt_date.desc(), PurchaseGoodsReceipt.receipt_id.desc()).limit(500)).all()
@@ -1376,6 +1365,8 @@ def create_purchase_receipt(order_id: int, body: PurchaseGoodsReceiptIn,
         raise HTTPException(409, "يجب اعتماد أمر الشراء قبل تسجيل محضر الاستلام")
     if body.receipt_date < po.order_date:
         raise HTTPException(422, "تاريخ الاستلام لا يمكن أن يسبق تاريخ أمر الشراء")
+    if body.receipt_date > date.today():
+        raise HTTPException(422, "تاريخ الاستلام لا يمكن أن يكون في المستقبل")
     if len({line.purchase_order_line_id for line in body.lines}) != len(body.lines):
         raise HTTPException(422, "لا تكرر بند أمر الشراء في محضر الاستلام")
     po_lines = {line.line_id: line for line in db.scalars(
