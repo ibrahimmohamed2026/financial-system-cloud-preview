@@ -11,7 +11,7 @@ from ..database import get_db
 from ..deps import require_permission, write_audit
 from ..models import (Account, Counterparty, FiscalYear, InventoryItem, InventoryWarehouse,
     InventoryMovement, InventoryStocktake, InventoryStocktakeLine, InventoryReturn, InventoryReturnLine, SiteIssueRequest, SiteIssueRequestLine, JournalEntry, JournalEntryDetail, PurchaseOrder, PurchaseOrderLine, PurchaseRequisition, PurchaseRequisitionLine, SupplierQuotation, SupplierQuotationLine,
-    SupplierInvoice, SupplierInvoiceLine, TreasuryAccount, TreasuryTransaction, Project, User, utcnow)
+    SupplierInvoice, SupplierInvoiceLine, PurchaseGoodsReceipt, PurchaseGoodsReceiptLine, TreasuryAccount, TreasuryTransaction, Project, User, utcnow)
 from ..counterparties import resolve_counterparty
 
 inventory = APIRouter(prefix="/api/inventory", tags=["Inventory"])
@@ -150,6 +150,18 @@ class PurchaseIn(BaseModel):
     project_id: int | None = None
     notes: str | None = None
     lines: list[POLineIn] = Field(min_length=1)
+
+class PurchaseGoodsReceiptLineIn(BaseModel):
+    purchase_order_line_id: int
+    quantity: Decimal = Field(gt=0, max_digits=18, decimal_places=3)
+
+
+class PurchaseGoodsReceiptIn(BaseModel):
+    receipt_date: date = Field(default_factory=date.today)
+    delivery_note_no: str | None = Field(default=None, max_length=100)
+    notes: str | None = None
+    lines: list[PurchaseGoodsReceiptLineIn] = Field(min_length=1)
+
 
 class SupplierInvoiceLineIn(BaseModel):
     purchase_order_line_id: int
@@ -1074,12 +1086,12 @@ def supplier_invoice_lookups(_:User=Depends(require_permission("PurchaseCycle","
         "received_orders":[{"purchase_order_id":p.purchase_order_id,"order_no":p.order_no,"supplier_name":p.supplier_name,"project_id":p.project_id,
         "lines":[{"line_id":l.line_id,"item":db.get(InventoryItem,l.item_id).name if db.get(InventoryItem,l.item_id) else "",
         "received_quantity":str(l.received_quantity),"unit_price":str(l.unit_price)} for l in db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==p.purchase_order_id)).all()]}
-        for p in db.scalars(select(PurchaseOrder).where(PurchaseOrder.status=="Received").order_by(PurchaseOrder.purchase_order_id.desc())).all()]}
+        for p in db.scalars(select(PurchaseOrder).where(PurchaseOrder.status.in_(("Received","PartiallyReceived"))).order_by(PurchaseOrder.purchase_order_id.desc())).all()]}
 
 @purchases.post("/invoices",status_code=201)
 def create_supplier_invoice(body:SupplierInvoiceIn,user:User=Depends(require_permission("PurchaseCycle","Add")),db:Session=Depends(get_db)):
     po=db.get(PurchaseOrder,body.purchase_order_id)
-    if not po or po.status!="Received":raise HTTPException(409,"لا تسجل فاتورة المورد إلا بعد استلام أمر الشراء كاملًا")
+    if not po or po.status not in ("Received","PartiallyReceived"):raise HTTPException(409,"لا تسجل فاتورة المورد إلا بعد استلام كمية فعلية من أمر الشراء")
     party=resolve_counterparty(db,po.supplier_name,"Supplier",po.counterparty_id)
     if not party:raise HTTPException(409,"سجل المورد المرتبط بأمر الشراء غير موجود")
     if db.scalar(select(SupplierInvoice.invoice_id).where(SupplierInvoice.supplier_id==party.counterparty_id,SupplierInvoice.invoice_no==body.invoice_no)):
@@ -1205,7 +1217,7 @@ def approve_order(order_id:int,user:User=Depends(require_permission("PurchaseCyc
 def receive_order(order_id:int,user:User=Depends(require_permission("InventoryManagement","Post")),db:Session=Depends(get_db)):
     po=db.scalar(select(PurchaseOrder).where(PurchaseOrder.purchase_order_id==order_id).with_for_update())
     if not po: raise HTTPException(404,"أمر الشراء غير موجود")
-    if po.status!="Approved": raise HTTPException(409,"يجب اعتماد أمر الشراء قبل الاستلام")
+    if po.status not in ("Approved","PartiallyReceived"): raise HTTPException(409,"يجب اعتماد أمر الشراء قبل الاستلام")
     lines=db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==order_id)).all()
     for line in lines:
         remaining=Decimal(str(line.quantity))-Decimal(str(line.received_quantity or 0))
@@ -1216,3 +1228,68 @@ def receive_order(order_id:int,user:User=Depends(require_permission("InventoryMa
             line.received_quantity=line.quantity
     po.status="Received";write_audit(db,user.user_id,"Receive","PurchaseOrders",po.purchase_order_id,new={"status":po.status});db.commit()
     return {"purchase_order_id":po.purchase_order_id,"status":po.status,"message":"تم الاستلام وتحديث أرصدة المخزون"}
+
+@purchases.get("/receipts")
+def list_purchase_receipts(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
+    receipts = db.scalars(select(PurchaseGoodsReceipt).order_by(PurchaseGoodsReceipt.receipt_date.desc(), PurchaseGoodsReceipt.receipt_id.desc()).limit(500)).all()
+    result = []
+    for receipt in receipts:
+        po = db.get(PurchaseOrder, receipt.purchase_order_id)
+        warehouse = db.get(InventoryWarehouse, receipt.warehouse_id)
+        lines = db.scalars(select(PurchaseGoodsReceiptLine).where(PurchaseGoodsReceiptLine.receipt_id == receipt.receipt_id)).all()
+        result.append({
+            "receipt_id": receipt.receipt_id, "receipt_no": receipt.receipt_no,
+            "purchase_order_id": receipt.purchase_order_id, "order_no": po.order_no if po else "",
+            "supplier_name": po.supplier_name if po else "", "receipt_date": str(receipt.receipt_date),
+            "warehouse": warehouse.name if warehouse else "", "delivery_note_no": receipt.delivery_note_no,
+            "notes": receipt.notes, "lines": [{
+                "item": db.get(InventoryItem, line.item_id).name if db.get(InventoryItem, line.item_id) else "",
+                "quantity": str(line.quantity), "unit_cost": str(line.unit_cost)
+            } for line in lines]
+        })
+    return {"items": result}
+
+
+@purchases.post("/{order_id}/receipts", status_code=201)
+def create_purchase_receipt(order_id: int, body: PurchaseGoodsReceiptIn,
+        user: User = Depends(require_permission("InventoryManagement", "Post")), db: Session = Depends(get_db)):
+    po = db.scalar(select(PurchaseOrder).where(PurchaseOrder.purchase_order_id == order_id).with_for_update())
+    if not po:
+        raise HTTPException(404, "أمر الشراء غير موجود")
+    if po.status not in ("Approved", "PartiallyReceived"):
+        raise HTTPException(409, "يجب اعتماد أمر الشراء قبل تسجيل محضر الاستلام")
+    if len({line.purchase_order_line_id for line in body.lines}) != len(body.lines):
+        raise HTTPException(422, "لا تكرر بند أمر الشراء في محضر الاستلام")
+    po_lines = {line.line_id: line for line in db.scalars(
+        select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id == order_id).with_for_update()).all()}
+    prepared = []
+    for row in body.lines:
+        line = po_lines.get(row.purchase_order_line_id)
+        if not line:
+            raise HTTPException(422, "بند محضر الاستلام لا يتبع أمر الشراء المحدد")
+        remaining = Decimal(str(line.quantity)) - Decimal(str(line.received_quantity or 0))
+        if row.quantity > remaining:
+            raise HTTPException(409, f"كمية الاستلام تتجاوز المتبقي للبند ({remaining})")
+        prepared.append((line, row.quantity))
+    receipt = PurchaseGoodsReceipt(receipt_no=f"GRN-PENDING-{uuid4().hex}", purchase_order_id=order_id,
+        receipt_date=body.receipt_date, warehouse_id=po.warehouse_id, delivery_note_no=body.delivery_note_no,
+        notes=body.notes, received_by=user.user_id)
+    db.add(receipt)
+    db.flush()
+    receipt.receipt_no = f"GRN-{body.receipt_date.year}-{receipt.receipt_id:06d}"
+    for line, quantity in prepared:
+        db.add(PurchaseGoodsReceiptLine(receipt_id=receipt.receipt_id, purchase_order_line_id=line.line_id,
+            item_id=line.item_id, quantity=quantity, unit_cost=line.unit_price))
+        db.add(InventoryMovement(movement_no=f"{receipt.receipt_no}-{line.line_id}", item_id=line.item_id,
+            warehouse_id=po.warehouse_id, movement_date=body.receipt_date, movement_type="IN",
+            quantity=quantity, unit_cost=line.unit_price, reference=receipt.receipt_no,
+            notes=f"محضر استلام لأمر الشراء {po.order_no}", created_by=user.user_id))
+        line.received_quantity = Decimal(str(line.received_quantity or 0)) + quantity
+    complete = all(Decimal(str(line.received_quantity or 0)) >= Decimal(str(line.quantity)) for line in po_lines.values())
+    po.status = "Received" if complete else "PartiallyReceived"
+    write_audit(db, user.user_id, "ReceivePartial" if not complete else "ReceiveComplete", "PurchaseGoodsReceipts",
+        receipt.receipt_id, new={"receipt_no": receipt.receipt_no, "purchase_order_id": order_id, "status": po.status})
+    db.commit()
+    return {"receipt_id": receipt.receipt_id, "receipt_no": receipt.receipt_no, "purchase_order_id": order_id,
+        "status": po.status, "message": "تم تسجيل محضر الاستلام وتحديث المخزون بالكميات المستلمة فقط"}
+
