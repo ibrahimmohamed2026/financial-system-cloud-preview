@@ -321,16 +321,21 @@ def merge_parties(source_id: int, target_id: int,
 def _party_delete_readiness(db: Session, x: Counterparty) -> dict:
     linked = _out(db, x)["linked_records"]
     blockers = [f"يوجد {count} سجل مرتبط في {table}" for table, count in linked.items() if count]
-    account = db.get(Account, x.linked_account_id) if x.linked_account_id else None
-    if account:
+    # Check both the current linked account and the legacy AccountId field.
+    # Do not allow deleting a party while either account is referenced by accounting activity.
+    account_ids = {i for i in (x.linked_account_id, x.account_id) if i is not None}
+    for account_id in sorted(account_ids):
+        account = db.get(Account, account_id)
+        if not account:
+            continue
         journal_count = db.scalar(select(func.count()).select_from(JournalEntryDetail).where(
             JournalEntryDetail.account_id == account.account_id)) or 0
         check_count = db.scalar(select(func.count()).select_from(FinancialCheck).where(
             FinancialCheck.party_account_id == account.account_id)) or 0
         if journal_count:
-            blockers.append(f"حساب الأستاذ المرتبط يحتوي على {journal_count} حركة/سطر محاسبي؛ لا يمكن حذف الطرف")
+            blockers.append(f"حساب الأستاذ {account.account_code} يحتوي على {journal_count} حركة/سطر محاسبي؛ لا يمكن حذف الطرف")
         if check_count:
-            blockers.append(f"يوجد {check_count} شيك مرتبط بحساب الأستاذ")
+            blockers.append(f"يوجد {check_count} شيك مرتبط بحساب الأستاذ {account.account_code}")
     return {"counterparty_id": x.party_id, "party_name": x.legal_name,
             "linked_records": linked, "blockers": blockers, "can_delete": not blockers}
 
