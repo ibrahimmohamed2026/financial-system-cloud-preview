@@ -1039,8 +1039,10 @@ def list_pending_purchase_receipts(_: User = Depends(require_permission("Invento
             "order_date": str(order.order_date), "supplier_name": order.supplier_name,
             "project": db.get(Project, order.project_id).name_ar if order.project_id and db.get(Project, order.project_id) else "",
             "warehouse": warehouse.name if warehouse else "", "total_amount": str(order.total_amount),
-            "lines": [{"item": (db.get(InventoryItem, line.item_id).name if db.get(InventoryItem, line.item_id) else ""),
+            "lines": [{"line_id": line.line_id, "item_id": line.item_id,
+                "item": (db.get(InventoryItem, line.item_id).name if db.get(InventoryItem, line.item_id) else ""),
                 "quantity": str(line.quantity), "received_quantity": str(line.received_quantity or 0),
+                "remaining_quantity": str(Decimal(str(line.quantity)) - Decimal(str(line.received_quantity or 0))),
                 "unit_price": str(line.unit_price)} for line in remaining]})
     return {"items": pending}
 
