@@ -63,11 +63,11 @@ export async function render(main, { api, auth }) {
 
   async function openForm(acc) {
     parents = (await api("/accounts?limit=1000&is_active=true")).items.filter(p => !acc || p.account_id !== acc.account_id);
-    const v = acc || { account_code: "", account_name_ar: "", parent_account_id: "", classification_id: cls[0]?.classification_id, normal_balance: "DR", opening_debit: 0, opening_credit: 0, is_active: true };
+    const v = acc || { account_code: "", account_name_ar: "", account_name_en: "", parent_account_id: "", classification_id: cls[0]?.classification_id, normal_balance: "DR", opening_debit: 0, opening_credit: 0, is_active: true };
     dlg.innerHTML = `<form method="dialog"><h3>${acc ? tr("تعديل حساب","Edit account") : tr("حساب جديد","New account")}</h3>
       <div class="grid2">
       <div class="f"><label>${tr("الكود","Code")}</label><input name="account_code" value="${esc(v.account_code)}" required maxlength="30"></div>
-      <div class="f"><label>${tr("الاسم","Name")}</label><input name="account_name_ar" value="${esc(v.account_name_ar)}" required maxlength="300"></div>
+      <div class="f"><label>${tr("الاسم بالعربية","Arabic name")}</label><input name="account_name_ar" value="${esc(v.account_name_ar)}" required maxlength="300"></div><div class="f"><label>${tr("الاسم بالإنجليزية (اختياري)","English name (optional)")}</label><input name="account_name_en" value="${esc(v.account_name_en||"")}" maxlength="300"></div>
       <div class="f"><label>${tr("الحساب الأب","Parent account")}</label><select name="parent_account_id"><option value="">— ${tr("بدون","None")} —</option>${parents.map(p => `<option value="${p.account_id}" ${p.account_id == v.parent_account_id ? "selected" : ""}>${esc(p.account_code)} — ${esc(p.account_name_ar)}</option>`).join("")}</select></div>
       <div class="f"><label>${tr("التصنيف","Classification")}</label><select name="classification_id">${cls.map(c => `<option value="${c.classification_id}" ${c.classification_id == v.classification_id ? "selected" : ""}>${esc(c.name_ar)}</option>`).join("")}</select></div>
       <div class="f"><label>${tr("طبيعة الرصيد","Balance nature")}</label><select name="normal_balance"><option value="DR" ${v.normal_balance === "DR" ? "selected" : ""}>${tr("مدين","Debit")}</option><option value="CR" ${v.normal_balance === "CR" ? "selected" : ""}>${tr("دائن","Credit")}</option></select></div>
@@ -82,7 +82,7 @@ export async function render(main, { api, auth }) {
       ev.preventDefault();
       const fd = new FormData(f);
       const body = {
-        account_code: fd.get("account_code").trim(), account_name_ar: fd.get("account_name_ar").trim(),
+        account_code: fd.get("account_code").trim(), account_name_ar: fd.get("account_name_ar").trim(), account_name_en: fd.get("account_name_en").trim() || null,
         parent_account_id: fd.get("parent_account_id") ? +fd.get("parent_account_id") : null,
         classification_id: +fd.get("classification_id"), normal_balance: fd.get("normal_balance"),
         opening_debit: String(fd.get("opening_debit") || 0), opening_credit: String(fd.get("opening_credit") || 0),
