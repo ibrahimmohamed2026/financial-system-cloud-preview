@@ -974,3 +974,21 @@ dialog .journal-lines textarea{min-width:150px;resize:vertical}
  .reports-links{grid-template-columns:minmax(0,1fr)}
  .reports-toolbar .w{flex-basis:100%}
 }
+
+/* ===== ADEX ERP — audit trail responsive review ===== */
+.wrap>.toolbar:has(#settlement):has(#jentry){display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px}
+.wrap>.toolbar:has(#settlement):has(#jentry) .w{flex:1 1 145px;min-width:0}
+.wrap>.toolbar:has(#settlement):has(#jentry)>.btn{flex:0 1 auto}
+.wrap>.panel:has(#total){padding:13px 16px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:var(--shadow)}
+.wrap .audit-detail-row>td{padding:12px;background:var(--brand-soft)}
+.wrap .audit-detail-content{padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--card);overflow:hidden}
+.wrap .audit-detail-content pre{max-height:360px;overflow:auto;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font:12px/1.65 ui-monospace,monospace;direction:ltr;text-align:left}
+.wrap .audit-detail{white-space:nowrap}
+@media(max-width:700px){
+ .wrap>.toolbar:has(#settlement):has(#jentry){padding:10px;gap:8px}
+ .wrap>.toolbar:has(#settlement):has(#jentry) .w{flex:1 1 calc(50% - 8px)}
+ .wrap>.toolbar:has(#settlement):has(#jentry)>.btn{flex:1 1 calc(50% - 8px);justify-content:center}
+ .wrap .audit-detail-content{padding:9px}
+ .wrap .audit-detail-content .grid-2{grid-template-columns:minmax(0,1fr)}
+ .wrap .audit-detail-content pre{max-height:260px;font-size:11px}
+}
