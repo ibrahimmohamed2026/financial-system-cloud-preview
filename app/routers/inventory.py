@@ -1113,7 +1113,7 @@ def supplier_aging_report(_: User = Depends(require_permission("PurchaseCycle", 
 
 @purchases.get("/reports/supplier-performance")
 def supplier_performance_report(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
-    orders = db.scalars(select(PurchaseOrder).order_by(PurchaseOrder.order_date.desc())).all()
+    orders = db.scalars(select(PurchaseOrder).where(PurchaseOrder.status.in_(("Approved", "PartiallyReceived", "Received"))).order_by(PurchaseOrder.order_date.desc())).all()
     grouped = {}
     for po in orders:
         key = po.counterparty_id or f"name:{(po.supplier_name or '').strip().casefold()}"
@@ -1318,7 +1318,7 @@ def receive_order(order_id:int,user:User=Depends(require_permission("InventoryMa
     return {"purchase_order_id":po.purchase_order_id,"status":po.status,"message":"تم الاستلام وتحديث أرصدة المخزون"}
 
 @purchases.get("/receipts")
-def list_purchase_receipts(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
+def list_purchase_receipts(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
     receipts = db.scalars(select(PurchaseGoodsReceipt).order_by(PurchaseGoodsReceipt.receipt_date.desc(), PurchaseGoodsReceipt.receipt_id.desc()).limit(500)).all()
     result = []
     for receipt in receipts:
