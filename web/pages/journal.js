@@ -61,7 +61,7 @@ export async function render(main, { api, auth }) {
       <div class="actions">${e.status === "Draft" && can("Post") ? '<button class="btn primary" type="button" data-a="post">ترحيل</button>' : ""}
       ${e.status === "Draft" && can("Edit") ? '<button class="btn" type="button" data-a="edit">تعديل</button>' : ""}
       ${can("Print") ? '<button class="btn" type="button" data-a="print">طباعة</button>' : ""}
-      ${e.status === "Draft" && can("Delete") ? '<button class="btn danger" type="button" data-a="del">حذف</button>' : ""}
+      ${(e.status === "Draft" || e.status === "Reversed") && can("Delete") ? '<button class="btn danger" type="button" data-a="del">' + (e.status === "Reversed" ? "حذف القيد الملغي" : "حذف المسودة") + '</button>' : ""}
       ${e.status === "Posted" && can("Approve") ? '<button class="btn danger" type="button" data-a="cancel">إلغاء القيد</button>' : ""}
       <button class="btn" value="x">إغلاق</button></div></form>`;
     document.body.appendChild(dlg); dlg.addEventListener("close", () => dlg.remove());
@@ -69,7 +69,7 @@ export async function render(main, { api, auth }) {
       const a = ev.target.dataset?.a; if (!a) return;
       if (a === "print") return printEntry(e);
       if (a === "edit") { dlg.close(); return editor(e); }
-      const msg = { post: "ترحيل القيد؟ بعد الترحيل مينفعش يتعدّل.", del: "حذف المسودة؟", cancel: "إلغاء القيد؟ هيخرج من ميزان المراجعة." }[a];
+      const msg = { post: "ترحيل القيد؟ بعد الترحيل مينفعش يتعدّل.", del: e.status === "Reversed" ? "حذف القيد الملغي نهائيًا؟ سيظل تسجيل عملية الحذف موجودًا في سجل المراجعة." : "حذف المسودة؟", cancel: "إلغاء القيد؟ هيخرج من ميزان المراجعة." }[a];
       if (!confirm(msg)) return;
       if (a === "del") await api("/journal/" + id, { method: "DELETE" }); else await api(`/journal/${id}/${a}`, { method: "POST" });
       dlg.close(); toast("تم"); await load();
