@@ -108,22 +108,22 @@ function navItems() {          // كل الوجهات (للبحث العام)
   return out;
 }
 function titleOf(path) {
-  if (path === "/") return "الرئيسية";
-  if (path === "/customers") return "العملاء";
-  if (path === "/contractors") return "المقاولون";
-  if (path === "/suppliers") return "الموردون";
-  if (["/checks/register", "/financial-checks", "/checks-register"].includes(path)) return "إدارة الشيكات المالية";
+  if (path === "/") return tr("الرئيسية", "Home");
+  if (path === "/customers") return tr("العملاء", "Customers");
+  if (path === "/contractors") return tr("المقاولون", "Contractors");
+  if (path === "/suppliers") return tr("الموردون", "Suppliers");
+  if (["/checks/register", "/financial-checks", "/checks-register"].includes(path)) return tr("إدارة الشيكات المالية", "Financial Cheque Management");
   if (path === "/admin/users") return "";            // الصفحة نفسها فيها عنوانها
-  if (path === "/admin/backup") return "النسخ الاحتياطي";
-  if (path === "/admin/company") return "بيانات الشركة";
-  if (path === "/audit-logs") return "سجل المراجعة والنشاطات";
-  if (path === "/reports") return "مركز التقارير";
-  if (path === "/reports/financial-control") return "لوحة الرقابة المالية";
-  if (path === "/contracts") return "العقود والمكتب الفني";
-  if (path === "/contract-requests") return "طلبات التعاقد";
-  if (path === "/settlements") return "مستخلصات العملاء ومقاولي الباطن";
-  if (path === "/inventory") return "إدارة المخزون";
-  if (path === "/purchases") return "دورة المشتريات";
+  if (path === "/admin/backup") return tr("النسخ الاحتياطي", "Backup & Restore");
+  if (path === "/admin/company") return tr("بيانات الشركة", "Company Profile");
+  if (path === "/audit-logs") return tr("سجل المراجعة والنشاطات", "Audit Log");
+  if (path === "/reports") return tr("مركز التقارير", "Reports Center");
+  if (path === "/reports/financial-control") return tr("لوحة الرقابة المالية", "Financial Control");
+  if (path === "/contracts") return tr("العقود والمكتب الفني", "Contracts & Technical Office");
+  if (path === "/contract-requests") return tr("طلبات التعاقد", "Contract Requests");
+  if (path === "/settlements") return tr("مستخلصات العملاء ومقاولي الباطن", "Customer & Subcontractor Statements");
+  if (path === "/inventory") return tr("إدارة المخزون", "Inventory Management");
+  if (path === "/purchases") return tr("دورة المشتريات", "Purchasing Cycle");
   for (const s of sectionsOrdered()) for (const x of s.screens) if (x.route === path) return tOf(x);
   return "";
 }
