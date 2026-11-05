@@ -1052,3 +1052,74 @@ dialog .journal-lines textarea{min-width:150px;resize:vertical}
  .accounts-filter-search{grid-column:auto}
  .wrap:has(#receipts):has(#movements)>.kpis,.wrap:has(#invoice-rows):has(#detail)>.kpis{grid-template-columns:minmax(0,1fr)}
 }
+
+
+/* ===== ADEX ERP — administration, master data and accounting screens ===== */
+.trial-balance-page{min-width:0;max-width:100%;overflow:hidden}
+.trial-balance-page>.toolbar{display:flex;align-items:end;flex-wrap:wrap;gap:10px;padding:13px;border:1px solid var(--line);border-radius:13px;background:var(--card);box-shadow:var(--shadow)}
+.trial-balance-page>.toolbar .w{flex:1 1 155px;min-width:0}
+.trial-balance-page>.toolbar input,.trial-balance-page>.toolbar select{width:100%;min-width:0}
+.trial-balance-page>.tbl-wrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.trial-balance-page table{min-width:780px}
+.trial-balance-page #foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:12px;border:1px solid var(--line);border-radius:0 0 12px 12px;background:var(--card)}
+.wrap:has(>#content) .pagehead{gap:10px;flex-wrap:wrap}
+.wrap:has(>#content) .tabs{display:flex;gap:8px;flex-wrap:wrap}
+.wrap:has(>#content) .tabs .btn{min-height:38px}
+.wrap:has(>#content) .panel{min-width:0;overflow:hidden}
+.wrap:has(>#content) .tablewrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.wrap:has(>#content) .tablewrap table{min-width:720px}
+.wrap:has(>#content) .avatar-editor{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.wrap:has(>#content) .avatar-editor>*{min-width:0}
+.wrap:has(#company-form){min-width:0}
+.wrap:has(#company-form)>.panel{max-width:100%!important;padding:clamp(12px,2.5vw,24px)}
+.wrap:has(#company-form) .grid2{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.wrap:has(#company-form) .f{min-width:0}
+.wrap:has(#company-form) input,.wrap:has(#company-form) select,.wrap:has(#company-form) textarea{width:100%;max-width:100%;min-width:0}
+.wrap:has(#company-form) #logo-preview{max-width:min(100%,260px);height:auto;object-fit:contain}
+.wrap:has(#info):has(#cfg):has(#rows)>.sec{min-width:0;max-width:100%;overflow:hidden}
+.wrap:has(#info):has(#cfg):has(#rows)>.sec .toolbar{display:flex;align-items:end;flex-wrap:wrap;gap:10px}
+.wrap:has(#info):has(#cfg):has(#rows)>.sec .toolbar .grow{min-width:0;flex:1 1 180px}
+.wrap:has(#info):has(#cfg):has(#rows) .tbl-wrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.wrap:has(#info):has(#cfg):has(#rows) table{min-width:720px}
+.wrap:has(#q):has(#type):has(#add):has(#rows)>.toolbar{display:flex;align-items:end;flex-wrap:wrap;gap:10px}
+.wrap:has(#q):has(#type):has(#add):has(#rows)>.toolbar .grow{min-width:0;flex:1 1 220px}
+.wrap:has(#q):has(#type):has(#add):has(#rows)>.panel{min-width:0;overflow:hidden}
+.wrap:has(#q):has(#type):has(#add):has(#rows) .tbl-wrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.wrap:has(#q):has(#type):has(#add):has(#rows) table{min-width:820px}
+.wrap:has(#b):has(#add):has(#rows)>.toolbar{display:flex;align-items:end;flex-wrap:wrap;gap:10px}
+.wrap:has(#b):has(#add):has(#rows)>.toolbar .w{flex:1 1 180px;min-width:0}
+.wrap:has(#b):has(#add):has(#rows)>.toolbar select,.wrap:has(#b):has(#add):has(#rows)>.toolbar input{width:100%;min-width:0}
+.wrap:has(#b):has(#add):has(#rows)>.tbl-wrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.wrap:has(#b):has(#add):has(#rows) table{min-width:820px}
+.wrap:has(#go):has(#acc):has(#bank):has(#rows)>.toolbar{display:flex;align-items:end;flex-wrap:wrap;gap:10px}
+.wrap:has(#go):has(#acc):has(#bank):has(#rows)>.toolbar .w{flex:1 1 165px;min-width:0}
+.wrap:has(#go):has(#acc):has(#bank):has(#rows)>.toolbar input,.wrap:has(#go):has(#acc):has(#bank):has(#rows)>.toolbar select{width:100%;min-width:0}
+.wrap:has(#go):has(#acc):has(#bank):has(#rows)>.tbl-wrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.wrap:has(#go):has(#acc):has(#bank):has(#rows) table{min-width:850px}
+.wrap:has(#df):has(#dt):has(#q):has(#hz):has(#rows)>.toolbar{display:flex;align-items:end;flex-wrap:wrap;gap:10px}
+.wrap:has(#df):has(#dt):has(#q):has(#hz):has(#rows)>.toolbar .w{flex:1 1 155px;min-width:0}
+.wrap:has(#df):has(#dt):has(#q):has(#hz):has(#rows)>.toolbar input{width:100%;min-width:0}
+.wrap:has(#df):has(#dt):has(#q):has(#hz):has(#rows)>.tbl-wrap{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.wrap:has(#df):has(#dt):has(#q):has(#hz):has(#rows) table{min-width:780px}
+@media(max-width:700px){
+ .trial-balance-page>.toolbar{padding:10px;gap:8px}
+ .trial-balance-page>.toolbar .w{flex:1 1 calc(50% - 8px)}
+ .trial-balance-page>.toolbar .grow{flex-basis:100%}
+ .trial-balance-page>.toolbar .btn{flex:1 1 calc(50% - 8px);justify-content:center}
+ .wrap:has(>#content) .pagehead{align-items:flex-start}
+ .wrap:has(>#content) .tabs{flex-wrap:nowrap;overflow-x:auto;padding-bottom:5px}
+ .wrap:has(>#content) .tabs .btn{flex:0 0 auto}
+ .wrap:has(>#content) .panel.formgrid{grid-template-columns:minmax(0,1fr)}
+ .wrap:has(#company-form) .grid2{grid-template-columns:minmax(0,1fr)}
+ .wrap:has(#company-form) .actions{display:flex;flex-wrap:wrap}
+ .wrap:has(#company-form) .actions .btn{flex:1 1 130px;justify-content:center}
+ .wrap:has(#info):has(#cfg):has(#rows)>.sec .toolbar .grow{flex-basis:100%}
+ .wrap:has(#q):has(#type):has(#add):has(#rows)>.toolbar .grow{flex-basis:100%}
+ .wrap:has(#b):has(#add):has(#rows)>.toolbar .w{flex:1 1 calc(50% - 8px)}
+ .wrap:has(#go):has(#acc):has(#bank):has(#rows)>.toolbar .w{flex:1 1 calc(50% - 8px)}
+ .wrap:has(#df):has(#dt):has(#q):has(#hz):has(#rows)>.toolbar .w{flex:1 1 calc(50% - 8px)}
+}
+@media(max-width:420px){
+ .trial-balance-page>.toolbar .w{flex-basis:100%}
+ .wrap:has(#b):has(#add):has(#rows)>.toolbar .w,.wrap:has(#go):has(#acc):has(#bank):has(#rows)>.toolbar .w,.wrap:has(#df):has(#dt):has(#q):has(#hz):has(#rows)>.toolbar .w{flex-basis:100%}
+}
