@@ -89,9 +89,9 @@ def _next_no(db: Session, fy: FiscalYear) -> str:
     return f"{prefix}{n:06d}"
 
 
-def _out(db: Session, e: JournalEntry, with_lines: bool = False) -> dict:
+def _out(db: Session, e: JournalEntry, with_lines: bool = False, lang: str = "ar") -> dict:
     rows = db.execute(
-        select(JournalEntryDetail, Account.account_code, Account.account_name_ar, Project.name_ar)
+        select(JournalEntryDetail, Account.account_code, Account.account_name_ar, Account.account_name_en, Project.name_ar, Project.name_en)
         .join(Account, Account.account_id == JournalEntryDetail.account_id)
         .outerjoin(Project, Project.project_id == JournalEntryDetail.project_id)
         .where(JournalEntryDetail.journal_entry_id == e.journal_entry_id)
@@ -104,9 +104,9 @@ def _out(db: Session, e: JournalEntry, with_lines: bool = False) -> dict:
            "total_credit": money(sum((r[0].credit_amount for r in rows), Decimal("0")))}
     if with_lines:
         out["lines"] = [{"line_no": d.line_no, "account_id": d.account_id, "account_code": code,
-                         "account_name": name, "project_id": d.project_id, "project_name": pname,
+                         "account_name": (name_en if lang == "en" and name_en else name), "project_id": d.project_id, "project_name": (project_en if lang == "en" and project_en else pname),
                          "debit_amount": money(d.debit_amount), "credit_amount": money(d.credit_amount),
-                         "description": d.description} for d, code, name, pname in rows]
+                         "description": d.description} for d, code, name, name_en, pname, project_en in rows]
     return out
 
 
@@ -171,12 +171,12 @@ def add_fiscal_year(body: FiscalYearIn, user: User = Depends(require_permission(
 
 
 @router.get("/lookup/accounts")
-def lookup_accounts(_: User = Depends(require_permission(SCREEN, "View")), db: Session = Depends(get_db)):
+def lookup_accounts(lang: str = Query("ar", pattern="^(ar|en)$"), _: User = Depends(require_permission(SCREEN, "View")), db: Session = Depends(get_db)):
     """الحسابات الفرعية النشطة (اللي يصح تتسجل عليها قيود)."""
     parents = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
     rows = db.scalars(select(Account).where(Account.is_active == True, Account.account_id.not_in(parents))
                       .order_by(Account.account_code)).all()
-    return [{"account_id": a.account_id, "label": f"{a.account_code} — {a.account_name_ar}"} for a in rows]
+    return [{"account_id": a.account_id, "account_name_ar": a.account_name_ar, "account_name_en": a.account_name_en, "label": f"{a.account_code} — {(a.account_name_en if lang == 'en' and a.account_name_en else a.account_name_ar)}"} for a in rows]
 
 
 @router.get("/lookup/settlements")
@@ -220,8 +220,8 @@ def list_entries(q: str | None = None, status_: str | None = Query(None, alias="
 
 
 @router.get("/{eid}")
-def get_entry(eid: int, _: User = Depends(require_permission(SCREEN, "View")), db: Session = Depends(get_db)):
-    return _out(db, _get(db, eid), True)
+def get_entry(eid: int, lang: str = Query("ar", pattern="^(ar|en)$"), _: User = Depends(require_permission(SCREEN, "View")), db: Session = Depends(get_db)):
+    return _out(db, _get(db, eid), True, lang)
 
 
 @router.post("", status_code=201)
