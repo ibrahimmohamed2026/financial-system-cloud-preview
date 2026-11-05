@@ -309,8 +309,12 @@ def cancel_entry(eid: int, user: User = Depends(require_permission(SCREEN, "Appr
 def delete_entry(eid: int, user: User = Depends(require_permission(SCREEN, "Delete")),
                  db: Session = Depends(get_db)):
     e = _get(db, eid)
-    if e.status != "Draft":
-        raise HTTPException(409, "الحذف للمسودات بس — القيد المرحّل يتلغي مش يتحذف")
+    if e.status not in ("Draft", "Reversed"):
+        raise HTTPException(409, "الحذف للمسودات والقيود الملغاة فقط — القيد المرحّل لازم يتلغي الأول")
+    linked_settlement = db.scalar(select(ContractSettlement).where(
+        ContractSettlement.journal_entry_id == eid).limit(1))
+    if linked_settlement is not None:
+        raise HTTPException(409, "لا يمكن حذف القيد لأنه مرتبط بمستخلص مرحّل؛ احتفظ بسجل الربط المحاسبي")
     from ..models import TreasuryTransaction
     for t in db.scalars(select(TreasuryTransaction).where(TreasuryTransaction.journal_entry_id == eid)):
         t.journal_entry_id = None
