@@ -3,7 +3,7 @@
 All figures are read-only and derived from posted accounting entries,
 contract settlements and linked treasury transactions.
 """
-from datetime import date, datetime, time, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from io import BytesIO
 
@@ -335,7 +335,8 @@ def export_pdf(date_from: date | None = None, date_to: date | None = None, accou
     ) if os.path.exists(p)), None)
     if not font_path:
         raise HTTPException(500, "خط PDF العربي غير متاح على الخادم")
-    pdfmetrics.registerFont(TTFont("Arabic", font_path))
+    if "Arabic" not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont("Arabic", font_path))
     try:
         import arabic_reshaper
         from bidi.algorithm import get_display
@@ -357,7 +358,7 @@ def export_pdf(date_from: date | None = None, date_to: date | None = None, accou
         ("المتأخر", data["kpis"]["overdue_amount"]), ("القيود المرحلة", data["kpis"]["posted_entries_count"]),
     ]]
     def add_table(title_text, headers, rows):
-        story.append(Paragraph(shape(title_text), body))
+        story.append(Paragraph(para_text(title_text), body))
         table_data = [[Paragraph(para_text(c), body) for c in row] for row in [headers] + rows]
         t = Table(table_data, repeatRows=1, hAlign="RIGHT")
         t.setStyle(TableStyle([
