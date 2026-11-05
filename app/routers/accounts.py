@@ -223,7 +223,7 @@ def import_template(_: User = Depends(require_permission(SCREEN, "Add")), db: Se
 def import_accounts(
     file: UploadFile = File(..., description="ملف .xlsx"),
     dry_run: bool = Form(True, description="true = فحص بس من غير حفظ"),
-    skip_existing: bool = Form(False, description="تخطّي الأكواد الموجودة بدل ما تتعامل كخطأ"),
+    skip_existing: bool = Form(True, description="تخطّي الأكواد الموجودة دون تعديلها"),
     update_existing: bool = Form(False, description="تحديث الحساب الموجود بنفس الكود"),
     user: User = Depends(require_permission(SCREEN, "Add")),
     db: Session = Depends(get_db),
@@ -245,9 +245,11 @@ def import_accounts(
         a.account_code.casefold(): ExistingAccount(a.account_id, a.is_active, a.account_id in with_lines)
         for a in db.scalars(select(Account))
     }
-    if skip_existing and update_existing:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "اختار تخطي الموجود أو تحديثه، مش الاتنين")
-    plan = parse_rows(rows, classifications, existing, skip_existing, update_existing)
+    if update_existing:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "استيراد شجرة الحسابات مخصص لإضافة الحسابات الجديدة فقط؛ الحسابات الموجودة لا يتم تعديلها.")
+    # الموجود بنفس الكود يتم تخطيه دائمًا.
+    plan = parse_rows(rows, classifications, existing, skip_existing=True, update_existing=False)
 
     report = ImportReport(
         dry_run=dry_run, total_rows=plan.total_rows, valid_rows=len(plan.items),
@@ -265,32 +267,14 @@ def import_accounts(
 
     by_code = {a.account_code.casefold(): a for a in db.scalars(select(Account)).all()}
     created: dict[str, Account] = {}
-    updated = 0
     try:
-        # Create new records first; update existing records by stable key account_code.
+        # إضافة حسابات جديدة فقط؛ الحسابات الموجودة تم تخطيها أثناء الفحص.
         for item in plan.items:
             key = item.code.casefold()
-            acc = by_code.get(key) if update_existing else None
-            if acc is None:
-                acc = Account(account_code=item.code, account_name_ar=item.name, classification_id=item.classification_id,
-                              normal_balance=item.normal_balance, opening_debit=item.opening_debit,
-                              opening_credit=item.opening_credit, is_active=True)
-                db.add(acc)
-            else:
-                has_lines = acc.account_id in with_lines
-                if has_lines and (acc.classification_id != item.classification_id or acc.normal_balance != item.normal_balance):
-                    raise HTTPException(status.HTTP_409_CONFLICT,
-                        f"الحساب {item.code} عليه قيود؛ لا يمكن تغيير التصنيف أو طبيعة الرصيد بالاستيراد")
-                if has_lines and (Decimal(str(acc.opening_debit or 0)) != item.opening_debit or Decimal(str(acc.opening_credit or 0)) != item.opening_credit):
-                    raise HTTPException(status.HTTP_409_CONFLICT,
-                        f"الحساب {item.code} عليه قيود؛ لا يمكن تغيير رصيده الافتتاحي بالاستيراد")
-                acc.account_name_ar = item.name
-                acc.classification_id = item.classification_id
-                acc.normal_balance = item.normal_balance
-                if not has_lines:
-                    acc.opening_debit = item.opening_debit
-                    acc.opening_credit = item.opening_credit
-                updated += 1
+            acc = Account(account_code=item.code, account_name_ar=item.name, classification_id=item.classification_id,
+                          normal_balance=item.normal_balance, opening_debit=Decimal("0.00"),
+                          opening_credit=Decimal("0.00"), is_active=True)
+            db.add(acc)
             created[key] = acc
         db.flush()
         for item in plan.items:
@@ -306,8 +290,8 @@ def import_accounts(
             else:
                 acc.parent_account_id = None
         write_audit(db, user.user_id, "Import", "ChartOfAccounts", "bulk", None,
-                    {"file": file.filename, "created": len(plan.items) - updated, "updated": updated,
-                     "skipped_existing": plan.skipped_existing, "update_existing": update_existing})
+                    {"file": file.filename, "created": len(plan.items),
+                     "skipped_existing": plan.skipped_existing, "opening_balances_zero": True})
         db.commit()
     except HTTPException:
         db.rollback()
@@ -315,11 +299,10 @@ def import_accounts(
     except IntegrityError:
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "في كود مكرر اتضاف في نفس الوقت — جرّب تاني")
-    report.created = len(plan.items) - updated
+    report.created = len(plan.items)
     report.dry_run = False
-    # Include update count without breaking the existing response schema (message field is optional).
     if hasattr(report, "message"):
-        report.message = f"تمت إضافة {report.created} وتحديث {updated} حساب"
+        report.message = f"تمت إضافة {report.created} حساب جديد، وتخطي {plan.skipped_existing} حساب موجود"
     return report
 
 
