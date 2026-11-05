@@ -187,7 +187,7 @@ function shell(title, path = "") {
   $("#menubtn").onclick = () => app.classList.toggle("open");
   $(".scrim").onclick = () => app.classList.remove("open");
   $("#printbtn").onclick = () => window.print();
-  $("#langbtn").onclick = () => { LANG = isEN() ? "ar" : "en"; try { localStorage.setItem("fs_lang", LANG); } catch {} applyLanguage(); route(); };
+  $("#langbtn").onclick = async () => { LANG = isEN() ? "ar" : "en"; try { localStorage.setItem("fs_lang", LANG); } catch {} applyLanguage(); route(); if (auth.loggedIn) { try { await api("/auth/language", { method: "PUT", json: { language: LANG } }); auth.updateUser({ preferred_language: LANG }); } catch (e) { toast(errText(e)); } } };
   $("#out").onclick = async () => { try { await api("/auth/logout", { method: "POST" }); } catch {} auth.clear(); resetSession(); location.hash = "#/login"; };
   $("#bell").onclick = () => draftCount() > 0 ? (location.hash = "#/journal") : toast(tr("لا توجد قيود غير مرحّلة", "No unposted journal entries"));
   $("#themebtn").onclick = () => {
@@ -223,7 +223,7 @@ function loginPage() {
     <div class="f"><label>${tr("اسم المستخدم", "Username")}</label><input name="u" autocomplete="username" required autofocus></div>
     <div class="f"><label>${tr("كلمة المرور", "Password")}</label><input name="p" type="password" autocomplete="current-password" required></div>
     <div class="err" id="e"></div><button class="btn primary" style="width:100%">${tr("دخول", "Sign in")}</button></form>`;
-  root.querySelector("#loginlang").onclick = () => { LANG = isEN() ? "ar" : "en"; try { localStorage.setItem("fs_lang", LANG); } catch {} applyLanguage(); loginPage(); };
+  root.querySelector("#loginlang").onclick = () => { LANG = isEN() ? "ar" : "en"; try { localStorage.setItem("fs_lang", LANG); localStorage.setItem("fs_lang_manual", "1"); } catch {} applyLanguage(); loginPage(); };
   const f = root.querySelector("form");
   f.onsubmit = async ev => {
     ev.preventDefault(); const b = f.querySelector("button"); b.disabled = true;
