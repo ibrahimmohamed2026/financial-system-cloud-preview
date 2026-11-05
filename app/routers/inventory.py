@@ -179,6 +179,7 @@ class SupplierInvoiceIn(BaseModel):
     purchase_order_id: int
     tax_account_id: int | None = None
     tax_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    price_variance_reason: str | None = Field(default=None, min_length=8, max_length=500)
     lines: list[SupplierInvoiceLineIn] = Field(min_length=1)
 
 class SupplierInvoicePaymentIn(BaseModel):
@@ -186,6 +187,9 @@ class SupplierInvoicePaymentIn(BaseModel):
     transaction_date: date
     amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
     voucher_no: str | None = Field(default=None, max_length=50)
+
+class SupplierInvoiceCancelIn(BaseModel):
+    reason: str = Field(min_length=8, max_length=500)
 
 def _cent(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -1099,7 +1103,7 @@ def list_supplier_invoices(_: User = Depends(require_permission("PurchaseCycle",
         "supplier":db.get(Counterparty,x.supplier_id).legal_name if db.get(Counterparty,x.supplier_id) else "",
         "net_amount":str(x.net_amount),"tax_amount":str(x.tax_amount),"total_amount":str(x.total_amount),
         "paid_amount":str(db.scalar(select(func.coalesce(func.sum(TreasuryTransaction.outflow),0)).where(TreasuryTransaction.supplier_invoice_id==x.invoice_id)) or 0),
-        "status":x.status,"journal_entry_id":x.journal_entry_id} for x in invoices]}
+        "status":x.status,"journal_entry_id":x.journal_entry_id,"price_variance_reason":x.price_variance_reason} for x in invoices]}
 
 
 @purchases.get("/reports/supplier-aging")
@@ -1213,7 +1217,7 @@ def create_supplier_invoice(body:SupplierInvoiceIn,user:User=Depends(require_per
         raise HTTPException(409,"رقم الفاتورة مستخدم لهذا المورد")
     if len({x.purchase_order_line_id for x in body.lines})!=len(body.lines):raise HTTPException(422,"لا تكرر بند أمر الشراء في الفاتورة")
     po_lines={x.line_id:x for x in db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==po.purchase_order_id).with_for_update()).all()}
-    prepared=[];net_total=Decimal("0")
+    prepared=[];net_total=Decimal("0");price_variances=[]
     for row in body.lines:
         pl=po_lines.get(row.purchase_order_line_id)
         if not pl:raise HTTPException(422,"بند الفاتورة لا يتبع أمر الشراء المحدد")
@@ -1222,27 +1226,47 @@ def create_supplier_invoice(body:SupplierInvoiceIn,user:User=Depends(require_per
             SupplierInvoiceLine.purchase_order_line_id==pl.line_id,SupplierInvoice.status!="Cancelled")) or 0))
         available=Decimal(str(pl.received_quantity or 0))-invoiced
         if row.quantity>available:raise HTTPException(409,f"كمية الفاتورة تتجاوز الكمية المستلمة غير المفوترة ({available})")
+        if abs(Decimal(str(row.unit_price))-Decimal(str(pl.unit_price))) > Decimal("0.0001"):
+            price_variances.append({"purchase_order_line_id": pl.line_id, "po_unit_price": str(pl.unit_price), "invoice_unit_price": str(row.unit_price)})
         amount=_cent(row.quantity*row.unit_price);net_total+=amount;prepared.append((row,amount))
+    if price_variances and not (body.price_variance_reason or "").strip():
+        raise HTTPException(422, "يوجد اختلاف بين سعر الفاتورة وسعر أمر الشراء؛ اكتب سبب الفرق قبل الحفظ")
+    if body.price_variance_reason and not price_variances:
+        raise HTTPException(422, "سبب فرق السعر غير مطلوب لأن أسعار البنود مطابقة لأمر الشراء")
     if body.tax_amount and not body.tax_account_id:raise HTTPException(422,"حدد حساب ضريبة المدخلات")
     if body.tax_account_id:_invoice_account(db,body.tax_account_id,"DR","حساب ضريبة المدخلات")
     tax=_cent(body.tax_amount);net_total=_cent(net_total);total=_cent(net_total+tax)
     inv=SupplierInvoice(supplier_id=party.counterparty_id,purchase_order_id=po.purchase_order_id,project_id=po.project_id,invoice_no=body.invoice_no,
         invoice_date=body.invoice_date,tax_account_id=body.tax_account_id,net_amount=net_total,tax_amount=tax,
-        total_amount=total,status="Draft",created_by=user.user_id)
+        total_amount=total,status="Draft",created_by=user.user_id,
+        price_variance_reason=body.price_variance_reason.strip() if body.price_variance_reason else None)
     db.add(inv)
     try:db.flush()
     except IntegrityError:
         db.rollback();raise HTTPException(409,"رقم الفاتورة مستخدم لهذا المورد")
     for row,amount in prepared:db.add(SupplierInvoiceLine(invoice_id=inv.invoice_id,purchase_order_line_id=row.purchase_order_line_id,
         account_id=row.account_id,quantity=row.quantity,unit_price=row.unit_price,net_amount=amount))
-    write_audit(db,user.user_id,"Create","SupplierInvoices",inv.invoice_id,new={"invoice_no":inv.invoice_no,"total_amount":str(total)})
+    write_audit(db,user.user_id,"Create","SupplierInvoices",inv.invoice_id,new={"invoice_no":inv.invoice_no,"total_amount":str(total),
+        "price_variances":price_variances,"price_variance_reason":inv.price_variance_reason})
     db.commit();return {"invoice_id":inv.invoice_id,"invoice_no":inv.invoice_no,"status":inv.status,"total_amount":str(total)}
+
+@purchases.post("/invoices/{invoice_id}/cancel")
+def cancel_supplier_invoice(invoice_id:int,body:SupplierInvoiceCancelIn,user:User=Depends(require_permission("PurchaseCycle","Delete")),db:Session=Depends(get_db)):
+    inv=db.scalar(select(SupplierInvoice).where(SupplierInvoice.invoice_id==invoice_id).with_for_update())
+    if not inv:raise HTTPException(404,"فاتورة المورد غير موجودة")
+    if inv.status!="Draft" or inv.journal_entry_id:raise HTTPException(409,"يمكن إلغاء الفاتورة المسودة فقط؛ الفواتير المعتمدة أو المرحلة تحتاج مسار عكس معتمد")
+    old_status=inv.status
+    inv.status="Cancelled"
+    write_audit(db,user.user_id,"Cancel","SupplierInvoices",invoice_id,old={"status":old_status},new={"status":inv.status,"reason":body.reason.strip()})
+    db.commit()
+    return {"invoice_id":invoice_id,"status":inv.status}
 
 @purchases.post("/invoices/{invoice_id}/approve")
 def approve_supplier_invoice(invoice_id:int,user:User=Depends(require_permission("PurchaseCycle","Approve")),db:Session=Depends(get_db)):
     inv=db.scalar(select(SupplierInvoice).where(SupplierInvoice.invoice_id==invoice_id).with_for_update())
     if not inv:raise HTTPException(404,"فاتورة المورد غير موجودة")
     if inv.status!="Draft":raise HTTPException(409,"الفاتورة ليست مسودة")
+    if inv.created_by == user.user_id:raise HTTPException(403,"لا يجوز اعتماد فاتورة المورد بواسطة منشئها")
     supplier=db.get(Counterparty,inv.supplier_id)
     if not supplier or not supplier.linked_account_id:raise HTTPException(409,"اربط حساب الدائنين للمورد من سجل المورد")
     _invoice_account(db,supplier.linked_account_id,"CR","حساب الدائنين للمورد")
@@ -1330,20 +1354,9 @@ def approve_order(order_id:int,user:User=Depends(require_permission("PurchaseCyc
     return {"purchase_order_id":po.purchase_order_id,"status":po.status}
 
 @purchases.post("/{order_id}/receive")
-def receive_order(order_id:int,user:User=Depends(require_permission("InventoryManagement","Post")),db:Session=Depends(get_db)):
-    po=db.scalar(select(PurchaseOrder).where(PurchaseOrder.purchase_order_id==order_id).with_for_update())
-    if not po: raise HTTPException(404,"أمر الشراء غير موجود")
-    if po.status not in ("Approved","PartiallyReceived"): raise HTTPException(409,"يجب اعتماد أمر الشراء قبل الاستلام")
-    lines=db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==order_id)).all()
-    for line in lines:
-        remaining=Decimal(str(line.quantity))-Decimal(str(line.received_quantity or 0))
-        if remaining>0:
-            movement_no=f"PO-{po.order_no}-{line.line_id}"
-            if not db.scalar(select(InventoryMovement.movement_id).where(InventoryMovement.movement_no==movement_no)):
-                db.add(InventoryMovement(movement_no=movement_no,item_id=line.item_id,warehouse_id=po.warehouse_id,movement_date=date.today(),movement_type="IN",quantity=remaining,unit_cost=line.unit_price,reference=po.order_no,notes="استلام أمر شراء",created_by=user.user_id))
-            line.received_quantity=line.quantity
-    po.status="Received";write_audit(db,user.user_id,"Receive","PurchaseOrders",po.purchase_order_id,new={"status":po.status});db.commit()
-    return {"purchase_order_id":po.purchase_order_id,"status":po.status,"message":"تم الاستلام وتحديث أرصدة المخزون"}
+def receive_order_legacy(order_id:int,user:User=Depends(require_permission("InventoryManagement","Post"))):
+    # Keep the legacy URL explicit but disable its all-at-once stock mutation.
+    raise HTTPException(410, "مسار الاستلام القديم متوقف. استخدم محضر الاستلام التفصيلي عبر /api/purchases/{order_id}/receipts")
 
 @purchases.get("/receipts")
 def list_purchase_receipts(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
@@ -1376,6 +1389,8 @@ def create_purchase_receipt(order_id: int, body: PurchaseGoodsReceiptIn,
         raise HTTPException(409, "يجب اعتماد أمر الشراء قبل تسجيل محضر الاستلام")
     if body.receipt_date < po.order_date:
         raise HTTPException(422, "تاريخ الاستلام لا يمكن أن يسبق تاريخ أمر الشراء")
+    if body.receipt_date > date.today():
+        raise HTTPException(422, "لا يمكن تسجيل محضر استلام بتاريخ مستقبلي")
     if len({line.purchase_order_line_id for line in body.lines}) != len(body.lines):
         raise HTTPException(422, "لا تكرر بند أمر الشراء في محضر الاستلام")
     po_lines = {line.line_id: line for line in db.scalars(
