@@ -20,6 +20,7 @@ export async function render(main, { api }) {
   const load = async () => {
     data = await api("/trial-balance?" + (() => {
       const p = new URLSearchParams();
+      p.set("lang", localStorage.getItem("fs_lang") === "en" ? "en" : "ar");
       if ($("#df").value) p.set("date_from", $("#df").value);
       if ($("#dt").value) p.set("date_to", $("#dt").value);
       if ($("#q").value.trim()) p.set("q", $("#q").value.trim());
