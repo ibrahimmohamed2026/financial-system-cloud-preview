@@ -16,7 +16,7 @@ const SCREENS = {
   "/admin/users": L("./pages/admin.js?v=20261019-user-avatar-1"),
   "/admin/backup": L("./pages/backup.js"),
   "/admin/company": L("./pages/company.js?v=20261105-company-i18n-1"),
-  "/accounts": L("./pages/accounts.js"),
+  "/accounts": L("./pages/accounts.js?v=20261105-accounts-i18n-1"),
   "/projects": L("./pages/projects.js?v=20261105-projects-i18n-1"),
   "/journal": L("./pages/journal.js?v=20261105-journal-description-separators-1"),
   "/trial-balance": L("./pages/trial_balance.js"),
