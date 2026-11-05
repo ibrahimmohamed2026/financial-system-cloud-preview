@@ -458,6 +458,47 @@ def post_stocktake(stocktake_id: int, user: User = Depends(require_permission("I
         raise HTTPException(409, "تعذر ترحيل تسويات الجرد؛ لم يتم تعديل الأرصدة")
     return {"stocktake_id": stocktake_id, "status": x.status, "adjustments": created}
 
+@inventory.get("/returns/lookups")
+def inventory_return_lookups(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
+    sources = []
+    for order in db.scalars(select(PurchaseOrder).where(PurchaseOrder.status == "Received").order_by(PurchaseOrder.purchase_order_id.desc())).all():
+        for line in db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id == order.purchase_order_id)).all():
+            reserved = db.scalar(select(func.coalesce(func.sum(InventoryReturnLine.quantity), 0)).join(
+                InventoryReturn, InventoryReturn.return_id == InventoryReturnLine.return_id).where(
+                InventoryReturn.return_type == "Supplier", InventoryReturn.status.in_(("PendingApproval", "Approved", "Posted")),
+                InventoryReturnLine.purchase_order_line_id == line.line_id)) or 0
+            available = Decimal(str(line.received_quantity or 0)) - Decimal(str(reserved))
+            if available <= 0:
+                continue
+            item = db.get(InventoryItem, line.item_id)
+            warehouse = db.get(InventoryWarehouse, order.warehouse_id)
+            sources.append({"key": f"P-{line.line_id}", "return_type": "Supplier", "source_line_id": line.line_id,
+                "item_id": line.item_id, "item": item.name if item else "", "item_code": item.code if item else "",
+                "warehouse_id": order.warehouse_id, "warehouse": warehouse.name if warehouse else "",
+                "source_document": order.order_no, "counterparty_name": order.supplier_name,
+                "available": str(available), "unit_cost": str(line.unit_price)})
+    for request in db.scalars(select(SiteIssueRequest).where(SiteIssueRequest.status.in_(("Issued", "PartiallyIssued"))).order_by(SiteIssueRequest.request_id.desc())).all():
+        for line in db.scalars(select(SiteIssueRequestLine).where(SiteIssueRequestLine.request_id == request.request_id)).all():
+            movements = db.execute(select(InventoryMovement.warehouse_id, func.sum(InventoryMovement.quantity)).where(
+                InventoryMovement.reference == request.request_no, InventoryMovement.item_id == line.item_id,
+                InventoryMovement.movement_type == "OUT").group_by(InventoryMovement.warehouse_id)).all()
+            for warehouse_id, issued in movements:
+                reserved = db.scalar(select(func.coalesce(func.sum(InventoryReturnLine.quantity), 0)).join(
+                    InventoryReturn, InventoryReturn.return_id == InventoryReturnLine.return_id).where(
+                    InventoryReturn.return_type == "Site", InventoryReturn.status.in_(("PendingApproval", "Approved", "Posted")),
+                    InventoryReturnLine.site_issue_line_id == line.line_id, InventoryReturn.warehouse_id == warehouse_id)) or 0
+                available = Decimal(str(issued or 0)) - Decimal(str(reserved))
+                if available <= 0:
+                    continue
+                item = db.get(InventoryItem, line.item_id)
+                warehouse = db.get(InventoryWarehouse, warehouse_id)
+                sources.append({"key": f"S-{line.line_id}-{warehouse_id}", "return_type": "Site", "source_line_id": line.line_id,
+                    "item_id": line.item_id, "item": item.name if item else "", "item_code": item.code if item else "",
+                    "warehouse_id": warehouse_id, "warehouse": warehouse.name if warehouse else "",
+                    "source_document": request.request_no, "counterparty_name": request.site_name or "",
+                    "available": str(available), "unit_cost": "0"})
+    return {"items": sources}
+
 @inventory.get("/returns")
 def list_inventory_returns(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
     rows = db.scalars(select(InventoryReturn).order_by(InventoryReturn.return_date.desc(), InventoryReturn.return_id.desc()).limit(300)).all()
