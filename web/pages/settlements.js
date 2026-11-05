@@ -1,6 +1,6 @@
 import { esc, formDialog, toast, safe, money as formatMoney } from "../ui.js";
 import { showActivity } from "../activity.js";
-import { openPrintWindow } from "../print.js?v=20261022-print-popup-fallback-1";
+import { openPrintWindow } from "../print.js?v=20261105-settlements-print-i18n-1";
 import { translate as tr } from "../i18n.js";
 const SCREEN="ContractSettlements";
 const money=n=>Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
