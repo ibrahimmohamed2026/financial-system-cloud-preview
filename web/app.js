@@ -180,6 +180,7 @@ function shell(title, path = "") {
   api("/company-profile").then(company => {
     const logo = $(".brand img");
     if (logo && company?.logo_data) logo.src = company.logo_data;
+    if (company?.logo_data) root.querySelectorAll(".alliance-logo").forEach(img => { img.src = company.logo_data; });
   }).catch(() => {});
   const app = $(".app");
   root.querySelectorAll(".nav-gh").forEach(b => b.onclick = () => b.parentElement.classList.toggle("open"));
