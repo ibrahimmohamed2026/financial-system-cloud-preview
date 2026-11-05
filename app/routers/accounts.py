@@ -25,7 +25,7 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 SCREEN = "ChartOfAccounts"
 router = APIRouter(prefix="/accounts", tags=["ChartOfAccounts"])
 
-_FIELDS = ("account_code", "account_name_ar", "parent_account_id", "classification_id",
+_FIELDS = ("account_code", "account_name_ar", "account_name_en", "parent_account_id", "classification_id",
            "normal_balance", "opening_debit", "opening_credit", "is_active")
 
 
@@ -126,7 +126,7 @@ def list_accounts(
     stmt = select(Account)
     if q and q.strip():
         like = f"%{q.strip()}%"
-        stmt = stmt.where(or_(Account.account_code.ilike(like), Account.account_name_ar.ilike(like)))
+        stmt = stmt.where(or_(Account.account_code.ilike(like), Account.account_name_ar.ilike(like), Account.account_name_en.ilike(like)))
     if classification_id is not None:
         stmt = stmt.where(Account.classification_id == classification_id)
     if parent_id is not None:
@@ -158,6 +158,7 @@ def export_pdf(
     q: str | None = Query(None, description="بحث في الكود أو الاسم"),
     classification_id: int | None = None,
     is_active: bool | None = None,
+    lang: str = Query("ar", pattern="^(ar|en)$"),
     user: User = Depends(require_permission(SCREEN, "Print")),
     db: Session = Depends(get_db),
 ):
@@ -165,7 +166,7 @@ def export_pdf(
     all_accounts = db.scalars(select(Account).order_by(Account.account_code)).all()
     by_id = {a.account_id: a for a in all_accounts}
     parents = {a.parent_account_id for a in all_accounts if a.parent_account_id}
-    classes = {c.classification_id: c.name_ar for c in db.scalars(select(AccountClassification))}
+    classes = {c.classification_id: (c.name_en if lang == "en" and c.name_en else c.name_ar) for c in db.scalars(select(AccountClassification))}
 
     def level(a: Account) -> int:
         n, cur, guard = 0, a, 0
@@ -176,14 +177,14 @@ def export_pdf(
     needle = (q or "").strip().lower()
     rows = []
     for a in all_accounts:
-        if needle and needle not in a.account_code.lower() and needle not in a.account_name_ar.lower():
+        if needle and needle not in a.account_code.lower() and needle not in a.account_name_ar.lower() and needle not in (a.account_name_en or "").lower():
             continue
         if classification_id is not None and a.classification_id != classification_id:
             continue
         if is_active is not None and a.is_active != is_active:
             continue
         rows.append({
-            "code": a.account_code, "name": a.account_name_ar, "level": level(a),
+            "code": a.account_code, "name": (a.account_name_en if lang == "en" and a.account_name_en else a.account_name_ar), "level": level(a),
             "is_parent": a.account_id in parents, "classification": classes.get(a.classification_id, ""),
             "normal_balance": a.normal_balance, "debit": a.opening_debit, "credit": a.opening_credit,
             "is_active": a.is_active,
