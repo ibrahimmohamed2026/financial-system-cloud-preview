@@ -90,7 +90,7 @@ def settlement_out(x, db: Session | None = None):
             TreasuryTransaction.settlement_id == x.settlement_id,
             TreasuryTransaction.status == "تم الصرف")) or 0)
     remaining = max(ZERO, Decimal(x.net_amount or 0) - paid)
-    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":normalized_deductions(x),"vat_amount":str(x.vat_amount),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"remaining_amount":str(money(remaining)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
+    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":normalized_deductions(x),"vat_amount":str(x.vat_amount),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"remaining_amount":str(money(remaining)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
 def settlement_line_out(line, item=None):
     item = item
     return {"settlement_item_id":line.settlement_item_id,"contract_item_id":line.contract_item_id,"item_no":item.item_no if item else "","description":item.description if item else "","unit":item.unit if item else "","contract_quantity":str(item.quantity) if item else "0","quantity":str(line.quantity),"unit_price":str(line.unit_price),"amount":str(line.amount),"account_id":getattr(line,"account_id",None) or (getattr(item,"account_id",None) if item else None)}
@@ -135,7 +135,7 @@ class SettlementLineIn(BaseModel):
     quantity: Decimal = Field(gt=0)
 class SettlementIn(BaseModel):
     settlement_side: Literal["Customer","Subcontractor"]; settlement_no: str = Field(min_length=1,max_length=50)
-    settlement_date: date; counterparty_name: str = Field(min_length=1,max_length=200)
+    settlement_date: date; counterparty_name: str = Field(min_length=1,max_length=200); counterparty_name_en: str | None = Field(default=None,max_length=200)
     work_value: Optional[Decimal] = Field(default=None,gt=0)
     items: list[SettlementLineIn] = Field(default_factory=list)
     vat_rate: Optional[Decimal] = Field(default=None,ge=0,le=100)
@@ -469,7 +469,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     vat=money(work*vat_rate/Decimal("100")); net=money(work+vat-total)
     if net<0: raise HTTPException(422,"الخصومات والضريبة تجعل صافي المستخلص سالبًا")
     seq=(db.scalar(select(func.max(ContractSettlement.sequence_no)).where(ContractSettlement.contract_id==contract_id,ContractSettlement.settlement_side==side)) or 0)+1
-    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,settlement_no=body.settlement_no,settlement_date=body.settlement_date,counterparty_name=body.counterparty_name,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
+    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,settlement_no=body.settlement_no,settlement_date=body.settlement_date,counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
     for item, quantity, amount in lines:
         db.add(ContractSettlementItem(settlement_id=x.settlement_id,contract_item_id=item.item_id,account_id=item.account_id,quantity=quantity,unit_price=item.unit_price,amount=amount))
