@@ -77,6 +77,7 @@ class ClassificationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     classification_id: int
     name_ar: str
+    name_en: str | None = None
     statement_type: str
 
 
@@ -84,6 +85,7 @@ class AccountCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     account_code: str = Field(min_length=1, max_length=30)
     account_name_ar: str = Field(min_length=1, max_length=300)
+    account_name_en: str | None = Field(default=None, max_length=300)
     parent_account_id: int | None = None
     classification_id: int
     normal_balance: Literal["DR", "CR"]
@@ -103,6 +105,7 @@ class AccountUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     account_code: str | None = Field(default=None, min_length=1, max_length=30)
     account_name_ar: str | None = Field(default=None, min_length=1, max_length=300)
+    account_name_en: str | None = Field(default=None, max_length=300)
     parent_account_id: int | None = None
     classification_id: int | None = None
     normal_balance: Literal["DR", "CR"] | None = None
@@ -116,6 +119,7 @@ class AccountOut(BaseModel):
     account_id: int
     account_code: str
     account_name_ar: str
+    account_name_en: str | None = None
     parent_account_id: int | None
     classification_id: int
     normal_balance: str
