@@ -38,6 +38,13 @@ const SCREENS = {
   "/inventory/stocktakes": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
   "/inventory/returns": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
   "/purchases": L("./pages/purchases.js?v=20261105-purchasing-phase3-4"),
+  "/purchases/requisitions": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
+  "/purchases/quotations": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
+  "/purchases/orders": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
+  "/purchases/receipts": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
+  "/purchases/invoices": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
+  "/purchases/payments": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
+  "/purchases/reports": L("./pages/purchases.js?v=20261105-purchasing-screens-1"),
   "/counterparties": L("./pages/counterparties.js?v=20261105-counterparty-names-i18n-2"),
   // Preserve the older type-specific links while using the unified party registry.
   "/customers": L("./pages/counterparties.js?v=20261105-counterparties-i18n-1"),
@@ -148,6 +155,13 @@ function titleOf(path) {
   if (path === "/inventory/stocktakes") return tr("الجرد والتسويات", "Stocktakes & Adjustments");
   if (path === "/inventory/returns") return tr("المرتجعات", "Inventory Returns");
   if (path === "/purchases") return tr("دورة المشتريات", "Purchasing Cycle");
+  if (path === "/purchases/requisitions") return tr("طلبات الشراء", "Purchase Requisitions");
+  if (path === "/purchases/quotations") return tr("عروض أسعار الموردين", "Supplier Quotations");
+  if (path === "/purchases/orders") return tr("أوامر الشراء", "Purchase Orders");
+  if (path === "/purchases/receipts") return tr("استلام التوريدات", "Goods Receipts");
+  if (path === "/purchases/invoices") return tr("فواتير الموردين", "Supplier Invoices");
+  if (path === "/purchases/payments") return tr("سداد الموردين", "Supplier Payments");
+  if (path === "/purchases/reports") return tr("تقارير الموردين", "Supplier Reports");
   for (const s of sectionsOrdered()) for (const x of s.screens) if (x.route === path) return tOf(x);
   return "";
 }
@@ -167,6 +181,7 @@ function navHtml(path) {
   for (const g of NAV_GROUPS) {
     const screens = all.filter(x => (g.routes || []).includes(x.route) || (g.sectionCodes || []).includes(x._section));
     if ((g.routes || []).includes("/inventory") && screens.some(x => x.route === "/inventory")) screens.push({route:"/inventory/receipts",title_ar:"استلام التوريدات",title_en:"Goods Receipts"},{route:"/inventory/items",title_ar:"الأصناف",title_en:"Items"},{route:"/inventory/warehouses",title_ar:"المخازن",title_en:"Warehouses"},{route:"/inventory/balances",title_ar:"أرصدة المخزون",title_en:"Stock Balances"},{route:"/inventory/movements",title_ar:"حركة المخزون",title_en:"Stock Movements"},{route:"/inventory/transfers",title_ar:"التحويلات بين المخازن",title_en:"Warehouse Transfers"},{route:"/inventory/site-issues",title_ar:"طلبات صرف المواقع",title_en:"Site Issue Requests"},{route:"/inventory/stocktakes",title_ar:"الجرد والتسويات",title_en:"Stocktakes & Adjustments"},{route:"/inventory/returns",title_ar:"المرتجعات",title_en:"Inventory Returns"});
+    if ((g.routes || []).includes("/purchases") && screens.some(x => x.route === "/purchases")) screens.push({route:"/purchases/requisitions",title_ar:"طلبات الشراء",title_en:"Purchase Requisitions"},{route:"/purchases/quotations",title_ar:"عروض أسعار الموردين",title_en:"Supplier Quotations"},{route:"/purchases/orders",title_ar:"أوامر الشراء",title_en:"Purchase Orders"},{route:"/purchases/receipts",title_ar:"استلام التوريدات",title_en:"Goods Receipts"},{route:"/purchases/invoices",title_ar:"فواتير الموردين",title_en:"Supplier Invoices"},{route:"/purchases/payments",title_ar:"سداد الموردين",title_en:"Supplier Payments"},{route:"/purchases/reports",title_ar:"تقارير الموردين",title_en:"Supplier Reports"});
     h += renderGroup(isEN() ? g.en : g.ar, g.icon, screens);
   }
   for (const s of sectionsOrdered()) {
