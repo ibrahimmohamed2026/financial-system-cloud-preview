@@ -925,3 +925,52 @@ dialog .journal-lines textarea{min-width:150px;resize:vertical}
  #rows td:nth-child(3){min-width:190px}
  .pager .btn{min-width:76px}
 }
+
+/* ===== ADEX ERP — financial reports and control workspace ===== */
+.reports-result{min-width:0;overflow:hidden}
+.reports-result .tbl-wrap{max-width:100%;overflow-x:auto;overscroll-behavior-inline:contain}
+.reports-result table{min-width:760px}
+.reports-result .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.reports-result .kpi{min-width:0}
+.reports-toolbar{display:flex;flex-wrap:wrap;gap:10px}
+.reports-toolbar .w{min-width:150px;flex:1 1 150px}
+.reports-toolbar .btn{white-space:nowrap}
+.report-account-picker{min-width:0}
+.report-account-picker input{width:100%;min-width:0}
+.fc-page{min-width:0;max-width:100%;overflow:hidden}
+.fc-page>.card{min-width:0;border:1px solid var(--line);border-radius:15px;box-shadow:var(--shadow)}
+.fc-page h2,.fc-page h3{color:var(--ink)}
+.fc-page #fc-kpis .card{min-width:0;background:linear-gradient(145deg,var(--card),var(--brand-soft));border:1px solid var(--line);border-radius:12px}
+.fc-page #fc-kpis h2{font-size:clamp(17px,2vw,23px);overflow-wrap:anywhere}
+.fc-page .tbl-wrap{max-width:100%;overflow-x:auto;overscroll-behavior-inline:contain}
+.fc-page table{min-width:850px}
+.fc-page label{display:flex;flex-direction:column;gap:5px;color:var(--muted);font-size:12px;font-weight:700}
+.fc-page input,.fc-page select{min-width:0}
+.fc-page #fc-account-result .tbl-wrap{margin-top:12px}
+@media(max-width:760px){
+ .reports-head{gap:10px}
+ .reports-links{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+ .reports-links .btn{justify-content:center;min-width:0;white-space:normal;text-align:center}
+ .reports-result{padding:12px}
+ .reports-result-head{align-items:flex-start;flex-wrap:wrap}
+ .reports-toolbar .w{flex:1 1 calc(50% - 8px);min-width:0}
+ .reports-toolbar>.btn{flex:1 1 calc(50% - 8px);justify-content:center}
+ .fc-page>.card{padding:13px!important}
+ .fc-page>section:first-child>div{align-items:stretch!important}
+ .fc-page>section:first-child>div>div:last-child{width:100%}
+ .fc-page>section:first-child>div>div:last-child .btn{flex:1}
+ .fc-page>section:first-child>div:nth-of-type(2){display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));align-items:end}
+ .fc-page>section:first-child>div:nth-of-type(2) label{min-width:0}
+ .fc-page>section:first-child>div:nth-of-type(2) .btn{grid-column:1/-1}
+ .fc-page #fc-kpis{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+ .fc-page #fc-kpis .card{padding:12px!important}
+ .fc-page #fc-kpis h2{font-size:17px}
+ .fc-page #fc-account-result>div{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+ .fc-page #fc-account-result .card{padding:11px!important}
+}
+@media(max-width:420px){
+ .fc-page #fc-kpis{grid-template-columns:minmax(0,1fr)!important}
+ .fc-page #fc-account-result>div{grid-template-columns:minmax(0,1fr)!important}
+ .reports-links{grid-template-columns:minmax(0,1fr)}
+ .reports-toolbar .w{flex-basis:100%}
+}
