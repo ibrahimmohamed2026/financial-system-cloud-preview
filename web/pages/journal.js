@@ -22,7 +22,7 @@ export async function render(main, { api, auth }) {
     if (st.q) p.set("q", st.q); if (st.status) p.set("status", st.status); if (st.df) p.set("date_from", st.df); if (st.dt) p.set("date_to", st.dt);
     const r = await api("/journal?" + p); items = r.items; total = r.total;
     $("#rows").innerHTML = items.map(e => `<tr style="cursor:pointer" data-id="${e.journal_entry_id}" class="${e.status === "Reversed" ? "off" : ""}"><td>${esc(e.entry_no)}</td><td>${e.entry_date}</td><td>${(e.line_descriptions || []).map((l, i) => `<div class="journal-desc-line"${i ? ' style="border-top:1px solid var(--line);margin-top:5px;padding-top:5px"' : ""}>${esc(l.description || "—")}</div>`).join("") || esc(e.description || "—")}</td>
-      <td class="num">${money(e.total_debit)}</td><td class="num">${money(e.total_credit)}</td><td><span class="tag ${{ Posted: "ok", Reversed: "bad", Draft: "warn" }[e.status] || ""}">${ST[e.status]}</span></td></tr>`).join("")
+      <td class="num">${money(e.total_debit)}</td><td class="num">${money(e.total_credit)}</td><td><span class="tag ${{ Posted: "ok", Reversed: "bad", Draft: "warn" }[e.status] || ""}">${statusLabel(e.status)}</span></td></tr>`).join("")
       || `<tr><td colspan="6" class="muted">${trn("لا توجد قيود","No journal entries")}</td></tr>`;
     const to = Math.min(st.skip + PAGE, total);
     $("#info").textContent = total ? `${st.skip + 1}–${to} ${trn("من","of")} ${total}` : "0"; $("#prev").disabled = !st.skip; $("#next").disabled = to >= total;
@@ -46,7 +46,7 @@ export async function render(main, { api, auth }) {
     const rows = e.lines.map(l => `<tr><td>${l.line_no}</td><td>${esc(l.account_code)} — ${esc(l.account_name)}</td><td>${esc(l.project_name || "—")}</td><td>${esc(l.description || "—")}</td><td class="num">${money(l.debit_amount)}</td><td class="num">${money(l.credit_amount)}</td></tr>`).join("");
     w.document.open();
     w.document.write(`<!doctype html><html lang="${trn("ar","en")}" dir="${trn("rtl","ltr")}"><head><meta charset="utf-8"><title>${trn("قيد","Journal entry")} ${esc(e.entry_no)}</title><style>
-      @page{size:A4 portrait;margin:12mm}*{box-sizing:border-box}body{font:14px/1.7 Tahoma,Arial,sans-serif;color:#111;margin:0}.print-header{display:flex;align-items:center;gap:18px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #bbb}.print-header img{display:block;width:190px;max-height:65px;object-fit:contain}.print-header h1{font-size:22px;margin:0;text-align:right}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}.meta div{border:1px solid #bbb;padding:8px 10px}.meta b{margin-inline-start:6px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #555;padding:7px 8px;text-align:right;vertical-align:top}th{background:#eee}.num{text-align:left;white-space:nowrap;font-variant-numeric:tabular-nums}.total td{font-weight:bold;background:#f1f1f1}.signs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-top:55px;text-align:center}.signs div{border-top:1px solid #555;padding-top:8px}@media print{tr{break-inside:avoid}}
+      @page{size:A4 portrait;margin:12mm}*{box-sizing:border-box}body{font:14px/1.7 Tahoma,Arial,sans-serif;color:#111;margin:0}.print-header{display:flex;align-items:center;gap:18px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #bbb}.print-header img{display:block;width:190px;max-height:65px;object-fit:contain}.print-header h1{font-size:22px;margin:0;text-align:${trn("right","left")}}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}.meta div{border:1px solid #bbb;padding:8px 10px}.meta b{margin-inline-start:6px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #555;padding:7px 8px;text-align:right;vertical-align:top}th{background:#eee}.num{text-align:left;white-space:nowrap;font-variant-numeric:tabular-nums}.total td{font-weight:bold;background:#f1f1f1}.signs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-top:55px;text-align:center}.signs div{border-top:1px solid #555;padding-top:8px}@media print{tr{break-inside:avoid}}
       </style></head><body><header class="print-header"><img src="${esc(companyLogo)}" alt="شعار الشركة"><div style="display:flex;flex-direction:column;gap:3px"><div style="display:flex;flex-direction:column;gap:2px;color:#17375f;font-size:10px;line-height:1.35"><b style="font-size:13px;color:#a77b22">تحالف شركات</b><strong>المقاولون العرب (عثمان احمد عثمان وشركاه)</strong><strong>الغرابلي للأعمال الهندسية المتكاملة</strong><strong>أبناء سيناء للتشييد والبناء</strong></div><h1>${esc((trn('ar','en')==='en'?(company?.name_en||company?.name_ar):company?.name_ar)||trn('الشركة','Company'))}</h1><small>${companyInfo}</small></div><h1>${trn("قيد يومية","Journal Entry")}</h1></header><div class="meta"><div>${trn("رقم القيد","Entry No.")}: <b>${esc(e.entry_no)}</b></div><div>${trn("التاريخ","Date")}: <b>${esc(e.entry_date)}</b></div><div>${trn("الحالة","Status")}: <b>${esc(statusLabel(e.status))}</b></div></div>
       <table><thead><tr><th>#</th><th>${trn("الحساب","Account")}</th><th>${trn("مركز التكلفة","Cost Center")}</th><th>${trn("بيان السطر","Line description")}</th><th>${trn("مدين","Debit")}</th><th>${trn("دائن","Credit")}</th></tr></thead><tbody>${rows}<tr class="total"><td colspan="4">${trn("الإجمالي","Total")}</td><td class="num">${money(e.total_debit)}</td><td class="num">${money(e.total_credit)}</td></tr></tbody></table><div class="signs"><div>${trn("إعداد","Prepared by")}</div><div>${trn("مراجعة","Reviewed by")}</div><div>${trn("اعتماد","Approved by")}</div></div><script>window.onload=()=>window.print()<\/script></body></html>`);
     w.document.close();
@@ -105,9 +105,9 @@ export async function render(main, { api, auth }) {
       if (!box) return;
       if (!needle && !showAll) { box.hidden = true; box.innerHTML = ""; q(`#ln input[data-i="${i}"][data-k="label"]`)?.setAttribute("aria-expanded", "false"); return; }
       const matches = needle ? accs.filter(a => a.label.toLocaleLowerCase().includes(needle)) : accs;
-      const hint = needle ? "" : '<div class="journal-account-hint">الحسابات المتاحة — اكتب الاسم أو الكود لتصفية القائمة</div>';
+      const hint = needle ? "" : `<div class="journal-account-hint">${trn("الحسابات المتاحة — اكتب الاسم أو الكود لتصفية القائمة","Available accounts — type a name or code to filter")}</div>`;
       box.innerHTML = hint + (matches.length ? matches.map(a => `<button type="button" class="journal-account-option" role="option" data-account-id="${a.account_id}" data-line="${i}">${esc(a.label)}</button>`).join("")
-        : '<div class="journal-account-empty">لا يوجد حساب مطابق للاسم أو الكود</div>');
+        : `<div class="journal-account-empty">${trn("لا يوجد حساب مطابق للاسم أو الكود","No account matches the name or code")}</div>`);
       box.hidden = false;
       const input = q(`#ln input[data-i="${i}"][data-k="label"]`), rect = input.getBoundingClientRect();
       input?.setAttribute("aria-expanded", "true");
@@ -129,7 +129,7 @@ export async function render(main, { api, auth }) {
     const sum = () => {
       const d = lines.reduce((a, l) => a + (+l.d || 0), 0), c = lines.reduce((a, l) => a + (+l.c || 0), 0);
       q("#td").textContent = d.toFixed(2); q("#tc").textContent = c.toFixed(2);
-      q("#bal").innerHTML = Math.abs(d - c) < 0.005 && d > 0 ? '<span class="tag ok">متوازن</span>' : `<span class="tag bad">فرق ${(d - c).toFixed(2)}</span>`;
+      q("#bal").innerHTML = Math.abs(d - c) < 0.005 && d > 0 ? `<span class="tag ok">${trn("متوازن","Balanced")}</span>` : `<span class="tag bad">فرق ${(d - c).toFixed(2)}</span>`;
     };
     q("#ln").oninput = ev => { const t = ev.target, i = t.dataset.i; if (i === undefined) return; lines[i][t.dataset.k] = t.value;
       if (t.dataset.k === "label") { lines[i].account_id = null; t.setAttribute("aria-expanded", "true"); searchAccounts(+i, t.value); }
@@ -169,8 +169,8 @@ export async function render(main, { api, auth }) {
     const fys = await api("/journal/fiscal-years");
     const dlg = formDialog({ title: trn("السنوات المالية","Fiscal years"), submitText: trn("إضافة سنة","Add year"), values: { start_date: `${new Date().getFullYear()}-01-01`, end_date: `${new Date().getFullYear()}-12-31` },
       fields: [{ name: "start_date", label: trn("بداية السنة","Start date"), type: "date", required: true }, { name: "end_date", label: trn("نهاية السنة","End date"), type: "date", required: true }, { name: "company_name", label: trn("اسم الشركة (لأول سنة فقط)","Company name (first year only)"), full: true }],
-      onSubmit: async v => { await api("/journal/fiscal-years", { method: "POST", json: { start_date: v.start_date, end_date: v.end_date, company_name: v.company_name || "الشركة" } }); toast(trn("تمت الإضافة","Added")); } });
-    dlg.querySelector("h3").insertAdjacentHTML("afterend", `<p class="muted">الموجود: ${fys.map(f => `${f.start_date} → ${f.end_date}`).join(" | ") || trn("لا توجد سنوات","No fiscal years")}</p>`);
+      onSubmit: async v => { await api("/journal/fiscal-years", { method: "POST", json: { start_date: v.start_date, end_date: v.end_date, company_name: v.company_name || company?.name_en || company?.name_ar || "الشركة" } }); toast(trn("تمت الإضافة","Added")); } });
+    dlg.querySelector("h3").insertAdjacentHTML("afterend", `<p class="muted">${trn("الموجود:","Existing:")} ${fys.map(f => `${f.start_date} → ${f.end_date}`).join(" | ") || trn("لا توجد سنوات","No fiscal years")}</p>`);
   });
   await load();
 }
