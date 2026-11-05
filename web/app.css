@@ -892,3 +892,36 @@ dialog .actions{border-top:1px solid var(--line);padding-top:12px;margin-top:14p
 }
 :root[data-theme="dark"] .st-panel-head{background:linear-gradient(100deg,#172941,#1b2d43)}
 :root[data-theme="dark"] #detail .contract-notes{background:linear-gradient(120deg,#172941,#1d3048)}
+
+/* ===== ADEX ERP — journal workspace and mobile editor ===== */
+#rows tr[data-id]{transition:background .15s ease}
+#rows tr[data-id]:hover{background:var(--brand-soft)}
+#rows td{vertical-align:middle}
+#rows td:nth-child(3){min-width:220px;line-height:1.7}
+#rows td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.pager{display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;padding:14px 8px;color:var(--muted);font-size:12px}
+dialog[open]{max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto}
+dialog form{min-width:0;padding:18px}
+dialog .tbl-wrap{max-width:100%;overflow-x:auto}
+dialog table{min-width:650px}
+dialog .journal-lines{min-width:850px}
+dialog .journal-lines input,dialog .journal-lines select,dialog .journal-lines textarea{max-width:100%;min-width:0}
+dialog .journal-lines textarea{min-width:150px;resize:vertical}
+.journal-account-picker{min-width:190px}
+.journal-account-options{z-index:10000;border:1px solid var(--line);border-radius:10px;background:var(--card);box-shadow:0 12px 32px rgba(8,20,38,.2);overflow:auto}
+.journal-account-option{display:block;width:100%;padding:10px 12px;text-align:right;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--ink);font:inherit}
+.journal-account-option:hover,.journal-account-option:focus{background:var(--brand-soft);outline:0}
+.journal-account-hint,.journal-account-empty{padding:10px 12px;color:var(--muted);font-size:12px}
+@media(max-width:700px){
+ dialog[open]{width:calc(100vw - 16px)!important;max-width:calc(100vw - 16px)!important;max-height:calc(100dvh - 16px);padding:0!important}
+ dialog form{padding:13px}
+ dialog .actions{display:flex;flex-wrap:wrap;gap:8px}
+ dialog .actions .btn{flex:1 1 120px;justify-content:center}
+ dialog .grid2{grid-template-columns:minmax(0,1fr);gap:10px}
+ dialog .journal-lines{min-width:820px}
+ .pager{gap:8px}
+}
+@media(max-width:420px){
+ #rows td:nth-child(3){min-width:190px}
+ .pager .btn{min-width:76px}
+}
