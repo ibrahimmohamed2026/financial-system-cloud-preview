@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import require_permission, write_audit
 from ..models import (Account, Counterparty, FiscalYear, InventoryItem, InventoryWarehouse,
-    InventoryMovement, InventoryStocktake, InventoryStocktakeLine, SiteIssueRequest, SiteIssueRequestLine, JournalEntry, JournalEntryDetail, PurchaseOrder, PurchaseOrderLine,
+    InventoryMovement, InventoryStocktake, InventoryStocktakeLine, InventoryReturn, InventoryReturnLine, SiteIssueRequest, SiteIssueRequestLine, JournalEntry, JournalEntryDetail, PurchaseOrder, PurchaseOrderLine,
     SupplierInvoice, SupplierInvoiceLine, TreasuryAccount, TreasuryTransaction, Project, User, utcnow)
 from ..counterparties import resolve_counterparty
 
@@ -51,6 +51,22 @@ class MovementBatchIn(BaseModel):
     lines: list[MovementBatchLineIn] = Field(min_length=1)
     reference: str | None = None
     notes: str | None = None
+class InventoryReturnLineIn(BaseModel):
+    item_id: int
+    quantity: Decimal = Field(gt=0)
+    unit_cost: Decimal = Field(default=Decimal("0"), ge=0)
+    purchase_order_line_id: int | None = None
+    site_issue_line_id: int | None = None
+class InventoryReturnIn(BaseModel):
+    return_no: str = Field(min_length=1, max_length=60)
+    return_type: str
+    return_date: date = Field(default_factory=date.today)
+    warehouse_id: int
+    counterparty_name: str | None = None
+    source_document: str | None = None
+    notes: str | None = None
+    lines: list[InventoryReturnLineIn] = Field(min_length=1)
+
 class StocktakeLineIn(BaseModel):
     item_id: int
     counted_quantity: Decimal = Field(ge=0)
@@ -441,6 +457,158 @@ def post_stocktake(stocktake_id: int, user: User = Depends(require_permission("I
         db.rollback()
         raise HTTPException(409, "تعذر ترحيل تسويات الجرد؛ لم يتم تعديل الأرصدة")
     return {"stocktake_id": stocktake_id, "status": x.status, "adjustments": created}
+
+@inventory.get("/returns")
+def list_inventory_returns(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
+    rows = db.scalars(select(InventoryReturn).order_by(InventoryReturn.return_date.desc(), InventoryReturn.return_id.desc()).limit(300)).all()
+    result = []
+    for x in rows:
+        warehouse = db.get(InventoryWarehouse, x.warehouse_id)
+        lines = []
+        for line in db.scalars(select(InventoryReturnLine).where(InventoryReturnLine.return_id == x.return_id).order_by(InventoryReturnLine.line_id)).all():
+            item = db.get(InventoryItem, line.item_id)
+            lines.append({"line_id": line.line_id, "item_id": line.item_id, "item": item.name if item else "",
+                "item_code": item.code if item else "", "quantity": str(line.quantity), "unit_cost": str(line.unit_cost)})
+        result.append({"return_id": x.return_id, "return_no": x.return_no, "return_type": x.return_type,
+            "return_date": str(x.return_date), "warehouse": warehouse.name if warehouse else "",
+            "counterparty_name": x.counterparty_name, "source_document": x.source_document,
+            "notes": x.notes, "status": x.status, "lines": lines})
+    return {"items": result}
+
+@inventory.post("/returns", status_code=201)
+def create_inventory_return(body: InventoryReturnIn, user: User = Depends(require_permission("InventoryManagement", "Add")), db: Session = Depends(get_db)):
+    if body.return_type not in ("Supplier", "Site"):
+        raise HTTPException(422, "نوع المرتجع غير صحيح")
+    if db.scalar(select(InventoryReturn.return_id).where(InventoryReturn.return_no == body.return_no)):
+        raise HTTPException(409, "رقم المرتجع مستخدم بالفعل")
+    warehouse = db.get(InventoryWarehouse, body.warehouse_id)
+    if not warehouse or not warehouse.is_active:
+        raise HTTPException(422, "المخزن غير موجود أو غير نشط")
+    if len({line.item_id for line in body.lines}) != len(body.lines):
+        raise HTTPException(422, "لا تكرر الصنف في مستند المرتجع")
+    prepared = []
+    for row in body.lines:
+        item = db.get(InventoryItem, row.item_id)
+        if not item or not item.is_active:
+            raise HTTPException(422, f"الصنف {row.item_id} غير موجود أو غير نشط")
+        if body.return_type == "Supplier":
+            if not row.purchase_order_line_id or row.site_issue_line_id:
+                raise HTTPException(422, "مرتجع المورد يجب ربطه ببند أمر شراء")
+            source = db.get(PurchaseOrderLine, row.purchase_order_line_id)
+            if not source or source.item_id != row.item_id:
+                raise HTTPException(422, "بند أمر الشراء لا يطابق الصنف")
+            order = db.get(PurchaseOrder, source.purchase_order_id)
+            if not order or order.warehouse_id != body.warehouse_id or order.status not in ("Received", "PartiallyReceived"):
+                raise HTTPException(422, "أمر الشراء غير مستلم أو لا يتبع المخزن المحدد")
+            already = db.scalar(select(func.coalesce(func.sum(InventoryReturnLine.quantity), 0)).join(
+                InventoryReturn, InventoryReturn.return_id == InventoryReturnLine.return_id).where(
+                InventoryReturn.return_type == "Supplier", InventoryReturn.status.in_(("Approved", "Posted")),
+                InventoryReturnLine.purchase_order_line_id == source.line_id)) or 0
+            available = Decimal(str(source.received_quantity or 0)) - Decimal(str(already))
+            if Decimal(str(row.quantity)) > available:
+                raise HTTPException(409, f"كمية المرتجع تتجاوز الكمية المستلمة المتبقية للصنف {item.name}")
+        else:
+            if not row.site_issue_line_id or row.purchase_order_line_id:
+                raise HTTPException(422, "مرتجع الموقع يجب ربطه ببند طلب صرف")
+            source = db.get(SiteIssueRequestLine, row.site_issue_line_id)
+            if not source or source.item_id != row.item_id:
+                raise HTTPException(422, "بند طلب الصرف لا يطابق الصنف")
+            request = db.get(SiteIssueRequest, source.request_id)
+            if not request or request.status not in ("Issued", "PartiallyIssued") or request.warehouse_id != body.warehouse_id:
+                raise HTTPException(422, "طلب الصرف غير مصروف أو لا يتبع المخزن المحدد")
+            already = db.scalar(select(func.coalesce(func.sum(InventoryReturnLine.quantity), 0)).join(
+                InventoryReturn, InventoryReturn.return_id == InventoryReturnLine.return_id).where(
+                InventoryReturn.return_type == "Site", InventoryReturn.status.in_(("Approved", "Posted")),
+                InventoryReturnLine.site_issue_line_id == source.line_id)) or 0
+            available = Decimal(str(source.issued_quantity or 0)) - Decimal(str(already))
+            if Decimal(str(row.quantity)) > available:
+                raise HTTPException(409, f"كمية المرتجع تتجاوز الكمية المصروفة المتبقية للصنف {item.name}")
+        prepared.append(row)
+    x = InventoryReturn(return_no=body.return_no, return_type=body.return_type, return_date=body.return_date,
+        warehouse_id=body.warehouse_id, counterparty_name=body.counterparty_name, source_document=body.source_document,
+        notes=body.notes, status="PendingApproval", created_by=user.user_id)
+    db.add(x)
+    try:
+        db.flush()
+        for row in prepared:
+            db.add(InventoryReturnLine(return_id=x.return_id, item_id=row.item_id, quantity=row.quantity,
+                unit_cost=row.unit_cost, purchase_order_line_id=row.purchase_order_line_id, site_issue_line_id=row.site_issue_line_id))
+        write_audit(db, user.user_id, "Create", "InventoryReturns", x.return_id,
+            new={"return_no": x.return_no, "return_type": x.return_type, "lines": len(prepared), "status": x.status})
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "تعذر حفظ مستند المرتجع")
+    return {"return_id": x.return_id, "return_no": x.return_no, "status": x.status}
+
+@inventory.post("/returns/{return_id}/approve")
+def approve_inventory_return(return_id: int, user: User = Depends(require_permission("InventoryManagement", "Approve")), db: Session = Depends(get_db)):
+    x = db.scalar(select(InventoryReturn).where(InventoryReturn.return_id == return_id).with_for_update())
+    if not x:
+        raise HTTPException(404, "مستند المرتجع غير موجود")
+    if x.status != "PendingApproval":
+        raise HTTPException(409, "مستند المرتجع ليس في انتظار الاعتماد")
+    if x.created_by == user.user_id:
+        raise HTTPException(403, "لا يجوز اعتماد المرتجع بواسطة معدّه")
+    x.status = "Approved"
+    x.approved_by = user.user_id
+    x.approved_at = utcnow()
+    write_audit(db, user.user_id, "Approve", "InventoryReturns", return_id, new={"status": x.status})
+    db.commit()
+    return {"return_id": return_id, "status": x.status}
+
+@inventory.post("/returns/{return_id}/post")
+def post_inventory_return(return_id: int, user: User = Depends(require_permission("InventoryManagement", "Post")), db: Session = Depends(get_db)):
+    x = db.scalar(select(InventoryReturn).where(InventoryReturn.return_id == return_id).with_for_update())
+    if not x:
+        raise HTTPException(404, "مستند المرتجع غير موجود")
+    if x.status != "Approved":
+        raise HTTPException(409, "يجب اعتماد المرتجع قبل الترحيل")
+    if x.created_by == user.user_id or x.approved_by == user.user_id:
+        raise HTTPException(403, "يجب أن يكون مرحّل المرتجع شخصًا غير معدّه والمعتمد")
+    lines = db.scalars(select(InventoryReturnLine).where(InventoryReturnLine.return_id == return_id).order_by(InventoryReturnLine.line_id).with_for_update()).all()
+    if not lines:
+        raise HTTPException(409, "مستند المرتجع لا يحتوي على أصناف")
+    adjustments = []
+    for line in lines:
+        if x.return_type == "Supplier":
+            source = db.get(PurchaseOrderLine, line.purchase_order_line_id)
+            already = db.scalar(select(func.coalesce(func.sum(InventoryReturnLine.quantity), 0)).join(
+                InventoryReturn, InventoryReturn.return_id == InventoryReturnLine.return_id).where(
+                InventoryReturn.return_type == "Supplier", InventoryReturn.status == "Posted",
+                InventoryReturnLine.purchase_order_line_id == line.purchase_order_line_id)) or 0
+            if not source or Decimal(str(already)) + Decimal(str(line.quantity)) > Decimal(str(source.received_quantity or 0)):
+                raise HTTPException(409, "تجاوزت المرتجعات الكمية المستلمة؛ راجع المستندات السابقة")
+            current = _balance(db, line.item_id, x.warehouse_id)
+            if current < Decimal(str(line.quantity)):
+                raise HTTPException(409, "رصيد المخزن لا يكفي لمرتجع المورد")
+            movement_type = "OUT"
+        else:
+            source = db.get(SiteIssueRequestLine, line.site_issue_line_id)
+            already = db.scalar(select(func.coalesce(func.sum(InventoryReturnLine.quantity), 0)).join(
+                InventoryReturn, InventoryReturn.return_id == InventoryReturnLine.return_id).where(
+                InventoryReturn.return_type == "Site", InventoryReturn.status == "Posted",
+                InventoryReturnLine.site_issue_line_id == line.site_issue_line_id)) or 0
+            if not source or Decimal(str(already)) + Decimal(str(line.quantity)) > Decimal(str(source.issued_quantity or 0)):
+                raise HTTPException(409, "تجاوزت المرتجعات الكمية المصروفة للموقع")
+            movement_type = "IN"
+        movement_no = f"RET-{x.return_id}-{line.line_id}-{uuid4().hex[:8]}"
+        db.add(InventoryMovement(movement_no=movement_no, item_id=line.item_id, warehouse_id=x.warehouse_id,
+            movement_date=x.return_date, movement_type=movement_type, quantity=line.quantity, unit_cost=line.unit_cost,
+            reference=x.return_no, notes=("مرتجع مورد" if x.return_type == "Supplier" else "مرتجع موقع") + " " + x.return_no,
+            created_by=user.user_id))
+        adjustments.append({"movement_no": movement_no, "item_id": line.item_id, "type": movement_type, "quantity": str(line.quantity)})
+    x.status = "Posted"
+    x.posted_by = user.user_id
+    x.posted_at = utcnow()
+    write_audit(db, user.user_id, "Post", "InventoryReturns", return_id,
+        new={"status": x.status, "return_type": x.return_type, "movements": adjustments})
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "تعذر ترحيل المرتجع؛ لم يتم تعديل الأرصدة")
+    return {"return_id": return_id, "status": x.status, "movements": adjustments}
 
 @inventory.get("/warehouses")
 def list_warehouses(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
