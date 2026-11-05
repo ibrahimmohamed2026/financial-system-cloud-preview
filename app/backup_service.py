@@ -391,7 +391,8 @@ def restore_backup(path: Path) -> dict:
             if bad:
                 raise BackupError(f"ملف النسخة تالف (فشل فحص السلامة عند: {bad})")
 
-            _preflight_restore(z, manifest)  # رفض النسخ غير المتوافقة قبل أي تغيير أو نسخة أمان
+            if not legacy:
+                _preflight_restore(z, manifest)  # رفض النسخ غير المتوافقة قبل أي تغيير أو نسخة أمان
             safety = create_backup("pre_restore")       # نسخة أمان بالحالة الحالية قبل أي تغيير
             try:
                 with engine.begin() as conn:
