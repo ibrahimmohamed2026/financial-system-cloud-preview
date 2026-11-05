@@ -276,22 +276,22 @@ function homeHtml(s) {
   if (k.total_debit != null) cards.push(kpi(tr("إجمالي المدين", "Total Debit"), "dollar", fmt0(k.total_debit), "", tr("القيود المرحّلة", "Posted entries")));
   if (k.treasury_balance != null) {
     const v = +k.treasury_balance;
-    const others = (s.other_balances || []).map(o => \`\${esc(o.currency)} \${fmt0(o.balance)}\`).join(" · ");
+    const others = (s.other_balances || []).map(o => `${esc(o.currency)} ${fmt0(o.balance)}`).join(" · ");
     cards.push(kpi(tr("رصيد الخزينة", "Treasury Balance"), "bank", (v > 0 ? "+" : "") + fmt0(v), v > 0 ? "pos" : v < 0 ? "neg" : "", esc(s.currency) + (others ? " · " + others : "")));
   }
   if (k.total_credit != null) cards.push(kpi(tr("إجمالي الدائن", "Total Credit"), "swap", fmt0(k.total_credit), "", tr("القيود المرحّلة", "Posted entries")));
   if (k.draft_entries != null) cards.push(kpi(tr("قيود غير مرحّلة", "Unposted Entries"), "receipt", fmt0(k.draft_entries), "", tr("مسودات تنتظر الترحيل", "Drafts awaiting posting")));
-  const table = s.latest_entries == null ? "" : \`<section class="card home-panel home-recent"><div class="card-h"><div><span class="home-eyebrow">\${tr("الحركة المحاسبية", "ACCOUNTING ACTIVITY")}</span><h3>\${tr("آخر القيود", "Recent Journal Entries")}</h3></div>
-      <div class="seg"><button class="btn sm primary" type="button" data-f="all">\${tr("الكل", "All")}</button><button class="btn sm" type="button" data-f="Draft">\${tr("مسودة", "Draft")}</button></div></div>
-      <div class="tbl-wrap"><table><thead><tr><th>\${tr("رقم القيد", "Entry No.")}</th><th>\${tr("التاريخ", "Date")}</th><th>\${tr("البيان", "Description")}</th><th>\${tr("الحالة", "Status")}</th></tr></thead><tbody id="lastrows"></tbody></table></div>
-      <div class="home-panel-foot">\${tr("اضغط على أي قيد للانتقال إلى دفتر اليومية", "Select an entry to open the journal")}</div></section>\`;
-  const chart = s.cash_series == null ? "" : \`<section class="card home-panel home-chart"><div class="card-h"><div><span class="home-eyebrow">\${tr("الموقف النقدي", "CASH POSITION")}</span><h3>\${tr("حركة رصيد الخزينة", "Treasury Balance Trend")}</h3></div><span class="home-period">\${tr("آخر 12 شهر", "Last 12 months")}</span></div>\${s.cash_series.length ? \`<div class="chart">\${lineChart(s.cash_series)}</div>\` : \`<div class="home-empty">\${tr("لا توجد حركة خزينة مسجلة خلال الفترة", "No treasury activity recorded for this period")}</div>\`}<div class="home-panel-foot">\${tr("الرصيد التراكمي بعملة", "Cumulative balance in")} \${esc(s.currency || "")}</div></section>\`;
-  if (!cards.length && !table && !chart) return \`<p class="empty">\${tr("لا توجد بيانات متاحة لصلاحياتك — استخدم القائمة الجانبية للتنقل.", "No data is available for your permissions. Use the sidebar to navigate.")}</p>\`;
+  const table = s.latest_entries == null ? "" : `<section class="card home-panel home-recent"><div class="card-h"><div><span class="home-eyebrow">${tr("الحركة المحاسبية", "ACCOUNTING ACTIVITY")}</span><h3>${tr("آخر القيود", "Recent Journal Entries")}</h3></div>
+      <div class="seg"><button class="btn sm primary" type="button" data-f="all">${tr("الكل", "All")}</button><button class="btn sm" type="button" data-f="Draft">${tr("مسودة", "Draft")}</button></div></div>
+      <div class="tbl-wrap"><table><thead><tr><th>${tr("رقم القيد", "Entry No.")}</th><th>${tr("التاريخ", "Date")}</th><th>${tr("البيان", "Description")}</th><th>${tr("الحالة", "Status")}</th></tr></thead><tbody id="lastrows"></tbody></table></div>
+      <div class="home-panel-foot">${tr("اضغط على أي قيد للانتقال إلى دفتر اليومية", "Select an entry to open the journal")}</div></section>`;
+  const chart = s.cash_series == null ? "" : `<section class="card home-panel home-chart"><div class="card-h"><div><span class="home-eyebrow">${tr("الموقف النقدي", "CASH POSITION")}</span><h3>${tr("حركة رصيد الخزينة", "Treasury Balance Trend")}</h3></div><span class="home-period">${tr("آخر 12 شهر", "Last 12 months")}</span></div>${s.cash_series.length ? `<div class="chart">${lineChart(s.cash_series)}</div>` : `<div class="home-empty">${tr("لا توجد حركة خزينة مسجلة خلال الفترة", "No treasury activity recorded for this period")}</div>`}<div class="home-panel-foot">${tr("الرصيد التراكمي بعملة", "Cumulative balance in")} ${esc(s.currency || "")}</div></section>`;
+  if (!cards.length && !table && !chart) return `<p class="empty">${tr("لا توجد بيانات متاحة لصلاحياتك — استخدم القائمة الجانبية للتنقل.", "No data is available for your permissions. Use the sidebar to navigate.")}</p>`;
   const dateLabel = new Date().toLocaleDateString(isEN() ? "en-US" : "ar-EG", {weekday:"long",year:"numeric",month:"long",day:"numeric"});
-  return \`<section class="home-hero"><div><span class="home-eyebrow">\${tr("نظرة عامة", "OVERVIEW")}</span><h1>\${tr("لوحة المعلومات المالية", "Financial Dashboard")}</h1><p>\${tr("ملخص سريع لأهم الأرصدة والحركة المحاسبية في النظام.", "A concise view of key balances and accounting activity.")}</p></div><div class="home-date">\${ico("calendar")}<span>\${dateLabel}</span></div></section>
-    <div class="home-section-title"><div><h2>\${tr("المؤشرات الرئيسية", "Key Financial Indicators")}</h2><p>\${tr("القيم المعروضة حسب البيانات والصلاحيات المتاحة", "Figures based on available data and permissions")}</p></div></div>
-    <div class="kpis home-kpis">\${cards.join("")}</div><div class="home-section-title home-activity-title"><div><h2>\${tr("ملخص النشاط", "Activity Overview")}</h2><p>\${tr("تابع أحدث القيود واتجاه رصيد الخزينة", "Review recent entries and treasury trends")}</p></div></div>
-    <div class="dash home-dash">\${table}\${chart}</div>\`;
+  return `<section class="home-hero"><div><span class="home-eyebrow">${tr("نظرة عامة", "OVERVIEW")}</span><h1>${tr("لوحة المعلومات المالية", "Financial Dashboard")}</h1><p>${tr("ملخص سريع لأهم الأرصدة والحركة المحاسبية في النظام.", "A concise view of key balances and accounting activity.")}</p></div><div class="home-date">${ico("calendar")}<span>${dateLabel}</span></div></section>
+    <div class="home-section-title"><div><h2>${tr("المؤشرات الرئيسية", "Key Financial Indicators")}</h2><p>${tr("القيم المعروضة حسب البيانات والصلاحيات المتاحة", "Figures based on available data and permissions")}</p></div></div>
+    <div class="kpis home-kpis">${cards.join("")}</div><div class="home-section-title home-activity-title"><div><h2>${tr("ملخص النشاط", "Activity Overview")}</h2><p>${tr("تابع أحدث القيود واتجاه رصيد الخزينة", "Review recent entries and treasury trends")}</p></div></div>
+    <div class="dash home-dash">${table}${chart}</div>`;
 }
 function drawRows(main, entries, only) {
   const tb = main.querySelector("#lastrows"); if (!tb) return;
