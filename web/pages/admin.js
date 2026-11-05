@@ -1,6 +1,7 @@
 import { esc, toast, errText } from "../ui.js";
 import { auth, userAvatarUrl } from "../api.js";
-export async function render(root, {api}) {\n  const tr = (ar, en) => { try { return localStorage.getItem("fs_lang") === "en" ? en : ar; } catch { return ar; } };
+export async function render(root, {api}) {
+  const tr = (ar, en) => { try { return localStorage.getItem("fs_lang") === "en" ? en : ar; } catch { return ar; } };
   root.innerHTML = `<div class="pagehead"><h2>${tr("إدارة المستخدمين والصلاحيات", "Users & Permissions")}</h2><button class="btn" id="back">${tr("الرئيسية", "Home")}</button></div>
     <div class="tabs"><button class="btn primary" data-tab="users">${tr("المستخدمون", "Users")}</button><button class="btn" data-tab="roles">${tr("الأدوار والصلاحيات", "Roles & Permissions")}</button></div>
     <section id="content" class="panel">${tr("جاري التحميل...", "Loading...")}</section>`;
