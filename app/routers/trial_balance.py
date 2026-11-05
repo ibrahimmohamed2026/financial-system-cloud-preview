@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from ..common import money
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/trial-balance", tags=["TrialBalance"])
 
 
 @router.get("")
-def trial_balance(date_from: date | None = None, date_to: date | None = None, q: str | None = None,
+def trial_balance(date_from: date | None = None, date_to: date | None = None, q: str | None = None, lang: str = Query("ar", pattern="^(ar|en)$"),
                   classification_id: int | None = None, hide_zero: bool = False, leaves_only: bool = False,
                   _: User = Depends(require_permission(SCREEN, "View")), db: Session = Depends(get_db)):
     rows = compute_tb(db, date_from, date_to)
@@ -26,7 +26,7 @@ def trial_balance(date_from: date | None = None, date_to: date | None = None, q:
     needle = (q or "").strip().lower()
     items = []
     for r in rows:
-        if needle and needle not in r["code"].lower() and needle not in r["name"].lower():
+        if needle and needle not in r["code"].lower() and needle not in r["name"].lower() and needle not in (r.get("name_en") or "").lower():
             continue
         if classification_id is not None and r["classification_id"] != classification_id:
             continue
@@ -34,8 +34,8 @@ def trial_balance(date_from: date | None = None, date_to: date | None = None, q:
             continue
         if hide_zero and not any((r["od"], r["oc"], r["d"], r["c"])):
             continue
-        items.append({"account_id": r["account_id"], "code": r["code"], "name": r["name"], "level": r["level"],
-                      "is_parent": r["is_parent"], "classification": r["classification"],
+        items.append({"account_id": r["account_id"], "code": r["code"], "name": (r.get("name_en") if lang == "en" and r.get("name_en") else r["name"]), "level": r["level"],
+                      "is_parent": r["is_parent"], "classification": (r.get("classification_en") if lang == "en" and r.get("classification_en") else r["classification"]),
                       **{k: money(r[k]) for k in ("od", "oc", "d", "c", "td", "tc", "bd", "bc")}})
     td, tc = tot["od"] + tot["d"], tot["oc"] + tot["c"]
     return {"items": items,
