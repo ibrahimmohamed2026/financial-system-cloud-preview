@@ -1,16 +1,17 @@
 import { esc, money, today, toast, safe, errText, formDialog } from "../ui.js";
 import { translate as trn } from "../i18n.js";
 const SCREEN = "JournalBook", PAGE = 50;
-const ST = { Draft: trn("مسودة","Draft"), Posted: trn("مرحّل","Posted"), Reversed: trn("ملغي","Reversed") };
+const ST = { Draft: "مسودة", Posted: "مرحّل", Reversed: "ملغي" };
 
 export async function render(main, { api, auth }) {
   const can = a => auth.can(SCREEN, a);
+  const statusLabel = s => ({Draft:trn("مسودة","Draft"),Posted:trn("مرحّل","Posted"),Reversed:trn("ملغي","Reversed")}[s] || s || "—");
   const [accs, projs, settlements, company] = await Promise.all([api("/journal/lookup/accounts"), api("/projects/lookup").catch(() => []), api("/journal/lookup/settlements").catch(() => []), api("/company-profile").catch(() => null)]);
   const accByLabel = Object.fromEntries(accs.map(a => [a.label, a.account_id]));
   const st = { q: "", status: "", df: "", dt: "", skip: 0 };
   main.innerHTML = `<div class="toolbar">
     <div class="grow"><label>${trn("بحث (رقم القيد / البيان)","Search (entry number / description)")}</label><input id="q"></div>
-    <div class="w" style="width:130px"><label>${trn("الحالة","Status")}</label><select id="s"><option value="">${trn("الكل","All")}</option>${Object.entries(ST).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></div>
+    <div class="w" style="width:130px"><label>${trn("الحالة","Status")}</label><select id="s"><option value="">${trn("الكل","All")}</option>${Object.entries(ST).map(([k]) => `<option value="${k}">${statusLabel(k)}</option>`).join("")}</select></div>
     <div class="w" style="width:150px"><label>${trn("من","From")}</label><input type="date" id="df"></div><div class="w" style="width:150px"><label>${trn("إلى","To")}</label><input type="date" id="dt"></div>
     ${can("Add") ? `<button class="btn primary" id="add">+ ${trn("قيد جديد","New journal entry")}</button>` : ""}${can("Approve") ? `<button class="btn" id="fy">${trn("السنوات المالية","Fiscal years")}</button>` : ""}</div>
     <div class="tbl-wrap"><table><thead><tr><th>${trn("رقم القيد","Entry No.")}</th><th>${trn("التاريخ","Date")}</th><th>${trn("البيان","Description")}</th><th>${trn("مدين","Debit")}</th><th>${trn("دائن","Credit")}</th><th>${trn("الحالة","Status")}</th></tr></thead><tbody id="rows"></tbody></table></div>
@@ -44,9 +45,9 @@ export async function render(main, { api, auth }) {
     const companyInfo = [company?.name_en, company?.address_ar, company?.phone && `${trn("هاتف","Phone")}: ${company.phone}`, company?.email && `${trn("بريد","Email")}: ${company.email}`, company?.website, company?.tax_number && `${trn("رقم ضريبي","Tax No.")}: ${company.tax_number}`, company?.commercial_register && `${trn("سجل تجاري","Commercial Reg.")}: ${company.commercial_register}`].filter(Boolean).map(esc).join(" | ");
     const rows = e.lines.map(l => `<tr><td>${l.line_no}</td><td>${esc(l.account_code)} — ${esc(l.account_name)}</td><td>${esc(l.project_name || "—")}</td><td>${esc(l.description || "—")}</td><td class="num">${money(l.debit_amount)}</td><td class="num">${money(l.credit_amount)}</td></tr>`).join("");
     w.document.open();
-    w.document.write(`<!doctype html><html lang="${trn("ar","en")}" dir="${trn("rtl","ltr")}"><head><meta charset="utf-8"><title>قيد ${esc(e.entry_no)}</title><style>
+    w.document.write(`<!doctype html><html lang="${trn("ar","en")}" dir="${trn("rtl","ltr")}"><head><meta charset="utf-8"><title>${trn("قيد","Journal entry")} ${esc(e.entry_no)}</title><style>
       @page{size:A4 portrait;margin:12mm}*{box-sizing:border-box}body{font:14px/1.7 Tahoma,Arial,sans-serif;color:#111;margin:0}.print-header{display:flex;align-items:center;gap:18px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #bbb}.print-header img{display:block;width:190px;max-height:65px;object-fit:contain}.print-header h1{font-size:22px;margin:0;text-align:right}.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px}.meta div{border:1px solid #bbb;padding:8px 10px}.meta b{margin-inline-start:6px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #555;padding:7px 8px;text-align:right;vertical-align:top}th{background:#eee}.num{text-align:left;white-space:nowrap;font-variant-numeric:tabular-nums}.total td{font-weight:bold;background:#f1f1f1}.signs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-top:55px;text-align:center}.signs div{border-top:1px solid #555;padding-top:8px}@media print{tr{break-inside:avoid}}
-      </style></head><body><header class="print-header"><img src="${esc(companyLogo)}" alt="شعار الشركة"><div style="display:flex;flex-direction:column;gap:3px"><div style="display:flex;flex-direction:column;gap:2px;color:#17375f;font-size:10px;line-height:1.35"><b style="font-size:13px;color:#a77b22">تحالف شركات</b><strong>المقاولون العرب (عثمان احمد عثمان وشركاه)</strong><strong>الغرابلي للأعمال الهندسية المتكاملة</strong><strong>أبناء سيناء للتشييد والبناء</strong></div><h1>${esc(company?.name_ar||'الشركة')}</h1><small>${companyInfo}</small></div><h1>${trn("قيد يومية","Journal Entry")}</h1></header><div class="meta"><div>${trn("رقم القيد","Entry No.")}: <b>${esc(e.entry_no)}</b></div><div>${trn("التاريخ","Date")}: <b>${esc(e.entry_date)}</b></div><div>${trn("الحالة","Status")}: <b>${esc(ST[e.status] || e.status)}</b></div></div>
+      </style></head><body><header class="print-header"><img src="${esc(companyLogo)}" alt="شعار الشركة"><div style="display:flex;flex-direction:column;gap:3px"><div style="display:flex;flex-direction:column;gap:2px;color:#17375f;font-size:10px;line-height:1.35"><b style="font-size:13px;color:#a77b22">تحالف شركات</b><strong>المقاولون العرب (عثمان احمد عثمان وشركاه)</strong><strong>الغرابلي للأعمال الهندسية المتكاملة</strong><strong>أبناء سيناء للتشييد والبناء</strong></div><h1>${esc((trn('ar','en')==='en'?(company?.name_en||company?.name_ar):company?.name_ar)||trn('الشركة','Company'))}</h1><small>${companyInfo}</small></div><h1>${trn("قيد يومية","Journal Entry")}</h1></header><div class="meta"><div>${trn("رقم القيد","Entry No.")}: <b>${esc(e.entry_no)}</b></div><div>${trn("التاريخ","Date")}: <b>${esc(e.entry_date)}</b></div><div>${trn("الحالة","Status")}: <b>${esc(statusLabel(e.status))}</b></div></div>
       <table><thead><tr><th>#</th><th>${trn("الحساب","Account")}</th><th>${trn("مركز التكلفة","Cost Center")}</th><th>${trn("بيان السطر","Line description")}</th><th>${trn("مدين","Debit")}</th><th>${trn("دائن","Credit")}</th></tr></thead><tbody>${rows}<tr class="total"><td colspan="4">${trn("الإجمالي","Total")}</td><td class="num">${money(e.total_debit)}</td><td class="num">${money(e.total_credit)}</td></tr></tbody></table><div class="signs"><div>${trn("إعداد","Prepared by")}</div><div>${trn("مراجعة","Reviewed by")}</div><div>${trn("اعتماد","Approved by")}</div></div><script>window.onload=()=>window.print()<\/script></body></html>`);
     w.document.close();
   }
@@ -83,9 +84,9 @@ export async function render(main, { api, auth }) {
     const dlg = document.createElement("dialog"); dlg.style.width = "min(980px,97vw)";
     const lines = e ? e.lines.map(l => ({ account_id: l.account_id, label: `${l.account_code} — ${l.account_name}`, project_id: l.project_id || "", d: Number(l.debit_amount) || "", c: Number(l.credit_amount) || "", desc: l.description || e.description || "" }))
       : [{ account_id: null, label: "", project_id: "", d: "", c: "", desc: "" }, { account_id: null, label: "", project_id: "", d: "", c: "", desc: "" }];
-    dlg.innerHTML = `<form method="dialog"><h3>${e ? "تعديل " + esc(e.entry_no) : "قيد جديد"}</h3>
+    dlg.innerHTML = `<form method="dialog"><h3>${e ? trn("تعديل","Edit") + " " + esc(e.entry_no) : trn("قيد جديد","New journal entry")}</h3>
       <div class="grid2"><div class="f"><label>${trn("التاريخ","Date")}</label><input type="date" id="dt" value="${e ? e.entry_date : today()}" required></div>
-      <div class="f"><label>${trn("المستخلص المرتبط (اختياري — لمنع تكرار القيد)","Linked statement (optional — prevents duplicate entries)")}</label><select id="settlement"><option value="">${trn("قيد عام — بدون مستخلص","General entry — no statement")}</option>${settlements.map(s => `<option value="${s.settlement_id}" ${s.settlement_id === e?.source_settlement_id ? "selected" : ""}>${esc(s.settlement_no)} — ${esc(s.contract_no || s.contract_title || trn("عقد غير معروف","Unknown contract"))} — ${s.settlement_side === "Customer" ? trn("عميل","Customer") : trn("مقاول باطن","Subcontractor")} — ${esc(s.status)}${s.journal_entry_id ? ` — ${trn("مرحّل","Posted")}` : ""}</option>`).join("")}</select><small class="muted">عند اختيار مستخلص سبق ترحيله، سيرفض النظام حفظ القيد أو ترحيله.</small></div></div>
+      <div class="f"><label>${trn("المستخلص المرتبط (اختياري — لمنع تكرار القيد)","Linked statement (optional — prevents duplicate entries)")}</label><select id="settlement"><option value="">${trn("قيد عام — بدون مستخلص","General entry — no statement")}</option>${settlements.map(s => `<option value="${s.settlement_id}" ${s.settlement_id === e?.source_settlement_id ? "selected" : ""}>${esc(s.settlement_no)} — ${esc(s.contract_no || s.contract_title || trn("عقد غير معروف","Unknown contract"))} — ${s.settlement_side === "Customer" ? trn("عميل","Customer") : trn("مقاول باطن","Subcontractor")} — ${esc(statusLabel(s.status))}${s.journal_entry_id ? ` — ${trn("مرحّل","Posted")}` : ""}</option>`).join("")}</select><small class="muted">${trn("عند اختيار مستخلص سبق ترحيله، سيرفض النظام حفظ القيد أو ترحيله.","If you select a statement that has already been posted, the system will reject saving or posting this entry.")}</small></div></div>
       <div class="tbl-wrap" style="margin-top:10px;width:100%"><table class="journal-lines"><thead><tr><th>${trn("الحساب","Account")}</th><th>${trn("مركز التكلفة","Cost Center")}</th><th>${trn("مدين","Debit")}</th><th>${trn("دائن","Credit")}</th><th>${trn("بيان السطر","Line description")}</th><th></th></tr></thead><tbody id="ln"></tbody>
       <tfoot><tr class="total"><td colspan="2">${trn("الإجمالي","Total")} <span id="bal"></span></td><td class="num" id="td"></td><td class="num" id="tc"></td><td colspan="2"></td></tr></tfoot></table></div>
       <button class="btn sm" type="button" id="addl" style="margin-top:8px">+ ${trn("سطر","Line")}</button>
@@ -121,7 +122,7 @@ export async function render(main, { api, auth }) {
       q("#ln").innerHTML = lines.map((l, i) => `<tr><td><div class="journal-account-picker" id="account-picker-${i}"><input data-i="${i}" data-k="label" value="${esc(l.label)}" placeholder="اكتب اسم الحساب أو الكود" title="اكتب اسم الحساب أو الكود ثم اختر الحساب" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="account-options-${i}"><div class="journal-account-options" id="account-options-${i}" role="listbox" hidden></div></div></td>
         <td><select data-i="${i}" data-k="project_id"><option value="">—</option>${projs.map(p => `<option value="${p.project_id}" ${p.project_id == l.project_id ? "selected" : ""}>${esc(p.name_ar)}</option>`).join("")}</select></td>
         <td><input type="number" step="0.01" min="0" data-i="${i}" data-k="d" value="${l.d}" style="width:120px"></td><td><input type="number" step="0.01" min="0" data-i="${i}" data-k="c" value="${l.c}" style="width:120px"></td>
-        <td><textarea rows="1" data-i="${i}" data-k="desc" placeholder="اكتب بيان هذا السطر — يمكن كتابة بيان طويل" required aria-label="بيان السطر ${i + 1}">${esc(l.desc)}</textarea></td><td>${lines.length > 2 ? `<button type="button" class="btn sm danger" data-x="${i}">×</button>` : ""}</td></tr>`).join("");
+        <td><textarea rows="1" data-i="${i}" data-k="desc" placeholder="${trn("اكتب بيان هذا السطر — يمكن كتابة بيان طويل","Enter this line description — long descriptions are supported")}" required aria-label="${trn("بيان السطر","Line description")} ${i + 1}">${esc(l.desc)}</textarea></td><td>${lines.length > 2 ? `<button type="button" class="btn sm danger" data-x="${i}">×</button>` : ""}</td></tr>`).join("");
       q("#ln").querySelectorAll('textarea[data-k="desc"]').forEach(el => { el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; });
       sum();
     };
@@ -154,11 +155,11 @@ export async function render(main, { api, auth }) {
       ev.preventDefault();
       try {
         const body = { entry_date: q("#dt").value, source_settlement_id: q("#settlement").value ? +q("#settlement").value : null, lines: lines.filter(l => l.label || l.d || l.c || l.desc).map(l => {
-          const id = l.account_id || accByLabel[l.label]; if (!id) throw new Error(`اختار الحساب من نتائج البحث بالاسم أو الكود: «${l.label || "فارغ"}»`);
+          const id = l.account_id || accByLabel[l.label]; if (!id) throw new Error(`${trn("اختار الحساب من نتائج البحث بالاسم أو الكود:","Select the account from the search results by name or code:")} «${l.label || trn("فارغ","empty")}»`);
           return { account_id: id, project_id: l.project_id ? +l.project_id : null, debit_amount: String(+l.d || 0), credit_amount: String(+l.c || 0), description: l.desc.trim() || null };
         }) };
         await api(e ? "/journal/" + e.journal_entry_id : "/journal", { method: e ? "PUT" : "POST", json: body });
-        dlg.close(); toast("تم الحفظ كمسودة"); await load();
+        dlg.close(); toast(trn("تم الحفظ كمسودة","Saved as draft")); await load();
       } catch (er) { q("#er").textContent = errText(er); }
     };
     draw(); dlg.showModal();
@@ -166,10 +167,10 @@ export async function render(main, { api, auth }) {
   if (can("Add")) $("#add").onclick = () => editor(null);
   if (can("Approve")) $("#fy").onclick = safe(async () => {
     const fys = await api("/journal/fiscal-years");
-    const dlg = formDialog({ title: "السنوات المالية", submitText: "إضافة سنة", values: { start_date: `${new Date().getFullYear()}-01-01`, end_date: `${new Date().getFullYear()}-12-31` },
-      fields: [{ name: "start_date", label: "بداية السنة", type: "date", required: true }, { name: "end_date", label: "نهاية السنة", type: "date", required: true }, { name: "company_name", label: "اسم الشركة (لأول سنة فقط)", full: true }],
-      onSubmit: async v => { await api("/journal/fiscal-years", { method: "POST", json: { start_date: v.start_date, end_date: v.end_date, company_name: v.company_name || "الشركة" } }); toast("تمت الإضافة"); } });
-    dlg.querySelector("h3").insertAdjacentHTML("afterend", `<p class="muted">الموجود: ${fys.map(f => `${f.start_date} → ${f.end_date}`).join(" | ") || "لا توجد سنوات"}</p>`);
+    const dlg = formDialog({ title: trn("السنوات المالية","Fiscal years"), submitText: trn("إضافة سنة","Add year"), values: { start_date: `${new Date().getFullYear()}-01-01`, end_date: `${new Date().getFullYear()}-12-31` },
+      fields: [{ name: "start_date", label: trn("بداية السنة","Start date"), type: "date", required: true }, { name: "end_date", label: trn("نهاية السنة","End date"), type: "date", required: true }, { name: "company_name", label: trn("اسم الشركة (لأول سنة فقط)","Company name (first year only)"), full: true }],
+      onSubmit: async v => { await api("/journal/fiscal-years", { method: "POST", json: { start_date: v.start_date, end_date: v.end_date, company_name: v.company_name || "الشركة" } }); toast(trn("تمت الإضافة","Added")); } });
+    dlg.querySelector("h3").insertAdjacentHTML("afterend", `<p class="muted">الموجود: ${fys.map(f => `${f.start_date} → ${f.end_date}`).join(" | ") || trn("لا توجد سنوات","No fiscal years")}</p>`);
   });
   await load();
 }
