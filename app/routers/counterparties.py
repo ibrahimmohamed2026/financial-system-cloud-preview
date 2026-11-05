@@ -48,6 +48,7 @@ def _out(db: Session, x: Counterparty):
             "linked_account_id": x.linked_account_id, "is_active": x.is_active,
             "linked_account_code": linked_account.account_code if linked_account else None,
             "linked_account_name": linked_account.account_name_ar if linked_account else None,
+            "linked_account_name_en": linked_account.account_name_en if linked_account else None,
             "aliases": aliases, "linked_records": counts}
 
 def _validate_linked_account(db: Session, account_id: int | None, party_type: str) -> None:
@@ -87,9 +88,9 @@ def list_linkable_accounts(_: User = Depends(require_permission("Counterparties"
                            db: Session = Depends(get_db)):
     accounts = db.scalars(select(Account).where(Account.is_active.is_(True)).order_by(Account.account_code)).all()
     parent_ids = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
-    classes = {x.classification_id: x.name_ar for x in db.scalars(select(AccountClassification))}
+    classes = {x.classification_id: (x.name_ar, x.name_en) for x in db.scalars(select(AccountClassification))}
     return [{"account_id": x.account_id, "account_code": x.account_code,
-             "account_name_ar": x.account_name_ar, "classification": classes.get(x.classification_id, "")}
+             "account_name_ar": x.account_name_ar, "account_name_en": x.account_name_en, "classification": classes.get(x.classification_id, ("", None))[0], "classification_en": classes.get(x.classification_id, ("", None))[1]}
             for x in accounts if x.account_id not in parent_ids]
 
 def _customer_close_check(db: Session, x: Counterparty) -> dict:
