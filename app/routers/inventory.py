@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import require_permission, write_audit
 from ..models import (Account, Counterparty, FiscalYear, InventoryItem, InventoryWarehouse,
-    InventoryMovement, InventoryStocktake, InventoryStocktakeLine, InventoryReturn, InventoryReturnLine, SiteIssueRequest, SiteIssueRequestLine, JournalEntry, JournalEntryDetail, PurchaseOrder, PurchaseOrderLine,
+    InventoryMovement, InventoryStocktake, InventoryStocktakeLine, InventoryReturn, InventoryReturnLine, SiteIssueRequest, SiteIssueRequestLine, JournalEntry, JournalEntryDetail, PurchaseOrder, PurchaseOrderLine, PurchaseRequisition, PurchaseRequisitionLine, SupplierQuotation, SupplierQuotationLine,
     SupplierInvoice, SupplierInvoiceLine, TreasuryAccount, TreasuryTransaction, Project, User, utcnow)
 from ..counterparties import resolve_counterparty
 
@@ -115,6 +115,33 @@ class POLineIn(BaseModel):
     item_id: int
     quantity: Decimal = Field(gt=0)
     unit_price: Decimal = Field(ge=0)
+class RequisitionLineIn(BaseModel):
+    item_id: int
+    quantity: Decimal = Field(gt=0)
+    notes: str | None = None
+class RequisitionIn(BaseModel):
+    requisition_no: str = Field(min_length=1, max_length=60)
+    request_date: date = Field(default_factory=date.today)
+    required_date: date | None = None
+    warehouse_id: int
+    project_id: int | None = None
+    notes: str | None = None
+    lines: list[RequisitionLineIn] = Field(min_length=1)
+class QuotationLineIn(BaseModel):
+    item_id: int
+    quantity: Decimal = Field(gt=0)
+    unit_price: Decimal = Field(ge=0)
+class QuotationIn(BaseModel):
+    quotation_no: str = Field(min_length=1, max_length=60)
+    requisition_id: int
+    supplier_name: str = Field(min_length=1, max_length=250)
+    quotation_date: date = Field(default_factory=date.today)
+    valid_until: date | None = None
+    delivery_days: int | None = Field(default=None, ge=0)
+    payment_terms: str | None = None
+    notes: str | None = None
+    lines: list[QuotationLineIn] = Field(min_length=1)
+
 class PurchaseIn(BaseModel):
     order_no: str | None = Field(default=None, max_length=60)
     order_date: date = Field(default_factory=date.today)
@@ -852,6 +879,131 @@ def create_stock_transfer(body: StockTransferIn, user: User = Depends(require_pe
     return {"transfer_no": body.transfer_no, "source_warehouse": source.name,
         "destination_warehouse": destination.name, "movements": created,
         "message": "تم ترحيل التحويل وتحديث رصيد المخزنين"}
+
+@purchases.get("/requisitions")
+def list_requisitions(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
+    rows = db.scalars(select(PurchaseRequisition).order_by(PurchaseRequisition.request_date.desc(), PurchaseRequisition.requisition_id.desc()).limit(300)).all()
+    result = []
+    for x in rows:
+        lines = db.scalars(select(PurchaseRequisitionLine).where(PurchaseRequisitionLine.requisition_id == x.requisition_id).order_by(PurchaseRequisitionLine.line_id)).all()
+        result.append({"requisition_id": x.requisition_id, "requisition_no": x.requisition_no,
+            "request_date": str(x.request_date), "required_date": str(x.required_date) if x.required_date else None,
+            "warehouse_id": x.warehouse_id, "warehouse": db.get(InventoryWarehouse, x.warehouse_id).name if db.get(InventoryWarehouse, x.warehouse_id) else "",
+            "project_id": x.project_id, "project": db.get(Project, x.project_id).name_ar if x.project_id and db.get(Project, x.project_id) else "",
+            "status": x.status, "notes": x.notes, "lines": [{"line_id": l.line_id, "item_id": l.item_id,
+            "item": db.get(InventoryItem, l.item_id).name if db.get(InventoryItem, l.item_id) else "",
+            "quantity": str(l.quantity), "notes": l.notes} for l in lines]})
+    return {"items": result}
+
+@purchases.post("/requisitions", status_code=201)
+def create_requisition(body: RequisitionIn, user: User = Depends(require_permission("PurchaseCycle", "Add")), db: Session = Depends(get_db)):
+    if db.scalar(select(PurchaseRequisition.requisition_id).where(PurchaseRequisition.requisition_no == body.requisition_no)):
+        raise HTTPException(409, "رقم طلب الشراء مستخدم بالفعل")
+    warehouse = db.get(InventoryWarehouse, body.warehouse_id)
+    if not warehouse or not warehouse.is_active: raise HTTPException(422, "المخزن غير موجود أو غير نشط")
+    if body.project_id and not db.get(Project, body.project_id): raise HTTPException(422, "المشروع غير موجود")
+    if len({x.item_id for x in body.lines}) != len(body.lines): raise HTTPException(422, "لا تكرر الصنف داخل الطلب")
+    for line in body.lines:
+        item = db.get(InventoryItem, line.item_id)
+        if not item or not item.is_active: raise HTTPException(422, f"الصنف {line.item_id} غير موجود أو غير نشط")
+    x = PurchaseRequisition(requisition_no=body.requisition_no, request_date=body.request_date,
+        required_date=body.required_date, warehouse_id=body.warehouse_id, project_id=body.project_id,
+        requested_by=user.user_id, status="PendingApproval", notes=body.notes)
+    db.add(x); db.flush()
+    for line in body.lines: db.add(PurchaseRequisitionLine(requisition_id=x.requisition_id, item_id=line.item_id, quantity=line.quantity, notes=line.notes))
+    write_audit(db, user.user_id, "Create", "PurchaseRequisitions", x.requisition_id,
+        new={"requisition_no": x.requisition_no, "lines": len(body.lines), "status": x.status})
+    db.commit()
+    return {"requisition_id": x.requisition_id, "requisition_no": x.requisition_no, "status": x.status}
+
+@purchases.post("/requisitions/{requisition_id}/approve")
+def approve_requisition(requisition_id: int, user: User = Depends(require_permission("PurchaseCycle", "Approve")), db: Session = Depends(get_db)):
+    x = db.scalar(select(PurchaseRequisition).where(PurchaseRequisition.requisition_id == requisition_id).with_for_update())
+    if not x: raise HTTPException(404, "طلب الشراء غير موجود")
+    if x.status != "PendingApproval": raise HTTPException(409, "طلب الشراء ليس في انتظار الاعتماد")
+    if x.requested_by == user.user_id: raise HTTPException(403, "لا يجوز اعتماد طلب الشراء بواسطة مقدمه")
+    x.status = "Approved"; x.approved_by = user.user_id
+    write_audit(db, user.user_id, "Approve", "PurchaseRequisitions", requisition_id, new={"status": x.status})
+    db.commit()
+    return {"requisition_id": requisition_id, "status": x.status}
+
+@purchases.get("/quotations")
+def list_quotations(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
+    rows = db.scalars(select(SupplierQuotation).order_by(SupplierQuotation.quotation_date.desc(), SupplierQuotation.quotation_id.desc()).limit(500)).all()
+    result = []
+    for q in rows:
+        req = db.get(PurchaseRequisition, q.requisition_id)
+        lines = db.scalars(select(SupplierQuotationLine).where(SupplierQuotationLine.quotation_id == q.quotation_id).order_by(SupplierQuotationLine.line_id)).all()
+        result.append({"quotation_id": q.quotation_id, "quotation_no": q.quotation_no, "requisition_id": q.requisition_id,
+            "requisition_no": req.requisition_no if req else "", "supplier_name": q.supplier_name,
+            "quotation_date": str(q.quotation_date), "valid_until": str(q.valid_until) if q.valid_until else None,
+            "delivery_days": q.delivery_days, "payment_terms": q.payment_terms, "notes": q.notes, "status": q.status,
+            "total_amount": str(sum((Decimal(str(l.quantity))*Decimal(str(l.unit_price)) for l in lines), Decimal("0"))),
+            "lines": [{"item_id": l.item_id, "item": db.get(InventoryItem, l.item_id).name if db.get(InventoryItem, l.item_id) else "",
+                "quantity": str(l.quantity), "unit_price": str(l.unit_price)} for l in lines]})
+    return {"items": result}
+
+@purchases.post("/quotations", status_code=201)
+def create_quotation(body: QuotationIn, user: User = Depends(require_permission("PurchaseCycle", "Add")), db: Session = Depends(get_db)):
+    req = db.get(PurchaseRequisition, body.requisition_id)
+    if not req or req.status not in ("Approved", "Quoting"): raise HTTPException(409, "يجب اعتماد طلب الشراء قبل تسجيل عروض الأسعار")
+    if db.scalar(select(SupplierQuotation.quotation_id).where(SupplierQuotation.quotation_no == body.quotation_no)):
+        raise HTTPException(409, "رقم عرض السعر مستخدم بالفعل")
+    req_lines = {l.item_id: l for l in db.scalars(select(PurchaseRequisitionLine).where(PurchaseRequisitionLine.requisition_id == req.requisition_id)).all()}
+    if len({l.item_id for l in body.lines}) != len(body.lines): raise HTTPException(422, "لا تكرر الصنف داخل عرض السعر")
+    if {l.item_id for l in body.lines} != set(req_lines): raise HTTPException(422, "يجب أن يغطي عرض السعر جميع أصناف طلب الشراء")
+    for line in body.lines:
+        if line.item_id not in req_lines or line.quantity != req_lines[line.item_id].quantity:
+            raise HTTPException(422, "كميات عرض السعر يجب أن تطابق طلب الشراء")
+    q = SupplierQuotation(quotation_no=body.quotation_no, requisition_id=req.requisition_id, supplier_name=body.supplier_name,
+        quotation_date=body.quotation_date, valid_until=body.valid_until, delivery_days=body.delivery_days,
+        payment_terms=body.payment_terms, notes=body.notes, status="Submitted", created_by=user.user_id)
+    db.add(q); db.flush()
+    for line in body.lines: db.add(SupplierQuotationLine(quotation_id=q.quotation_id, item_id=line.item_id, quantity=line.quantity, unit_price=line.unit_price))
+    req.status = "Quoting"
+    write_audit(db, user.user_id, "Create", "SupplierQuotations", q.quotation_id,
+        new={"quotation_no": q.quotation_no, "requisition_id": req.requisition_id, "supplier_name": q.supplier_name})
+    db.commit()
+    return {"quotation_id": q.quotation_id, "quotation_no": q.quotation_no, "status": q.status}
+
+@purchases.post("/quotations/{quotation_id}/select")
+def select_quotation(quotation_id: int, user: User = Depends(require_permission("PurchaseCycle", "Approve")), db: Session = Depends(get_db)):
+    q = db.scalar(select(SupplierQuotation).where(SupplierQuotation.quotation_id == quotation_id).with_for_update())
+    if not q: raise HTTPException(404, "عرض السعر غير موجود")
+    if q.status != "Submitted": raise HTTPException(409, "عرض السعر غير متاح للاختيار")
+    req = db.scalar(select(PurchaseRequisition).where(PurchaseRequisition.requisition_id == q.requisition_id).with_for_update())
+    if not req or req.status not in ("Approved", "Quoting"): raise HTTPException(409, "حالة طلب الشراء لا تسمح بالاختيار")
+    peers = db.scalars(select(SupplierQuotation).where(SupplierQuotation.requisition_id == q.requisition_id).with_for_update()).all()
+    for peer in peers:
+        if peer.status == "Selected": peer.status = "NotSelected"
+    q.status = "Selected"
+    write_audit(db, user.user_id, "Select", "SupplierQuotations", quotation_id,
+        new={"status": q.status, "requisition_id": q.requisition_id})
+    db.commit()
+    return {"quotation_id": quotation_id, "status": q.status}
+
+@purchases.post("/quotations/{quotation_id}/convert")
+def convert_quotation_to_order(quotation_id: int, user: User = Depends(require_permission("PurchaseCycle", "Add")), db: Session = Depends(get_db)):
+    q = db.scalar(select(SupplierQuotation).where(SupplierQuotation.quotation_id == quotation_id).with_for_update())
+    if not q: raise HTTPException(404, "عرض السعر غير موجود")
+    if q.status != "Selected" or q.converted_purchase_order_id: raise HTTPException(409, "يجب اختيار عرض السعر أولاً ولا يمكن تحويله مرتين")
+    req = db.scalar(select(PurchaseRequisition).where(PurchaseRequisition.requisition_id == q.requisition_id).with_for_update())
+    if not req or req.status not in ("Approved", "Quoting"): raise HTTPException(409, "طلب الشراء غير معتمد")
+    lines = db.scalars(select(SupplierQuotationLine).where(SupplierQuotationLine.quotation_id == q.quotation_id).order_by(SupplierQuotationLine.line_id)).all()
+    if not lines: raise HTTPException(409, "عرض السعر لا يحتوي على بنود")
+    party = resolve_counterparty(db, q.supplier_name, "Supplier")
+    total = sum((Decimal(str(l.quantity))*Decimal(str(l.unit_price)) for l in lines), Decimal("0"))
+    po = PurchaseOrder(order_no=f"PO-PENDING-{uuid4().hex}", order_date=date.today(), supplier_name=party.legal_name if party else q.supplier_name,
+        counterparty_id=party.counterparty_id if party else None, warehouse_id=req.warehouse_id, project_id=req.project_id,
+        status="Draft", notes=f"تحويل من عرض السعر {q.quotation_no} وطلب الشراء {req.requisition_no}",
+        total_amount=total, created_by=user.user_id)
+    db.add(po); db.flush(); po.order_no=f"PO-{date.today().year}-{po.purchase_order_id:06d}"
+    for line in lines: db.add(PurchaseOrderLine(purchase_order_id=po.purchase_order_id, item_id=line.item_id, quantity=line.quantity, unit_price=line.unit_price, received_quantity=0))
+    q.status = "Converted"; q.converted_purchase_order_id = po.purchase_order_id; req.status = "Converted"
+    write_audit(db, user.user_id, "Convert", "SupplierQuotations", quotation_id,
+        new={"purchase_order_id": po.purchase_order_id, "order_no": po.order_no, "total_amount": str(total)})
+    db.commit()
+    return {"purchase_order_id": po.purchase_order_id, "order_no": po.order_no, "status": po.status}
 
 @purchases.get("")
 def list_orders(_: User = Depends(require_permission("PurchaseCycle", "View")), db: Session = Depends(get_db)):
