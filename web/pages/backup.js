@@ -1,39 +1,39 @@
 import { api, auth } from "../api.js";
 import { esc, toast, errText } from "../ui.js";
 
-const KIND = { manual: "يدوية", auto: "تلقائية", pre_restore: "أمان قبل استعادة", backup: "قديمة" };
+const kindLabel = (kind, tr) => ({ manual: tr("يدوية", "Manual"), auto: tr("تلقائية", "Automatic"), pre_restore: tr("أمان قبل استعادة", "Pre-restore safety"), backup: tr("قديمة", "Legacy") }[kind] || kind);
 const mb = n => (n / 1048576).toFixed(n < 104857 ? 2 : 1) + " MB";
 const when = iso => (iso || "").replace("T", " ");
 
-export async function render(main) {
-  main.innerHTML = `<section class="sec"><h3>النسخ الاحتياطي والصيانة</h3>
+export async function render(main) {\n  const tr = (ar, en) => { try { return localStorage.getItem("fs_lang") === "en" ? en : ar; } catch { return ar; } };
+  main.innerHTML = `<section class="sec"><h3>${tr("النسخ الاحتياطي والصيانة","Backup & Maintenance")}</h3>
     <div style="padding:16px">
-      <div id="info" class="muted">جاري التحميل...</div>
-      <details id="cfg" style="margin-top:12px"><summary><b>إعدادات النسخ الاحتياطي (المكان والمواعيد)</b></summary>
+      <div id="info" class="muted">${tr("جاري التحميل...","Loading...")}</div>
+      <details id="cfg" style="margin-top:12px"><summary><b>${tr("إعدادات النسخ الاحتياطي (المكان والمواعيد)","Backup settings (location & schedule)")}</b></summary>
         <div class="toolbar" style="margin-top:10px">
-          <div class="grow"><label for="cfgdir">مجلد حفظ النسخ (مسار كامل)</label><br><input id="cfgdir" dir="ltr" style="width:100%" placeholder="D:/Backups/financial"></div>
-          <div><label for="cfgtime">وقت النسخ اليومي</label><br><input id="cfgtime" type="time" dir="ltr"></div>
-          <div><label for="cfgkeep">عدد النسخ المحتفظ بها</label><br><input id="cfgkeep" type="number" min="1" max="365" style="width:90px"></div>
-          <div><label><input id="cfgon" type="checkbox"> تفعيل النسخ اليومي</label></div>
-          <button class="btn primary" id="cfgsave">حفظ الإعدادات</button>
+          <div class="grow"><label for="cfgdir">${tr("مجلد حفظ النسخ (مسار كامل)","Backup folder (absolute path)")}</label><br><input id="cfgdir" dir="ltr" style="width:100%" placeholder="D:/Backups/financial"></div>
+          <div><label for="cfgtime">${tr("وقت النسخ اليومي","Daily backup time")}</label><br><input id="cfgtime" type="time" dir="ltr"></div>
+          <div><label for="cfgkeep">${tr("عدد النسخ المحتفظ بها","Number of backups to retain")}</label><br><input id="cfgkeep" type="number" min="1" max="365" style="width:90px"></div>
+          <div><label><input id="cfgon" type="checkbox"> ${tr("تفعيل النسخ اليومي","Enable daily backup")}</label></div>
+          <button class="btn primary" id="cfgsave">${tr("حفظ الإعدادات","Save settings")}</button>
         </div>
-        <p class="muted">التغيير يسري فورًا. لازم المجلد يكون متاح وعليه صلاحية كتابة (يُنشأ تلقائيًا لو غير موجود). النسخ القديمة تفضل في المكان القديم. يُفضّل قرص أو جهاز غير اللي عليه قاعدة البيانات.</p>
+        <p class="muted">${tr("التغيير يسري فورًا. لازم المجلد يكون متاح وعليه صلاحية كتابة (يُنشأ تلقائيًا لو غير موجود). النسخ القديمة تفضل في المكان القديم. يُفضّل قرص أو جهاز غير اللي عليه قاعدة البيانات.","Changes take effect immediately. The folder must be available and writable (it will be created if missing). Existing backups remain in their current location. Prefer a separate drive or device from the database host.")}</p>
       </details>
       <div class="toolbar" style="margin-top:14px">
-        <button class="btn primary" id="dl">نسخة احتياطية الآن وتنزيلها</button>
-        <button class="btn" id="save">حفظ نسخة في مجلد النسخ فقط</button>
+        <button class="btn primary" id="dl">${tr("نسخة احتياطية الآن وتنزيلها","Create & download backup now")}</button>
+        <button class="btn" id="save">${tr("حفظ نسخة في مجلد النسخ فقط","Save backup to folder only")}</button>
       </div>
-      <p class="muted">النسخة تشمل قاعدة البيانات كاملة + ملفات النظام. لا تتضمن ملف <code>.env</code> (فيه كلمات مرور وأسرار) فاحتفظ به بشكل منفصل.</p>
+      <p class="muted">${tr("النسخة تشمل قاعدة البيانات كاملة + ملفات النظام. لا تتضمن ملف","The backup includes the full database and system files. It does not include")} <code>.env</code> ${tr("(فيه كلمات مرور وأسرار) فاحتفظ به بشكل منفصل.","(which contains passwords and secrets), so store it separately.")}</p>
       <hr>
-      <h4>استعادة نسخة احتياطية</h4>
+      <h4>${tr("استعادة نسخة احتياطية","Restore a backup")}</h4>
       <div class="toolbar">
-        <div class="grow"><label for="restorefile">اختر ملف النسخة (ZIP)</label><br><input id="restorefile" type="file" accept=".zip,application/zip"></div>
-        <button class="btn danger" id="restore">استعادة من الملف</button>
+        <div class="grow"><label for="restorefile">${tr("اختر ملف النسخة (ZIP)","Select backup file (ZIP)")}</label><br><input id="restorefile" type="file" accept=".zip,application/zip"></div>
+        <button class="btn danger" id="restore">${tr("استعادة من الملف","Restore from file")}</button>
       </div>
-      <p class="muted">تحذير: الاستعادة تستبدل كل بيانات النظام الحالية. قبل الاستبدال يتم أخذ نسخة أمان تلقائية، ولو فشلت الاستعادة لا يتغير أي شيء. ملفات النظام داخل النسخة للأرشفة ولا تُستبدل.</p>
+      <p class="muted">${tr("تحذير: الاستعادة تستبدل كل بيانات النظام الحالية. قبل الاستبدال يتم أخذ نسخة أمان تلقائية، ولو فشلت الاستعادة لا يتغير أي شيء. ملفات النظام داخل النسخة للأرشفة ولا تُستبدل.","Warning: restoring replaces all current system data. A safety backup is created first; if restoration fails, nothing changes. System files in the archive are for reference and are not replaced.")}</p>
       <hr>
-      <h4>النسخ المحفوظة على السيرفر</h4>
-      <div class="tbl-wrap"><table><thead><tr><th>الملف</th><th>النوع</th><th>التاريخ</th><th>الحجم</th><th></th></tr></thead>
+      <h4>${tr("النسخ المحفوظة على السيرفر","Backups stored on server")}</h4>
+      <div class="tbl-wrap"><table><thead><tr><th>${tr("الملف","File")}</th><th>${tr("النوع","Type")}</th><th>${tr("التاريخ","Date")}</th><th>${tr("الحجم","Size")}</th><th></th></tr></thead>
         <tbody id="rows"><tr><td colspan="5" class="muted">...</td></tr></tbody></table></div>
       <div class="err" id="err"></div>
     </div></section>`;
@@ -54,7 +54,7 @@ export async function render(main) {
   }
 
   function afterRestore(d) {
-    toast(d.message || "تمت الاستعادة");
+    toast(d.message || tr("تمت الاستعادة","Restore completed"));
     auth.clear();
     setTimeout(() => { location.hash = "#/login"; location.reload(); }, 1500);
   }
@@ -75,10 +75,10 @@ export async function render(main) {
     $("#info").innerHTML = `قاعدة البيانات: <b>${esc(s.db_backend)}</b> · مجلد النسخ: <code>${esc(s.backup_dir)}</code><br>
       النسخ اليومي التلقائي: ${s.auto_enabled ? `<span class="tag ok">مفعّل</span> الساعة <b>${esc(s.auto_time)}</b> يوميًا (يُحتفظ بآخر ${s.retention} نسخة)` : `<span class="tag no">متوقف</span>`}
       ${s.last_auto ? `· آخر نسخة تلقائية: ${esc(when(s.last_auto.created_at))}` : "· لم تتم أي نسخة تلقائية بعد"}`;
-    $("#rows").innerHTML = s.backups.length ? s.backups.map(b => `<tr><td dir="ltr">${esc(b.name)}</td><td>${esc(KIND[b.kind] || b.kind)}</td>
+    $("#rows").innerHTML = s.backups.length ? s.backups.map(b => `<tr><td dir="ltr">${esc(b.name)}</td><td>${esc(kindLabel(b.kind, tr))}</td>
         <td dir="ltr">${esc(when(b.created_at))}</td><td dir="ltr">${mb(b.size)}</td>
-        <td><button class="btn sm" data-dl="${esc(b.name)}">تنزيل</button> <button class="btn sm danger" data-rs="${esc(b.name)}">استعادة</button></td></tr>`).join("")
-      : `<tr><td colspan="5" class="muted">لا توجد نسخ بعد</td></tr>`;
+        <td><button class="btn sm" data-dl="${esc(b.name)}">${tr("تنزيل","Download")}</button> <button class="btn sm danger" data-rs="${esc(b.name)}">${tr("استعادة","Restore")}</button></td></tr>`).join("")
+      : `<tr><td colspan="5" class="muted">${tr("لا توجد نسخ بعد","No backups yet")}</td></tr>`;
     main.querySelectorAll("[data-dl]").forEach(b => b.onclick = () => run(() => download("/admin/backup/download/" + encodeURIComponent(b.dataset.dl), b.dataset.dl)));
     main.querySelectorAll("[data-rs]").forEach(b => b.onclick = () => {
       if (!confirmRestore(b.dataset.rs)) return;
@@ -95,11 +95,11 @@ export async function render(main) {
       retention: +$("#cfgkeep").value, auto_enabled: $("#cfgon").checked } });
     toast(d.message); await load();
   });
-  $("#dl").onclick = () => run(async () => { await download("/admin/backup", "financial_system_backup.zip"); toast("تم إنشاء النسخة وتنزيلها"); await load(); });
+  $("#dl").onclick = () => run(async () => { await download("/admin/backup", "financial_system_backup.zip"); toast(tr("تم إنشاء النسخة وتنزيلها","Backup created and downloaded")); await load(); });
   $("#save").onclick = () => run(async () => { const d = await api("/admin/backup/run", { method: "POST" }); toast(d.message); await load(); });
   $("#restore").onclick = () => {
     const f = $("#restorefile").files[0];
-    if (!f) { $("#err").textContent = "اختر ملف ZIP أولاً"; return; }
+    if (!f) { $("#err").textContent = tr("اختر ملف ZIP أولاً","Select a ZIP file first"); return; }
     if (!confirmRestore(f.name)) return;
     run(async () => {
       const fd = new FormData(); fd.append("file", f); fd.append("confirm", "yes");
