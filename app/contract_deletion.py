@@ -1,5 +1,5 @@
 """Audited administrator-only cascade deletion for contract settlement records."""
-from sqlalchemy import select
+from sqlalchemy import select, func
 from fastapi import HTTPException
 
 from .deps import write_audit
@@ -10,7 +10,7 @@ from .models import (Role, UserRole, Check, FinancialCheck, TreasuryTransaction,
 
 def require_admin(db, user_id: int) -> None:
     is_admin = db.scalar(select(Role.role_id).join(UserRole, UserRole.role_id == Role.role_id)
-        .where(UserRole.user_id == user_id, Role.role_name == "Admin").limit(1))
+        .where(UserRole.user_id == user_id, func.lower(Role.role_name).like("%admin%")).limit(1))
     if not is_admin:
         raise HTTPException(403, "الحذف العام متاح لمسؤول النظام فقط")
 
