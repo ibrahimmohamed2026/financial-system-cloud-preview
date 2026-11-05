@@ -2,6 +2,7 @@
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
