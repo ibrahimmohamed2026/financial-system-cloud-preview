@@ -216,6 +216,7 @@ function shell(title, path = "") {
 }
 
 function loginPage() {
+  applyLanguage();
   resetSession();
   document.body.classList.add("login-mode");
   root.innerHTML = `<form class="login"><div class="adex-login-brand"><strong>ADEX</strong><small>ENTERPRISE RESOURCE PLANNING</small></div><div style="display:flex;justify-content:flex-end"><button class="btn sm" id="loginlang" type="button">${isEN() ? "العربية" : "English"}</button></div><h2>${tr("تسجيل الدخول", "Sign in")}</h2>
