@@ -117,9 +117,10 @@ def read_rows(data: bytes) -> list[tuple[int, dict]]:
                         found[col] = f
                 fields = set(found.values())
                 if {"account_code", "account_name_ar"} <= fields:
-                    # Prefer the sheet that explicitly contains the financial-statement classification.
-                    score = 2 if "classification" in fields else 1
-                    if ws.title == "Trial balance":
+                    # Prefer a sheet with the financial-statement classification column.
+                    # A "Trial balance" sheet without classification must never outrank it.
+                    score = 10 if "classification" in fields else 0
+                    if ws.title.strip().casefold() == "trial balance":
                         score += 1
                     candidates.append((score, ws, idx, found))
                     break
