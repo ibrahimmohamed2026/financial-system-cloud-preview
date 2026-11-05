@@ -984,6 +984,7 @@ def select_quotation(quotation_id: int, user: User = Depends(require_permission(
     q = db.scalar(select(SupplierQuotation).where(SupplierQuotation.quotation_id == quotation_id).with_for_update())
     if not q: raise HTTPException(404, "عرض السعر غير موجود")
     if q.status != "Submitted": raise HTTPException(409, "عرض السعر غير متاح للاختيار")
+    if q.valid_until and q.valid_until < date.today(): raise HTTPException(409, "انتهت صلاحية عرض السعر ولا يمكن اختياره")
     req = db.scalar(select(PurchaseRequisition).where(PurchaseRequisition.requisition_id == q.requisition_id).with_for_update())
     if not req or req.status not in ("Approved", "Quoting"): raise HTTPException(409, "حالة طلب الشراء لا تسمح بالاختيار")
     peers = db.scalars(select(SupplierQuotation).where(SupplierQuotation.requisition_id == q.requisition_id).with_for_update()).all()
