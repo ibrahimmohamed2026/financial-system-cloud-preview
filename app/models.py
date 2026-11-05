@@ -320,6 +320,7 @@ class User(Base):
     username: Mapped[str] = C("Username", Unicode(50), unique=True)
     password_hash: Mapped[bytes] = C("PasswordHash", LargeBinary)
     full_name: Mapped[str] = C("FullName", Unicode(150))
+    preferred_language: Mapped[str] = C("PreferredLanguage", Unicode(5), default="ar")
     is_active: Mapped[bool] = C("IsActive", Boolean, default=True)
     last_login_at: Mapped[Optional[datetime]] = C("LastLoginAt", DateTime, nullable=True)
     failed_login_count: Mapped[int] = C("FailedLoginCount", Integer, default=0)
