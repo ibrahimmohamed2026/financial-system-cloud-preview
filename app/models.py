@@ -115,6 +115,7 @@ class Counterparty(Base):
     code: Mapped[str] = C("Code", Unicode(50), unique=True, index=True)
     name: Mapped[str] = C("Name", Unicode(250), index=True)
     legal_name: Mapped[Optional[str]] = C("LegalName", Unicode(250), nullable=True, index=True)
+    name_en: Mapped[Optional[str]] = C("NameEn", Unicode(250), nullable=True)
     roles: Mapped[list] = C("Roles", JSON, default=list)
     party_type: Mapped[str] = C("PartyType", Unicode(20), default="Other", index=True)
     account_id: Mapped[Optional[int]] = C("AccountId", ForeignKey("ChartOfAccounts.AccountId"), nullable=True, index=True)
