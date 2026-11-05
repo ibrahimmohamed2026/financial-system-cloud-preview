@@ -15,7 +15,7 @@ const SCREENS = {
   "/checks-register": L("./pages/financial_checks.js?v=20261104-check-project-link-1"),
   "/admin/users": L("./pages/admin.js?v=20261019-user-avatar-1"),
   "/admin/backup": L("./pages/backup.js"),
-  "/admin/company": L("./pages/company.js?v=20261104-company-profile-1"),
+  "/admin/company": L("./pages/company.js?v=20261105-company-i18n-1"),
   "/accounts": L("./pages/accounts.js"),
   "/projects": L("./pages/projects.js"),
   "/journal": L("./pages/journal.js?v=20261105-journal-description-separators-1"),
