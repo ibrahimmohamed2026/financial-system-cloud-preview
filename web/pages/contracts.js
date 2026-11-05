@@ -1,6 +1,6 @@
 import { esc, money, today, safe, formDialog, toast } from "../ui.js";
 import { showActivity } from "../activity.js";
-import { openPrintWindow } from "../print.js?v=20261022-print-popup-fallback-1";
+import { openPrintWindow } from "../print.js?v=20261105-contracts-print-i18n-1";
 import { translate as tr } from "../i18n.js";
 export async function render(main,{api,auth}){
  const can=a=>!!auth?.can?.("Contracts",a);
