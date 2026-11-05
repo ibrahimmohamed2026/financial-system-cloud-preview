@@ -6,7 +6,7 @@ const ST = { Draft: "مسودة", Posted: "مرحّل", Reversed: "ملغي" };
 export async function render(main, { api, auth }) {
   const can = a => auth.can(SCREEN, a);
   const statusLabel = s => ({Draft:trn("مسودة","Draft"),Posted:trn("مرحّل","Posted"),Reversed:trn("ملغي","Reversed")}[s] || s || "—");
-  const [accs, projs, settlements, company] = await Promise.all([api("/journal/lookup/accounts"), api("/projects/lookup").catch(() => []), api("/journal/lookup/settlements").catch(() => []), api("/company-profile").catch(() => null)]);
+  const [accs, projs, settlements, company] = await Promise.all([api("/journal/lookup/accounts?lang=" + (localStorage.getItem("fs_lang")==="en"?"en":"ar")), api("/projects/lookup").catch(() => []), api("/journal/lookup/settlements").catch(() => []), api("/company-profile").catch(() => null)]);
   const accByLabel = Object.fromEntries(accs.map(a => [a.label, a.account_id]));
   const st = { q: "", status: "", df: "", dt: "", skip: 0 };
   main.innerHTML = `<div class="toolbar">
@@ -54,7 +54,7 @@ export async function render(main, { api, auth }) {
 
   // ---------- عرض قيد ----------
   async function view(id) {
-    const e = await api("/journal/" + id);
+    const e = await api("/journal/" + id + "?lang=" + (localStorage.getItem("fs_lang")==="en"?"en":"ar"));
     const dlg = document.createElement("dialog"); dlg.style.width = "min(900px,96vw)";
     dlg.innerHTML = `<form method="dialog"><h3>${esc(e.entry_no)} — ${e.entry_date} <span class="tag">${ST[e.status]}</span></h3><p>${esc(e.description)}</p>
       <div class="tbl-wrap"><table><thead><tr><th>#</th><th>${trn("الحساب","Account")}</th><th>${trn("مركز التكلفة","Cost Center")}</th><th>${trn("مدين","Debit")}</th><th>${trn("دائن","Credit")}</th><th>${trn("البيان","Description")}</th></tr></thead><tbody>
@@ -119,8 +119,8 @@ export async function render(main, { api, auth }) {
       box.style.top = `${below ? rect.bottom + 4 : Math.max(12, rect.top - desiredHeight - 4)}px`;
     };
     const draw = () => {
-      q("#ln").innerHTML = lines.map((l, i) => `<tr><td><div class="journal-account-picker" id="account-picker-${i}"><input data-i="${i}" data-k="label" value="${esc(l.label)}" placeholder="اكتب اسم الحساب أو الكود" title="اكتب اسم الحساب أو الكود ثم اختر الحساب" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="account-options-${i}"><div class="journal-account-options" id="account-options-${i}" role="listbox" hidden></div></div></td>
-        <td><select data-i="${i}" data-k="project_id"><option value="">—</option>${projs.map(p => `<option value="${p.project_id}" ${p.project_id == l.project_id ? "selected" : ""}>${esc(p.name_ar)}</option>`).join("")}</select></td>
+      q("#ln").innerHTML = lines.map((l, i) => `<tr><td><div class="journal-account-picker" id="account-picker-${i}"><input data-i="${i}" data-k="label" value="${esc(l.label)}" placeholder="${trn("اكتب اسم الحساب أو الكود","Type account name or code")}" title="${trn("اكتب اسم الحساب أو الكود ثم اختر الحساب","Type account name or code, then select an account")}" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="account-options-${i}"><div class="journal-account-options" id="account-options-${i}" role="listbox" hidden></div></div></td>
+        <td><select data-i="${i}" data-k="project_id"><option value="">—</option>${projs.map(p => `<option value="${p.project_id}" ${p.project_id == l.project_id ? "selected" : ""}>${esc(localStorage.getItem("fs_lang")==="en"?(p.name_en||p.name_ar):p.name_ar)}</option>`).join("")}</select></td>
         <td><input type="number" step="0.01" min="0" data-i="${i}" data-k="d" value="${l.d}" style="width:120px"></td><td><input type="number" step="0.01" min="0" data-i="${i}" data-k="c" value="${l.c}" style="width:120px"></td>
         <td><textarea rows="1" data-i="${i}" data-k="desc" placeholder="${trn("اكتب بيان هذا السطر — يمكن كتابة بيان طويل","Enter this line description — long descriptions are supported")}" required aria-label="${trn("بيان السطر","Line description")} ${i + 1}">${esc(l.desc)}</textarea></td><td>${lines.length > 2 ? `<button type="button" class="btn sm danger" data-x="${i}">×</button>` : ""}</td></tr>`).join("");
       q("#ln").querySelectorAll('textarea[data-k="desc"]').forEach(el => { el.style.height = "auto"; el.style.height = `${el.scrollHeight}px`; });
@@ -129,7 +129,7 @@ export async function render(main, { api, auth }) {
     const sum = () => {
       const d = lines.reduce((a, l) => a + (+l.d || 0), 0), c = lines.reduce((a, l) => a + (+l.c || 0), 0);
       q("#td").textContent = d.toFixed(2); q("#tc").textContent = c.toFixed(2);
-      q("#bal").innerHTML = Math.abs(d - c) < 0.005 && d > 0 ? `<span class="tag ok">${trn("متوازن","Balanced")}</span>` : `<span class="tag bad">فرق ${(d - c).toFixed(2)}</span>`;
+      q("#bal").innerHTML = Math.abs(d - c) < 0.005 && d > 0 ? `<span class="tag ok">${trn("متوازن","Balanced")}</span>` : `<span class="tag bad">${trn("فرق","Difference")} ${(d - c).toFixed(2)}</span>`;
     };
     q("#ln").oninput = ev => { const t = ev.target, i = t.dataset.i; if (i === undefined) return; lines[i][t.dataset.k] = t.value;
       if (t.dataset.k === "label") { lines[i].account_id = null; t.setAttribute("aria-expanded", "true"); searchAccounts(+i, t.value); }
