@@ -27,7 +27,7 @@ const SCREENS = {
   "/contracts": L("./pages/contracts.js?v=20261105-contract-bilingual-data-2"),
   "/contract-requests": L("./pages/contract_requests.js?v=20261105-contract-requests-bilingual-2"),
   "/settlements": L("./pages/settlements.js?v=20261105-settlements-bilingual-2"),
-  "/inventory": L("./pages/inventory.js?v=20261105-inventory-stocktake-1"),
+  "/inventory": L("./pages/inventory.js?v=20261105-inventory-returns-1"),
   "/purchases": L("./pages/purchases.js?v=20261105-purchases-print-i18n-1"),
   "/counterparties": L("./pages/counterparties.js?v=20261105-counterparty-names-i18n-2"),
   // Preserve the older type-specific links while using the unified party registry.
