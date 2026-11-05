@@ -649,6 +649,32 @@ class InventoryMovement(Base):
     created_by: Mapped[Optional[int]] = C("CreatedBy", ForeignKey("Users.UserId"), nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
 
+class SiteIssueRequest(Base):
+    __tablename__ = "SiteIssueRequests"
+    request_id: Mapped[int] = C("RequestId", Integer, primary_key=True)
+    request_no: Mapped[str] = C("RequestNo", Unicode(60), unique=True, index=True)
+    request_date: Mapped[date] = C("RequestDate", Date, default=date.today)
+    needed_by: Mapped[Optional[date]] = C("NeededBy", Date, nullable=True)
+    project_id: Mapped[Optional[int]] = C("ProjectId", ForeignKey("Projects.ProjectId"), nullable=True, index=True)
+    site_name: Mapped[Optional[str]] = C("SiteName", Unicode(200), nullable=True)
+    requested_by: Mapped[int] = C("RequestedBy", ForeignKey("Users.UserId"))
+    status: Mapped[str] = C("Status", Unicode(30), default="PendingApproval", index=True)
+    notes: Mapped[Optional[str]] = C("Notes", UnicodeText, nullable=True)
+    approved_by: Mapped[Optional[int]] = C("ApprovedBy", ForeignKey("Users.UserId"), nullable=True)
+    approved_at: Mapped[Optional[datetime]] = C("ApprovedAt", DateTime, nullable=True)
+    issued_by: Mapped[Optional[int]] = C("IssuedBy", ForeignKey("Users.UserId"), nullable=True)
+    issued_at: Mapped[Optional[datetime]] = C("IssuedAt", DateTime, nullable=True)
+    created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
+
+class SiteIssueRequestLine(Base):
+    __tablename__ = "SiteIssueRequestLines"
+    line_id: Mapped[int] = C("LineId", Integer, primary_key=True)
+    request_id: Mapped[int] = C("RequestId", ForeignKey("SiteIssueRequests.RequestId", ondelete="CASCADE"), index=True)
+    item_id: Mapped[int] = C("ItemId", ForeignKey("InventoryItems.ItemId"))
+    requested_quantity: Mapped[Decimal] = C("RequestedQuantity", Numeric(18, 3))
+    approved_quantity: Mapped[Decimal] = C("ApprovedQuantity", Numeric(18, 3), default=0)
+    issued_quantity: Mapped[Decimal] = C("IssuedQuantity", Numeric(18, 3), default=0)
+
 class PurchaseOrder(Base):
     __tablename__ = "PurchaseOrders"
     purchase_order_id: Mapped[int] = C("PurchaseOrderId", Integer, primary_key=True)
