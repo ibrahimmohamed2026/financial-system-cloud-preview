@@ -29,7 +29,7 @@ const SCREENS = {
   "/settlements": L("./pages/settlements.js?v=20261105-settlements-print-i18n-1"),
   "/inventory": L("./pages/inventory.js?v=20261105-inventory-print-i18n-1"),
   "/purchases": L("./pages/purchases.js?v=20261105-purchases-print-i18n-1"),
-  "/counterparties": L("./pages/counterparties.js?v=20261105-counterparties-i18n-1"),
+  "/counterparties": L("./pages/counterparties.js?v=20261105-counterparty-names-i18n-1"),
   // Preserve the older type-specific links while using the unified party registry.
   "/customers": L("./pages/counterparties.js?v=20261105-counterparties-i18n-1"),
   "/contractors": L("./pages/counterparties.js?v=20261105-counterparties-i18n-1"),
