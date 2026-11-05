@@ -798,6 +798,30 @@ class PurchaseOrderLine(Base):
     received_quantity: Mapped[Decimal] = C("ReceivedQuantity", Numeric(18, 3), default=0)
 
 
+class PurchaseGoodsReceipt(Base):
+    __tablename__ = "PurchaseGoodsReceipts"
+    __table_args__ = (UniqueConstraint("ReceiptNo", name="UQ_PurchaseGoodsReceipts_ReceiptNo"),)
+    receipt_id: Mapped[int] = C("ReceiptId", Integer, primary_key=True)
+    receipt_no: Mapped[str] = C("ReceiptNo", Unicode(60), unique=True, index=True)
+    purchase_order_id: Mapped[int] = C("PurchaseOrderId", ForeignKey("PurchaseOrders.PurchaseOrderId"), index=True)
+    receipt_date: Mapped[date] = C("ReceiptDate", Date, default=date.today)
+    warehouse_id: Mapped[int] = C("WarehouseId", ForeignKey("InventoryWarehouses.WarehouseId"))
+    delivery_note_no: Mapped[Optional[str]] = C("DeliveryNoteNo", Unicode(100), nullable=True)
+    notes: Mapped[Optional[str]] = C("Notes", UnicodeText, nullable=True)
+    received_by: Mapped[Optional[int]] = C("ReceivedBy", ForeignKey("Users.UserId"), nullable=True)
+    created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
+
+
+class PurchaseGoodsReceiptLine(Base):
+    __tablename__ = "PurchaseGoodsReceiptLines"
+    receipt_line_id: Mapped[int] = C("ReceiptLineId", Integer, primary_key=True)
+    receipt_id: Mapped[int] = C("ReceiptId", ForeignKey("PurchaseGoodsReceipts.ReceiptId", ondelete="CASCADE"), index=True)
+    purchase_order_line_id: Mapped[int] = C("PurchaseOrderLineId", ForeignKey("PurchaseOrderLines.LineId"), index=True)
+    item_id: Mapped[int] = C("ItemId", ForeignKey("InventoryItems.ItemId"))
+    quantity: Mapped[Decimal] = C("Quantity", Numeric(18, 3))
+    unit_cost: Mapped[Decimal] = C("UnitCost", Numeric(18, 4), default=0)
+
+
 class SupplierInvoice(Base):
     """Supplier bills are the accounting source; purchase orders/receipts alone do not post journals."""
     __tablename__ = "SupplierInvoices"
