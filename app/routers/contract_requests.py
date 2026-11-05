@@ -17,7 +17,9 @@ class RequestIn(BaseModel):
     request_no: str = Field(min_length=1, max_length=50)
     request_type: Literal["Customer", "Subcontractor", "Supplier"] = "Customer"
     title: str = Field(min_length=1, max_length=250)
+    title_en: str | None = Field(default=None, max_length=250)
     counterparty_name: str = Field(min_length=1, max_length=200)
+    counterparty_name_en: str | None = Field(default=None, max_length=200)
     project_id: Optional[int] = None
     estimated_value: Decimal = Field(default=Decimal("0"), ge=0)
     description: Optional[str] = None
@@ -27,8 +29,8 @@ class ReviewIn(BaseModel):
     review_notes: Optional[str] = None
 
 def out(x):
-    return {"request_id":x.request_id,"request_no":x.request_no,"request_type":x.request_type,"title":x.title,
-            "counterparty_name":x.counterparty_name,"project_id":x.project_id,"estimated_value":str(x.estimated_value),
+    return {"request_id":x.request_id,"request_no":x.request_no,"request_type":x.request_type,"title":x.title,"title_en":x.title_en,
+            "counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"project_id":x.project_id,"estimated_value":str(x.estimated_value),
             "description":x.description,"status":x.status,"review_notes":x.review_notes,"created_by":x.created_by,
             "created_at":x.created_at,"reviewed_by":x.reviewed_by,"reviewed_at":x.reviewed_at}
 
@@ -39,7 +41,7 @@ def list_requests(status: Optional[str] = None, q: Optional[str] = None,
     if status: stmt=stmt.where(ContractRequest.status==status)
     if q:
         like=f"%{q.strip()}%"
-        stmt=stmt.where((ContractRequest.request_no.ilike(like)) | (ContractRequest.title.ilike(like)) | (ContractRequest.counterparty_name.ilike(like)))
+        stmt=stmt.where((ContractRequest.request_no.ilike(like)) | (ContractRequest.title.ilike(like)) | (ContractRequest.title_en.ilike(like)) | (ContractRequest.counterparty_name.ilike(like)) | (ContractRequest.counterparty_name_en.ilike(like)))
     rows=db.scalars(stmt.order_by(ContractRequest.request_id.desc()).limit(500)).all()
     return {"items":[out(x) for x in rows],"total":len(rows)}
 
@@ -95,7 +97,7 @@ def create_contract_from_request(request_id:int,contract_no:Optional[str]=None,t
     if db.scalar(select(Contract.contract_id).where(Contract.request_id==request_id)): raise HTTPException(409,"تم إنشاء عقد من هذا الطلب بالفعل")
     from datetime import date
     def parsed(v): return date.fromisoformat(v) if v else None
-    c=Contract(request_id=request_id,contract_no=f"CT-PENDING-{uuid4().hex}",title=title or x.title,client_name=x.counterparty_name,project_id=x.project_id,
+    c=Contract(request_id=request_id,contract_no=f"CT-PENDING-{uuid4().hex}",title=title or x.title,title_en=x.title_en,client_name=x.counterparty_name,client_name_en=x.counterparty_name_en,project_id=x.project_id,
         start_date=parsed(start_date),end_date=parsed(end_date),original_value=x.estimated_value,status="Draft",notes=f"تم إنشاؤه من طلب التعاقد {x.request_no}",created_by=user.user_id)
     db.add(c); db.flush(); c.contract_no=f"CT-{date.today().year}-{c.contract_id:06d}"
     write_audit(db,user.user_id,"CreateFromRequest","Contracts",c.contract_id,new={"request_id":request_id,"contract_no":c.contract_no})
