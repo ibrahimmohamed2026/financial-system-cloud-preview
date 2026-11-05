@@ -55,7 +55,14 @@ export async function login(username, password) {
   const t = await api("/auth/login", { method: "POST", json: { username, password } });
   auth.save(t, []);
   const me = await api("/auth/me");
-  auth.save(t, me.permissions);
+  let manual = false, current = "ar";
+  try { manual = localStorage.getItem("fs_lang_manual") === "1"; current = localStorage.getItem("fs_lang") === "en" ? "en" : "ar"; } catch {}
+  const preferred = manual ? current : (me.preferred_language === "en" ? "en" : "ar");
+  try { localStorage.setItem("fs_lang", preferred); localStorage.removeItem("fs_lang_manual"); } catch {}
+  auth.save({ ...t, user: { ...t.user, ...me, preferred_language: preferred } }, me.permissions);
+  if (manual && preferred !== me.preferred_language) {
+    try { await api("/auth/language", { method: "PUT", json: { language: preferred } }); } catch {}
+  }
 }
 
 export async function downloadFile(path, name, open) {
