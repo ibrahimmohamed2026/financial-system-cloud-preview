@@ -59,7 +59,7 @@ const dataTable = (key, items) => {
 const chartNum = value => { const n = Number(value || 0); return Number.isFinite(n) ? n : 0; };
 const monthlyCashChart = items => {
   const rows = items || [], width = 960, height = 310, left = 94, right = 18, top = 22, bottom = 58;
-  if (!rows.some(x => chartNum(x.inflow) || chartNum(x.outflow))) return '<section class="report-chart"><h4>حركة النقدية الشهرية</h4><p class="muted">لا توجد حركات نقدية في الفترة المحددة.</p></section>';
+  if (!rows.some(x => chartNum(x.inflow) || chartNum(x.outflow))) return `<section class="report-chart"><h4>${T("حركة النقدية الشهرية")}</h4><p class="muted">${T("لا توجد حركات نقدية في الفترة المحددة.")}</p></section>`;
   const plotW = width - left - right, plotH = height - top - bottom;
   const max = Math.max(1, ...rows.flatMap(x => [chartNum(x.inflow), chartNum(x.outflow)]));
   const axis = Array.from({ length: 5 }, (_, i) => { const value = max * (4 - i) / 4, y = top + plotH * i / 4;
@@ -81,9 +81,9 @@ const expenseBreakdownChart = items => {
 };
 
 export async function render(main, { api }) {
-  main.innerHTML = `<header class="reports-head no-print"><div><h2>${T("مركز التقارير")}</h2><p class="muted">${T("تقارير مالية وتشغيلية من بيانات النظام، مع فلاتر وطباعة وتصدير.")}</p></div><div class="reports-links"><a class="btn" href="#/trial-balance">ميزان المراجعة</a><a class="btn" href="#/reports/balance-sheet">المركز المالي</a><a class="btn" href="#/reports/income-statement">قائمة الدخل</a><a class="btn" href="#/treasury/analysis">الخزينة والبنوك</a><a class="btn" href="#/purchases">دورة المشتريات</a><a class="btn" href="#/inventory">إدارة المخزون</a></div></header>
+  main.innerHTML = `<header class="reports-head no-print"><div><h2>${T("مركز التقارير")}</h2><p class="muted">${T("تقارير مالية وتشغيلية من بيانات النظام، مع فلاتر وطباعة وتصدير.")}</p></div><div class="reports-links"><a class="btn" href="#/trial-balance">${T("ميزان المراجعة")}</a><a class="btn" href="#/reports/balance-sheet">${T("المركز المالي")}</a><a class="btn" href="#/reports/income-statement">${T("قائمة الدخل")}</a><a class="btn" href="#/treasury/analysis">${T("الخزينة والبنوك")}</a><a class="btn" href="#/purchases">${T("دورة المشتريات")}</a><a class="btn" href="#/inventory">${T("إدارة المخزون")}</a></div></header>
     <section class="panel reports-panel no-print"><div class="reports-cards">${REPORTS.map(([id, title, desc, icon]) => `<button type="button" class="report-card" data-select="${id}"><span class="report-icon">${icon}</span><span><b>${T(title)}</b><small>${T(desc)}</small></span></button>`).join("")}</div>
-      <div class="toolbar reports-toolbar"><div class="w"><label>${T("نوع التقرير")}</label><select id="kind">${REPORTS.map(([id, title]) => `<option value="${id}">${title}</option>`).join("")}</select></div>
+      <div class="toolbar reports-toolbar"><div class="w"><label>${T("نوع التقرير")}</label><select id="kind">${REPORTS.map(([id, title]) => `<option value="${id}">${T(title)}</option>`).join("")}</select></div>
         <div class="w date-filter"><label>${T("من تاريخ")}</label><input type="date" id="from" value="${new Date().getFullYear()}-01-01"></div><div class="w date-filter"><label>${T("إلى تاريخ")}</label><input type="date" id="to" value="${today()}"></div>
         <div class="w" id="side-wrap"><label>${T("نوع المستخلص")}</label><select id="side"><option value="">${T("الكل")}</option><option value="Customer">${T("العميل")}</option><option value="Subcontractor">${T("مقاول الباطن")}</option></select></div>
         <div class="w" id="project-wrap" hidden><label>${T("المشروع")}</label><select id="project"><option value="">${T("كل المشروعات")}</option></select></div>
@@ -95,7 +95,7 @@ export async function render(main, { api }) {
       <div id="report-output"></div>`;
   const $ = selector => main.querySelector(selector), out = $("#report-output");
   let currentRows = [], currentColumns = [], currentLabels = [], currentTitle = "";
-  const setStatuses = values => { $("#status").innerHTML = '<option value="">كل الحالات</option>' + values.map(v => `<option value="${esc(v)}">${esc(statusLabel(v))}</option>`).join(""); };
+  const setStatuses = values => { $("#status").innerHTML = `<option value="">${T("كل الحالات")}</option>` + values.map(v => `<option value="${esc(v)}">${esc(statusLabel(v))}</option>`).join(""); };
   const updateFilters = () => {
     const kind = $("#kind").value;
     $("#side-wrap").hidden = kind !== "settlements";
@@ -192,7 +192,7 @@ export async function render(main, { api }) {
     const box = $("#account-options"), input = $("#account-search"), needle = term.trim().toLocaleLowerCase();
     if (!needle && !showAll) { box.hidden = true; box.innerHTML = ""; return; }
     const matches = needle ? accounts.filter(a => accountLabel(a).toLocaleLowerCase().includes(needle)) : accounts;
-    box.innerHTML = (matches.length ? matches.map(a => `<button type="button" class="journal-account-option" role="option" data-report-account-id="${a.account_id}">${esc(accountLabel(a))}</button>`).join("") : '<div class="journal-account-empty">لا يوجد حساب مطابق للاسم أو الكود</div>');
+    box.innerHTML = (matches.length ? matches.map(a => `<button type="button" class="journal-account-option" role="option" data-report-account-id="${a.account_id}">${esc(accountLabel(a))}</button>`).join("") : `<div class="journal-account-empty">${T("لا يوجد حساب مطابق للاسم أو الكود")}</div>`);
     box.hidden = false;
     const rect = input.getBoundingClientRect(), width = Math.min(Math.max(rect.width, 360), window.innerWidth - 24);
     box.style.width = `${width}px`; box.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`;
