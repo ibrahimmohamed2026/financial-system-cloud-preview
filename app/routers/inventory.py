@@ -246,29 +246,65 @@ def issue_site_request_stock(request_id: int, body: SiteIssuePostIn, user: User 
         raise HTTPException(409, "يجب اعتماد الطلب قبل صرف الأصناف")
     if request.requested_by == user.user_id or request.approved_by == user.user_id:
         raise HTTPException(403, "يجب أن يكون أمين المخزن شخصًا غير مقدم الطلب والمعتمد")
+    warehouse = db.get(InventoryWarehouse, body.warehouse_id)
+    if not warehouse or not warehouse.is_active:
+        raise HTTPException(422, "مخزن الصرف غير موجود أو غير نشط")
     lines = db.scalars(select(SiteIssueRequestLine).where(SiteIssueRequestLine.request_id == request_id).order_by(SiteIssueRequestLine.line_id).with_for_update()).all()
-    requested_quantities = {line.line_id: line for line in lines}
-    issue_quantities = ({line.line_id: line.quantity for line in body.lines} if body.lines else {
-        line.line_id: Decimal(str(line.approved_quantity or 0)) - Decimal(str(line.issued_quantity or 0))
-        for line in lines if Decimal(str(line.approved_quantity or 0)) > Decimal(str(line.issued_quantity or 0))})
+    by_id = {line.line_id: line for line in lines}
+    if body.lines:
+        if len({row.line_id for row in body.lines}) != len(body.lines):
+            raise HTTPException(422, "يوجد بند مكرر في تفاصيل الصرف")
+        issue_quantities = {row.line_id: row.quantity for row in body.lines}
+    else:
+        issue_quantities = {line.line_id: Decimal(str(line.approved_quantity or 0)) - Decimal(str(line.issued_quantity or 0))
+            for line in lines if Decimal(str(line.approved_quantity or 0)) > Decimal(str(line.issued_quantity or 0))}
     if not issue_quantities:
         raise HTTPException(409, "لا توجد كميات متبقية للصرف")
-    if len(issue_quantities) != len(body.lines) and body.lines:
-        raise HTTPException(422, "يوجد صنف مكرر في تفاصيل الصرف")
-    items = sorted({requested_quantities[line_id].item_id for line_id in issue_quantities if line_id in requested_quantities})
-    locked_items = db.scalars(select(InventoryItem).where(InventoryItem.item_id.in_(items)).order_by(InventoryItem.item_id).with_for_update()).all()
+    item_ids = sorted({by_id[line_id].item_id for line_id in issue_quantities if line_id in by_id})
+    db.scalars(select(InventoryItem).where(InventoryItem.item_id.in_(item_ids)).order_by(InventoryItem.item_id).with_for_update()).all()
+    prepared = []
     for line_id, quantity in issue_quantities.items():
-        line = requested_quantities.get(line_id)
+        line = by_id.get(line_id)
         if not line:
             raise HTTPException(422, "بند الصرف لا يتبع الطلب المحدد")
         remaining = Decimal(str(line.approved_quantity or 0)) - Decimal(str(line.issued_quantity or 0))
         if quantity <= 0 or quantity > remaining:
             raise HTTPException(422, "كمية الصرف تتجاوز الكمية المعتمدة المتبقية")
-        available = _balance(db, line.item_id, 0)  # replaced below after selecting source warehouse
-        if available < 0:
-            raise HTTPException(409, "رصيد المخزون غير صالح")
-    # A request is issued from a single selected warehouse; the request payload must identify it.
-    raise HTTPException(422, "حدد مخزن الصرف")
+        item = db.get(InventoryItem, line.item_id)
+        if not item or not item.is_active:
+            raise HTTPException(409, "يوجد صنف غير متاح")
+        available = _balance(db, line.item_id, body.warehouse_id)
+        if available < quantity:
+            raise HTTPException(409, f"الرصيد غير كافٍ للصنف {item.code}: المتاح {available} والمطلوب {quantity}")
+        prepared.append((line, item, quantity))
+    created = []
+    for line, item, quantity in prepared:
+        movement_no = f"SIR-{request.request_id}-{line.line_id}-{uuid4().hex[:8]}"
+        movement = InventoryMovement(movement_no=movement_no, item_id=line.item_id,
+            warehouse_id=body.warehouse_id, movement_date=date.today(), movement_type="OUT",
+            quantity=quantity, unit_cost=Decimal("0"), reference=request.request_no,
+            notes=f"صرف طلب موقع {request.request_no} — {request.site_name or ''}".strip(),
+            created_by=user.user_id)
+        db.add(movement)
+        db.flush()
+        line.issued_quantity = Decimal(str(line.issued_quantity or 0)) + quantity
+        created.append({"movement_no": movement_no, "item": item.name, "quantity": str(quantity)})
+        write_audit(db, user.user_id, "Create", "InventoryMovements", movement.movement_id,
+            new={"movement_no": movement_no, "request_no": request.request_no, "warehouse_id": body.warehouse_id,
+                 "item_id": line.item_id, "quantity": str(quantity), "movement_type": "OUT"})
+    fully_issued = all(Decimal(str(line.issued_quantity or 0)) >= Decimal(str(line.approved_quantity or 0)) for line in lines)
+    request.status = "Issued" if fully_issued else "PartiallyIssued"
+    request.issued_by = user.user_id
+    request.issued_at = utcnow()
+    write_audit(db, user.user_id, "Issue", "SiteIssueRequests", request_id,
+        new={"status": request.status, "warehouse_id": body.warehouse_id, "movements": created})
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "تعذر ترحيل الصرف؛ لم يتم تعديل الأرصدة")
+    return {"request_id": request_id, "status": request.status, "warehouse": warehouse.name,
+        "movements": created, "message": "تم صرف الكميات وتحديث رصيد المخزن"}
 
 @inventory.get("/warehouses")
 def list_warehouses(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
