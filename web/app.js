@@ -84,6 +84,8 @@ const ICON = {
   file: '<path d="M6 3h8l5 5v13H6z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
   printer: '<path d="M7 9V4h10v5M7 17H5a1 1 0 0 1-1-1v-5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v5a1 1 0 0 1-1 1h-2"/><path d="M7 14h10v6H7z"/>',
+  warehouse: '<path d="M3 10 12 4l9 6v10H3z"/><path d="M7 20v-6h4v6M15 13h2M15 16h2"/>',
+  cart: '<circle cx="9" cy="20" r="1"/><circle cx="18" cy="20" r="1"/><path d="M2 3h2l2.5 12.5a2 2 0 0 0 2 1.5h9a2 2 0 0 0 2-1.6L21 8H5"/>',
   dot: '<circle cx="12" cy="12" r="2"/>',
 };
 const ico = (n, cls = "") => `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[n] || ICON.dot}</svg>`;
@@ -345,6 +347,17 @@ const kpi = (label, icon, val, cls, sub) => `<article class="kpi home-kpi"><div 
 
 function homeHtml(s) {
   const k = s.kpis || {}, cards = [];
+  const navScreens = (NAV?.sections || []).flatMap(section => section.screens || []);
+  const hasInventoryAccess = navScreens.some(x => String(x.route || "").startsWith("/inventory"));
+  const hasPurchasesAccess = auth.can("PurchaseCycle", "View") || navScreens.some(x => String(x.route || "").startsWith("/purchases"));
+  const moduleCards = (hasInventoryAccess || hasPurchasesAccess) ? `<section class="home-modules" aria-label="${tr("الوحدات التشغيلية", "Operational modules")}">
+    ${hasInventoryAccess ? `<a class="home-module-card inventory" href="#/inventory" aria-label="${tr("فتح إدارة المخازن", "Open Inventory Management")}">
+      <span class="home-module-icon">${ico("warehouse")}</span><span class="home-module-copy"><strong>${tr("إدارة المخازن", "Inventory Management")}</strong><small>${tr("الأصناف والأرصدة والاستلام والصرف والتحويلات والجرد", "Items, balances, receipts, issues, transfers and stocktakes")}</small><em>${tr("دخول إلى المخازن", "Open Inventory")} <b>←</b></em></span>
+    </a>` : ""}
+    ${hasPurchasesAccess ? `<a class="home-module-card purchasing" href="#/purchases" aria-label="${tr("فتح إدارة المشتريات", "Open Purchasing Management")}">
+      <span class="home-module-icon">${ico("cart")}</span><span class="home-module-copy"><strong>${tr("إدارة المشتريات", "Purchasing Management")}</strong><small>${tr("طلبات الشراء وعروض الأسعار وأوامر الشراء وفواتير الموردين والسداد", "Requisitions, quotations, purchase orders, supplier invoices and payments")}</small><em>${tr("دخول إلى المشتريات", "Open Purchasing")} <b>←</b></em></span>
+    </a>` : ""}
+  </section>` : "";
   if (k.total_debit != null) cards.push(kpi(tr("إجمالي المدين", "Total Debit"), "dollar", fmt0(k.total_debit), "", tr("القيود المرحّلة", "Posted entries")));
   if (k.treasury_balance != null) {
     const v = +k.treasury_balance;
@@ -358,9 +371,10 @@ function homeHtml(s) {
       <div class="tbl-wrap"><table><thead><tr><th>${tr("رقم القيد", "Entry No.")}</th><th>${tr("التاريخ", "Date")}</th><th>${tr("البيان", "Description")}</th><th>${tr("الحالة", "Status")}</th></tr></thead><tbody id="lastrows"></tbody></table></div>
       <div class="home-panel-foot">${tr("اضغط على أي قيد للانتقال إلى دفتر اليومية", "Select an entry to open the journal")}</div></section>`;
   const chart = s.cash_series == null ? "" : `<section class="card home-panel home-chart"><div class="card-h"><div><span class="home-eyebrow">${tr("الموقف النقدي", "CASH POSITION")}</span><h3>${tr("حركة رصيد الخزينة", "Treasury Balance Trend")}</h3></div><span class="home-period">${tr("آخر 12 شهر", "Last 12 months")}</span></div>${s.cash_series.length ? `<div class="chart">${lineChart(s.cash_series)}</div>` : `<div class="home-empty">${tr("لا توجد حركة خزينة مسجلة خلال الفترة", "No treasury activity recorded for this period")}</div>`}<div class="home-panel-foot">${tr("الرصيد التراكمي بعملة", "Cumulative balance in")} ${esc(s.currency || "")}</div></section>`;
-  if (!cards.length && !table && !chart) return `<p class="empty">${tr("لا توجد بيانات متاحة لصلاحياتك — استخدم القائمة الجانبية للتنقل.", "No data is available for your permissions. Use the sidebar to navigate.")}</p>`;
+  if (!cards.length && !table && !chart) return moduleCards || `<p class="empty">${tr("لا توجد بيانات متاحة لصلاحياتك — استخدم القائمة الجانبية للتنقل.", "No data is available for your permissions. Use the sidebar to navigate.")}</p>`;
   const dateLabel = new Date().toLocaleDateString(isEN() ? "en-US" : "ar-EG", {weekday:"long",year:"numeric",month:"long",day:"numeric"});
   return `<section class="home-hero"><div class="alliance-heading"><img class="alliance-logo" src="/static/company-logos.png?v=20261017" alt="شعار التحالف"><div class="alliance-copy"><strong>تحالف شركات</strong><span>المقاولون العرب (عثمان احمد عثمان وشركاه)</span><span>الغرابلي للأعمال الهندسية المتكاملة</span><span>أبناء سيناء للتشييد والبناء</span></div></div><div class="home-heading"><span class="home-eyebrow">${tr("نظرة عامة", "OVERVIEW")}</span><h1>${tr("لوحة تحكم ADEX", "ADEX Dashboard")}</h1><p>${tr("ملخص سريع لأهم الأرصدة والحركة المحاسبية في النظام.", "A concise view of key balances and accounting activity.")}</p><div class="home-date">${ico("calendar")}<span>${dateLabel}</span></div></div></section>
+    ${moduleCards}
     <div class="home-section-title"><div><h2>${tr("المؤشرات الرئيسية", "Key Financial Indicators")}</h2><p>${tr("القيم المعروضة حسب البيانات والصلاحيات المتاحة", "Figures based on available data and permissions")}</p></div></div>
     <div class="kpis home-kpis">${cards.join("")}</div><div class="home-section-title home-activity-title"><div><h2>${tr("ملخص النشاط", "Activity Overview")}</h2><p>${tr("تابع أحدث القيود واتجاه رصيد الخزينة", "Review recent entries and treasury trends")}</p></div></div>
     <div class="dash home-dash">${table}${chart}</div>`;
