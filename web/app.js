@@ -30,7 +30,7 @@ const SCREENS = {
   "/inventory": L("./pages/inventory.js?v=20261105-inventory-screens-1"),
   "/inventory/receipts": L("./pages/inventory.js?v=20261105-inventory-screens-1"),
   "/inventory/items": L("./pages/inventory.js?v=20261105-inventory-screens-1"),
-  "/purchases": L("./pages/purchases.js?v=20261105-purchasing-phase1-1"),
+  "/purchases": L("./pages/purchases.js?v=20261105-purchasing-phase1-2"),
   "/counterparties": L("./pages/counterparties.js?v=20261105-counterparty-names-i18n-2"),
   // Preserve the older type-specific links while using the unified party registry.
   "/customers": L("./pages/counterparties.js?v=20261105-counterparties-i18n-1"),
