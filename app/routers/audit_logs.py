@@ -110,7 +110,7 @@ def list_audit_logs(
     date_from: date | None = None, date_to: date | None = None,
     user_id: int | None = Query(None, ge=1), action: str | None = None,
     contract_id: int | None = Query(None, ge=1), settlement_id: int | None = Query(None, ge=1),
-    journal_entry_id: int | None = Query(None, ge=1), entity: str | None = None, entity_id: str | None = None,
+    journal_entry_id: int | None = Query(None, ge=1), entity: str | None = None, entity_id: str | None = None, search_text: str | None = None,
     skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500),
     _: User = Depends(require_permission("AuditLogs", "View")),
     db: Session = Depends(get_db),
@@ -122,6 +122,11 @@ def list_audit_logs(
     if action: conds.append(AuditLog.action_type.ilike(f"%{action.strip()}%"))
     if entity: conds.append(AuditLog.entity_name == entity.strip())
     if entity_id: conds.append(AuditLog.entity_id == entity_id.strip())
+    if search_text and search_text.strip():
+        term = f"%{search_text.strip()}%"
+        conds.append(or_(AuditLog.action_type.ilike(term), AuditLog.entity_name.ilike(term),
+                         AuditLog.entity_id.ilike(term), AuditLog.old_value.ilike(term),
+                         AuditLog.new_value.ilike(term)))
     if contract_id or settlement_id or journal_entry_id:
         rel = related_entities(db, contract_id, settlement_id, journal_entry_id)
         conds.append(or_(*[and_(AuditLog.entity_name == e, AuditLog.entity_id.in_(sorted(ids))) for e, ids in rel.items() if ids]) if any(rel.values()) else AuditLog.audit_id == -1)
