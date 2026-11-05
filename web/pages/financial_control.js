@@ -99,8 +99,9 @@ export async function render(main, { api }) {
   };
   $("#fc-refresh").onclick = safe(load);
   $("#fc-apply").onclick = safe(async () => { await load(); $("#fc-account-result").innerHTML = '<p class="muted">اختر حساباً لعرض الحركة.</p>'; });
-  $("#fc-xlsx").onclick = () => downloadFile("/api/financial-control/export.xlsx" + (params() ? "?" + params() : ""), "financial-control.xlsx").catch(e => toast(e.message || String(e)));
-  $("#fc-pdf").onclick = () => downloadFile("/api/financial-control/export.pdf" + (params() ? "?" + params() : ""), "financial-control.pdf").catch(e => toast(e.message || String(e)));
+  const exportParams = () => { const p = new URLSearchParams(params()); if ($("#fc-account").value) p.set("account_id", $("#fc-account").value); return p.toString(); };
+  $("#fc-xlsx").onclick = () => downloadFile("/api/financial-control/export.xlsx" + (exportParams() ? "?" + exportParams() : ""), "financial-control.xlsx").catch(e => toast(e.message || String(e)));
+  $("#fc-pdf").onclick = () => downloadFile("/api/financial-control/export.pdf" + (exportParams() ? "?" + exportParams() : ""), "financial-control.pdf").catch(e => toast(e.message || String(e)));
   $("#fc-account-run").onclick = safe(showAccount);
   await safe(load)();
 }
