@@ -82,11 +82,9 @@ async function ensureNav() {
   try { SUMMARY = await api("/dashboard/summary"); } catch { SUMMARY = null; }
 }
 
-// ترتيب القائمة الجانبية: الحسابات مباشرة، والباقي مجموعات قابلة للطي
+// تنظيم القائمة حسب دورة العمل، مع الإبقاء على الشاشات والصلاحيات القادمة من الخادم.
 const SEC_ORDER = ["ACCOUNTING", "REPORTS", "TREASURY", "CHECKS"];
-const FLAT = new Set(["ACCOUNTING"]);
 const SCR_ORDER = ["ChartOfAccounts", "JournalBook", "TrialBalance", "CostCenters"];
-const SEC_ICON = { REPORTS: "chart", TREASURY: "bank", CHECKS: "card" };
 const SCR_ICON = { ChartOfAccounts: "list", JournalBook: "book", TrialBalance: "scale", CostCenters: "target", BalanceSheet: "file", IncomeStatement: "chart", AnalyticsReports: "chart", AuditLogs: "receipt", CashAnalysis: "pie", BankReconciliation: "check" };
 const tOf = x => isEN() ? (x.title_en || x.title_ar) : (x.title_ar || x.title_en);
 const rank = (arr, v) => { const i = arr.indexOf(v); return i < 0 ? 99 : i; };
@@ -99,7 +97,15 @@ const ADMIN_ITEMS = [
   { route: "/admin/users", title: "المستخدمون والصلاحيات", title_en: "Users & Permissions", icon: "users" },
   { route: "/admin/backup", title: "النسخ الاحتياطي", title_en: "Backup & Restore", icon: "cloud" },
 ];
-
+const NAV_GROUPS = [
+  { ar: "المشروعات والعقود", en: "Projects & Contracts", icon: "file", routes: ["/projects", "/contract-requests", "/contracts", "/settlements"] },
+  { ar: "المشتريات والمخازن", en: "Purchasing & Inventory", icon: "receipt", routes: ["/purchases", "/inventory"] },
+  { ar: "الإدارة المالية", en: "Financial Operations", icon: "bank", routes: ["/accounts", "/treasury/analysis", "/treasury/reconciliation", "/checks/register", "/financial-checks", "/checks-register"] },
+  { ar: "الحسابات العامة", en: "General Accounting", icon: "book", sectionCodes: ["ACCOUNTING"] },
+  { ar: "التقارير والرقابة", en: "Reports & Control", icon: "chart", sectionCodes: ["REPORTS"], routes: ["/reports", "/reports/financial-control"] },
+  { ar: "الأطراف والبيانات الأساسية", en: "Parties & Master Data", icon: "users", routes: ["/counterparties", "/customers", "/contractors", "/suppliers"] },
+  { ar: "الخزينة والشيكات", en: "Treasury & Cheques", icon: "card", sectionCodes: ["TREASURY", "CHECKS"] },
+];
 function navItems() {          // كل الوجهات (للبحث العام)
   const out = [{ route: "/", title: tr("الرئيسية", "Home"), sub: "Home" }];
   for (const s of sectionsOrdered()) for (const x of screensOf(s)) out.push({ route: x.route, title: tOf(x), sub: x.title_en });
@@ -129,17 +135,29 @@ function titleOf(path) {
 }
 
 function navHtml(path) {
-  const link = (it, sub) => `<a class="nav-i${it.route === path ? " on" : ""}${SCREENS[it.route] || it.route === "/" ? "" : " soon"}" href="#${esc(it.route)}">${sub ? "" : ico(it.icon)}<span>${esc(it.title)}</span></a>`;
-  let h = link({ route: "/", title: tr("الرئيسية", "Home"), icon: "home" });
-  for (const s of sectionsOrdered()) {
-    const scr = screensOf(s);
-    if (FLAT.has(s.code)) { h += scr.map(x => link({ route: x.route, title: tOf(x), icon: SCR_ICON[x.code] || "dot" })).join(""); continue; }
-    const open = scr.some(x => x.route === path);
-    h += `<div class="nav-g${open ? " open" : ""}"><button class="nav-i nav-gh" type="button">${ico(SEC_ICON[s.code] || "dot")}<span>${esc(isEN() ? (s.name_en || s.name_ar) : (s.name_ar || s.name_en))}</span>${ico("chevron", "chev")}</button>
-      <div class="nav-sub">${scr.map(x => link({ route: x.route, title: tOf(x) }, true)).join("")}</div></div>`;
+  const link = (it, sub = true) => `<a class="nav-i${it.route === path ? " on" : ""}${SCREENS[it.route] || it.route === "/" ? "" : " soon"}" href="#${esc(it.route)}">${sub ? "" : ico(it.icon)}<span>${esc(it.title)}</span></a>`;
+  const all = sectionsOrdered().flatMap(s => screensOf(s).map(x => ({ ...x, _section: s.code })));
+  const used = new Set();
+  let h = link({ route: "/", title: tr("الرئيسية", "Home"), icon: "home" }, false);
+  const renderGroup = (title, icon, screens) => {
+    const unique = screens.filter(x => x?.route && !used.has(x.route));
+    if (!unique.length) return "";
+    unique.forEach(x => used.add(x.route));
+    const open = unique.some(x => x.route === path);
+    return `<div class="nav-g${open ? " open" : ""}"><button class="nav-i nav-gh" type="button">${ico(icon)}<span>${esc(title)}</span>${ico("chevron", "chev")}</button><div class="nav-sub">${unique.map(x => link({ route: x.route, title: tOf(x) })).join("")}</div></div>`;
+  };
+  for (const g of NAV_GROUPS) {
+    const screens = all.filter(x => (g.routes || []).includes(x.route) || (g.sectionCodes || []).includes(x._section));
+    h += renderGroup(isEN() ? g.en : g.ar, g.icon, screens);
   }
-  if (auth.can("AnalyticsReports", "View")) h += link({ route: "/reports/financial-control", title: tr("لوحة الرقابة المالية", "Financial Control"), icon: "chart" });
-  if (IS_ADMIN) h += `<div class="nav-sep"></div>` + ADMIN_ITEMS.map(a => link({ ...a, title: isEN() ? a.title_en : a.title })).join("");
+  for (const s of sectionsOrdered()) {
+    const leftovers = all.filter(x => x._section === s.code && !used.has(x.route));
+    h += renderGroup(isEN() ? (s.name_en || s.name_ar) : (s.name_ar || s.name_en), "list", leftovers);
+  }
+  if (auth.can("AnalyticsReports", "View") && !used.has("/reports/financial-control")) {
+    h += renderGroup(tr("التقارير والرقابة", "Reports & Control"), "chart", [{ route: "/reports/financial-control", title_ar: "لوحة الرقابة المالية", title_en: "Financial Control" }]);
+  }
+  if (IS_ADMIN) h += `<div class="nav-sep"></div>` + renderGroup(tr("إدارة النظام", "System Administration"), "users", ADMIN_ITEMS.map(a => ({ ...a, title_ar: a.title, title_en: a.title_en })));
   return h;
 }
 
