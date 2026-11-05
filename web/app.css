@@ -598,3 +598,18 @@ tbody tr:hover td{background:var(--brand-soft)}
 .home-recent tbody tr{cursor:pointer}
 @media(max-width:900px){.home-hero{padding:20px;align-items:flex-start}.home-dash{grid-template-columns:minmax(0,1fr)}.home-panel .chart{min-height:220px}}
 @media(max-width:600px){.home-hero{display:block;padding:18px 16px;margin-bottom:18px;border-radius:15px}.home-hero h1{font-size:21px}.home-hero p{font-size:12px;max-width:95%}.home-date{display:inline-flex;margin-top:14px;padding:8px 10px;font-size:11px}.home-section-title{margin-bottom:10px}.home-section-title h2{font-size:14px}.home-section-title p{font-size:10px}.home-kpis{gap:9px;margin-bottom:21px}.home-kpi{min-height:120px;padding:12px 11px;border-radius:13px}.home-kpi .kpi-mark{width:30px;height:30px;border-radius:9px}.home-kpi .kpi-mark .ico{width:16px;height:16px}.home-kpi .kpi-v{margin-top:12px;font-size:clamp(17px,4.6vw,22px)}.home-panel .card-h{padding:13px 12px;align-items:flex-start}.home-panel .card-h h3{font-size:13px}.home-panel .seg .btn{padding:5px 8px;font-size:11px}.home-panel .chart{padding:10px 3px;min-height:180px}.home-period{font-size:10px;padding:5px 7px}.home-recent table{min-width:510px}}
+
+/* Alliance identity on dashboard and printed pages */
+.alliance-heading{display:flex;align-items:center;gap:16px;min-width:0;padding:12px 16px;background:linear-gradient(110deg,#f5f8fc,#fff);border:1px solid #dce4ee;border-right:4px solid #c99a32;border-radius:12px}
+.alliance-logo{width:104px;height:76px;object-fit:contain;flex:0 0 auto}
+.alliance-copy{display:flex;flex-direction:column;gap:4px;min-width:0;color:#17375f;font-size:12px;line-height:1.5}
+.alliance-copy>strong:first-child{font-size:14px;color:#b18427}
+.home-heading{min-width:0}
+.home-hero{gap:16px}
+.print-alliance{display:flex;align-items:center;gap:12px;min-width:0}
+.print-alliance img{width:88px;height:58px;object-fit:contain}
+.print-alliance>div{display:flex;flex-direction:column;gap:2px;color:#17375f;font-size:10px;line-height:1.35}
+.print-alliance b{font-size:13px;color:#9a7424}
+.print-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px;text-align:left;font-size:11px}
+@media(max-width:700px){.home-hero{display:flex;flex-direction:column;align-items:stretch}.alliance-heading{gap:9px;padding:9px}.alliance-logo{width:72px;height:64px}.alliance-copy{font-size:10px}.alliance-copy>strong:first-child{font-size:12px}}
+@media print{.print-head{align-items:center!important;gap:12px!important}.print-alliance img{width:78px;height:52px}.print-alliance>div{font-size:9px}.print-meta{font-size:9px}}
