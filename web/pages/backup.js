@@ -5,7 +5,8 @@ const kindLabel = (kind, tr) => ({ manual: tr("يدوية", "Manual"), auto: tr(
 const mb = n => (n / 1048576).toFixed(n < 104857 ? 2 : 1) + " MB";
 const when = iso => (iso || "").replace("T", " ");
 
-export async function render(main) {\n  const tr = (ar, en) => { try { return localStorage.getItem("fs_lang") === "en" ? en : ar; } catch { return ar; } };
+export async function render(main) {
+  const tr = (ar, en) => { try { return localStorage.getItem("fs_lang") === "en" ? en : ar; } catch { return ar; } };
   main.innerHTML = `<section class="sec"><h3>${tr("النسخ الاحتياطي والصيانة","Backup & Maintenance")}</h3>
     <div style="padding:16px">
       <div id="info" class="muted">${tr("جاري التحميل...","Loading...")}</div>
