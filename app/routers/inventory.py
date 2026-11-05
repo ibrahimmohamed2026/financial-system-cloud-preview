@@ -955,7 +955,7 @@ def reject_requisition(requisition_id: int, body: RequisitionRejectIn,
     if x.requested_by == user.user_id:
         raise HTTPException(403, "لا يجوز رفض طلب الشراء بواسطة مقدمه")
     x.status = "Rejected"
-    x.notes = ((x.notes or "") + "\\nسبب الرفض: " + body.reason.strip()).strip()
+    x.notes = ((x.notes or "") + "\nسبب الرفض: " + body.reason.strip()).strip()
     write_audit(db, user.user_id, "Reject", "PurchaseRequisitions", requisition_id,
         new={"status": x.status, "reason": body.reason.strip()})
     db.commit()
