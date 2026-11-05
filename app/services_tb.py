@@ -25,17 +25,17 @@ def compute_tb(db: Session, date_from: date | None = None, date_to: date | None 
            .join(je, je.journal_entry_id == jed.journal_entry_id).where(je.status == "Posted")
            .group_by(jed.account_id).subquery())
     rows = db.execute(
-        select(Account, AccountClassification.name_ar, AccountClassification.statement_type,
+        select(Account, AccountClassification.name_ar, AccountClassification.name_en, AccountClassification.statement_type,
                sub.c.pd, sub.c.pc, sub.c.d, sub.c.c)
         .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
         .outerjoin(sub, sub.c.aid == Account.account_id).order_by(Account.account_code)).all()
 
     own: dict[int, dict] = {}
-    for a, cls, st, pd, pc, d, c in rows:
+    for a, cls, cls_en, st, pd, pc, d, c in rows:
         own[a.account_id] = {
-            "account_id": a.account_id, "code": a.account_code, "name": a.account_name_ar,
+            "account_id": a.account_id, "code": a.account_code, "name": a.account_name_ar, "name_en": a.account_name_en,
             "parent_id": a.parent_account_id, "classification_id": a.classification_id,
-            "classification": cls, "statement_type": st, "normal_balance": a.normal_balance,
+            "classification": cls, "classification_en": cls_en, "statement_type": st, "normal_balance": a.normal_balance,
             "is_active": a.is_active,
             "od": Decimal(a.opening_debit or 0) + Decimal(pd or 0), "oc": Decimal(a.opening_credit or 0) + Decimal(pc or 0),
             "d": Decimal(d or 0), "c": Decimal(c or 0),
