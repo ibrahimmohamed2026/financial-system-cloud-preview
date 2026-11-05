@@ -11,8 +11,10 @@ export async function render(main, { api }) {
     <div class="w"><label>العقد</label><select id="contract"><option value="">كل العقود</option></select></div>
     <div class="w"><label>رقم مستخلص (ID)</label><input id="settlement" type="number" min="1" placeholder="مستخلص مالي"></div>
     <div class="w"><label>رقم قيد (ID)</label><input id="jentry" type="number" min="1" placeholder="قيد يومية"></div>
-    <div class="w"><label>نوع الحركة</label><input id="action" placeholder="مثال: Update"></div>
-    <button class="btn primary" id="apply">بحث</button><button class="btn" id="reset">مسح الفلاتر</button>
+    <div class="w"><label>نوع الحركة</label><select id="action"><option value="">كل العمليات</option><option value="Create">إنشاء</option><option value="Update">تعديل</option><option value="Delete">حذف</option><option value="Post">ترحيل</option><option value="Approve">اعتماد</option><option value="Print">طباعة</option><option value="Cancel">إلغاء</option><option value="Reverse">عكس قيد</option></select></div>
+    <div class="w"><label>نوع السجل</label><input id="entity" placeholder="مثال: JournalEntries"></div>
+    <div class="w"><label>بحث عام</label><input id="search" placeholder="اسم أو رقم أو وصف الحركة"></div>
+    <button class="btn primary" id="apply">بحث</button><button class="btn" id="reset">مسح الفلاتر</button><button class="btn" id="export">تصدير CSV</button>
   </div><div class="panel" style="margin-bottom:14px"><b id="total">سجل النشاطات</b><span class="muted"> — سجل تدقيق للعمليات المسجلة بالنظام</span></div>
   <div class="tbl-wrap"><table><thead><tr><th>التاريخ والوقت</th><th>المستخدم</th><th>نوع الحركة</th><th>الكيان</th><th>العقد</th><th>المستخلص</th><th>القيد</th><th>عنوان IP</th><th>التفاصيل</th></tr></thead><tbody id="rows"><tr><td colspan="9">جارٍ التحميل...</td></tr></tbody></table></div><div class="pager" id="pager"></div>`;
   const $ = id => main.querySelector('#'+id); let skip=0, total=0; const limit=100;
