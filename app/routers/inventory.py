@@ -1025,7 +1025,7 @@ def list_orders(_: User = Depends(require_permission("PurchaseCycle", "View")), 
 @inventory.get("/purchase-receipts")
 def list_pending_purchase_receipts(_: User = Depends(require_permission("InventoryManagement", "View")), db: Session = Depends(get_db)):
     """Expose approved purchase orders as receiving documents in the warehouse screen."""
-    orders = db.scalars(select(PurchaseOrder).where(PurchaseOrder.status == "Approved")
+    orders = db.scalars(select(PurchaseOrder).where(PurchaseOrder.status.in_(("Approved", "PartiallyReceived")))
         .order_by(PurchaseOrder.order_date.desc(), PurchaseOrder.purchase_order_id.desc())).all()
     pending = []
     for order in orders:
@@ -1133,14 +1133,14 @@ def supplier_invoice_lookups(_:User=Depends(require_permission("PurchaseCycle","
 
 @purchases.post("/invoices",status_code=201)
 def create_supplier_invoice(body:SupplierInvoiceIn,user:User=Depends(require_permission("PurchaseCycle","Add")),db:Session=Depends(get_db)):
-    po=db.get(PurchaseOrder,body.purchase_order_id)
+    po=db.scalar(select(PurchaseOrder).where(PurchaseOrder.purchase_order_id==body.purchase_order_id).with_for_update())
     if not po or po.status not in ("Received","PartiallyReceived"):raise HTTPException(409,"لا تسجل فاتورة المورد إلا بعد استلام كمية فعلية من أمر الشراء")
     party=resolve_counterparty(db,po.supplier_name,"Supplier",po.counterparty_id)
     if not party:raise HTTPException(409,"سجل المورد المرتبط بأمر الشراء غير موجود")
     if db.scalar(select(SupplierInvoice.invoice_id).where(SupplierInvoice.supplier_id==party.counterparty_id,SupplierInvoice.invoice_no==body.invoice_no)):
         raise HTTPException(409,"رقم الفاتورة مستخدم لهذا المورد")
     if len({x.purchase_order_line_id for x in body.lines})!=len(body.lines):raise HTTPException(422,"لا تكرر بند أمر الشراء في الفاتورة")
-    po_lines={x.line_id:x for x in db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==po.purchase_order_id)).all()}
+    po_lines={x.line_id:x for x in db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id==po.purchase_order_id).with_for_update()).all()}
     prepared=[];net_total=Decimal("0")
     for row in body.lines:
         pl=po_lines.get(row.purchase_order_line_id)
@@ -1301,6 +1301,8 @@ def create_purchase_receipt(order_id: int, body: PurchaseGoodsReceiptIn,
         raise HTTPException(404, "أمر الشراء غير موجود")
     if po.status not in ("Approved", "PartiallyReceived"):
         raise HTTPException(409, "يجب اعتماد أمر الشراء قبل تسجيل محضر الاستلام")
+    if body.receipt_date < po.order_date:
+        raise HTTPException(422, "تاريخ الاستلام لا يمكن أن يسبق تاريخ أمر الشراء")
     if len({line.purchase_order_line_id for line in body.lines}) != len(body.lines):
         raise HTTPException(422, "لا تكرر بند أمر الشراء في محضر الاستلام")
     po_lines = {line.line_id: line for line in db.scalars(
