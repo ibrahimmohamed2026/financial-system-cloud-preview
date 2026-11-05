@@ -89,7 +89,7 @@ def review_request(request_id:int,body:ReviewIn,user:User=Depends(require_permis
     return out(x)
 
 @router.post("/{request_id}/create-contract", status_code=201)
-def create_contract_from_request(request_id:int,contract_no:Optional[str]=None,title:Optional[str]=None,start_date:Optional[str]=None,end_date:Optional[str]=None,
+def create_contract_from_request(request_id:int,contract_no:Optional[str]=None,title:Optional[str]=None,title_en:Optional[str]=None,start_date:Optional[str]=None,end_date:Optional[str]=None,
     user:User=Depends(require_permission("Contracts","Add")),db:Session=Depends(get_db)):
     x=db.get(ContractRequest,request_id)
     if not x: raise HTTPException(404,"طلب التعاقد غير موجود")
@@ -97,7 +97,7 @@ def create_contract_from_request(request_id:int,contract_no:Optional[str]=None,t
     if db.scalar(select(Contract.contract_id).where(Contract.request_id==request_id)): raise HTTPException(409,"تم إنشاء عقد من هذا الطلب بالفعل")
     from datetime import date
     def parsed(v): return date.fromisoformat(v) if v else None
-    c=Contract(request_id=request_id,contract_no=f"CT-PENDING-{uuid4().hex}",title=title or x.title,title_en=x.title_en,client_name=x.counterparty_name,client_name_en=x.counterparty_name_en,project_id=x.project_id,
+    c=Contract(request_id=request_id,contract_no=f"CT-PENDING-{uuid4().hex}",title=title or x.title,title_en=title_en or x.title_en,client_name=x.counterparty_name,client_name_en=x.counterparty_name_en,project_id=x.project_id,
         start_date=parsed(start_date),end_date=parsed(end_date),original_value=x.estimated_value,status="Draft",notes=f"تم إنشاؤه من طلب التعاقد {x.request_no}",created_by=user.user_id)
     db.add(c); db.flush(); c.contract_no=f"CT-{date.today().year}-{c.contract_id:06d}"
     write_audit(db,user.user_id,"CreateFromRequest","Contracts",c.contract_id,new={"request_id":request_id,"contract_no":c.contract_no})
