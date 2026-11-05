@@ -37,6 +37,25 @@ ALIASES = {norm(a): f for f, lst in _ALIASES_RAW.items() for a in lst}
 _DR = {norm(x) for x in ("DR", "debit", "مدين", "م", "D")}
 _CR = {norm(x) for x in ("CR", "credit", "دائن", "د", "C")}
 
+def infer_normal_balance(classification_name: str) -> str | None:
+    """استنتاج الطبيعة من اسم تبويب القوائم؛ لا نخمن عند عدم وضوح التصنيف."""
+    value = norm(classification_name)
+    credit_terms = (
+        "خصوم", "التزامات", "حقوق الملكيه", "راس المال", "رأس المال",
+        "ايرادات", "إيرادات", "دخل", "مبيعات", "دائنون", "موردون",
+        "ارصده دائنه", "ارصدة دائنة",
+    )
+    debit_terms = (
+        "اصول", "أصول", "مصروفات", "مصروف", "تكلفه", "تكلفة",
+        "مشتريات", "مدينون", "عملاء", "مخزون", "نقديه", "نقدية",
+    )
+    if any(norm(term) in value for term in credit_terms):
+        return "CR"
+    if any(norm(term) in value for term in debit_terms):
+        return "DR"
+    return None
+
+
 
 class ImportFileError(ValueError):
     """ملف مش سليم (مش xlsx / مفيش عناوين / كبير أوي)."""
@@ -162,6 +181,14 @@ def parse_rows(
     plan = ImportPlan(total_rows=len(rows))
     err = plan.errors
     seen: dict[str, int] = {}  # code.casefold() → أول صف
+    file_codes = [to_code(raw.get("account_code")) for _, raw in rows]
+    all_codes = set(existing) | {code.casefold() for code in file_codes if code}
+    
+    def infer_parent(code: str) -> str | None:
+        key = code.casefold()
+        candidates = [candidate for candidate in all_codes
+                      if candidate != key and len(candidate) < len(key) and key.startswith(candidate)]
+        return max(candidates, key=len) if candidates else None
 
     for rownum, raw in rows:
         before = len(err)
@@ -184,13 +211,11 @@ def parse_rows(
             else:
                 seen[key] = rownum
                 if key in existing:
-                    if skip_existing:
-                        plan.skipped_existing += 1
-                        continue
-                    if not update_existing:
-                        err.append(RowError(rownum, "account_code", "الكود موجود قبل كده في النظام"))
+                    # الاستيراد مخصص للإضافة فقط: الحساب الموجود لا يُعدّل ولا يُستبدل.
+                    plan.skipped_existing += 1
+                    continue
 
-        parent_code = to_code(raw.get("parent_code")) or None
+        parent_code = to_code(raw.get("parent_code")) or infer_parent(code)
         if parent_code and parent_code.casefold() == key:
             err.append(RowError(rownum, "parent_code", "الحساب مينفعش يبقى أب لنفسه"))
 
@@ -204,24 +229,20 @@ def parse_rows(
                 err.append(RowError(rownum, "classification", f"التصنيف «{cls_name}» مش موجود في النظام"))
 
         nb_raw = to_text(raw.get("normal_balance"))
-        nb = "DR" if norm(nb_raw) in _DR else "CR" if norm(nb_raw) in _CR else None
+        nb = ("DR" if norm(nb_raw) in _DR else "CR" if norm(nb_raw) in _CR
+              else infer_normal_balance(cls_name))
         if nb is None:
             err.append(RowError(rownum, "normal_balance",
-                                "طبيعة الرصيد لازم تبقى مدين أو دائن (DR / CR)" if nb_raw else "طبيعة الرصيد فاضية"))
+                                f"مش قادر أحدد طبيعة الحساب من التصنيف «{cls_name}»؛ راجع اسم التصنيف أو حدّد الطبيعة في الملف."))
 
-        amounts = {}
-        for f, label in (("opening_debit", "الرصيد الافتتاحي المدين"), ("opening_credit", "الرصيد الافتتاحي الدائن")):
-            try:
-                amounts[f] = to_decimal(raw.get(f))
-            except ValueError as exc:
-                err.append(RowError(rownum, f, f"{label}: {exc}"))
-        if len(amounts) == 2 and amounts["opening_debit"] > 0 and amounts["opening_credit"] > 0:
-            err.append(RowError(rownum, "opening_debit", "الرصيد الافتتاحي إما مدين أو دائن، مش الاتنين"))
+        # سياسة هذا الاستيراد: كل الحسابات تبدأ بصفر، ونتجاهل أعمدة الأرصدة والحركات تمامًا.
+        opening_debit = Decimal("0.00")
+        opening_credit = Decimal("0.00")
 
         if len(err) == before and code:
             plan.items.append(ParsedAccount(
                 row=rownum, code=code, name=name, parent_code=parent_code, classification_id=cls_id,
-                normal_balance=nb, opening_debit=amounts["opening_debit"], opening_credit=amounts["opening_credit"]))
+                normal_balance=nb, opening_debit=opening_debit, opening_credit=opening_credit))
 
     _check_parents(plan, seen, existing)
     plan.errors.sort(key=lambda e: e.row)
@@ -283,26 +304,20 @@ def build_template(classification_names: list[str]) -> bytes:
     ws = wb.active
     ws.title = "الحسابات"
     ws.sheet_view.rightToLeft = True
-    ws.append(TEMPLATE_HEADERS)
+    ws.append(["رمز الحساب", "اسم الحساب", "تبويب القوائم المالية"])
     first_cls = classification_names[0] if classification_names else "أصول متداولة"
-    ws.append(["1", "الأصول", "", first_cls, "مدين", 0, 0])
-    ws.append(["11", "النقدية بالخزينة", "1", first_cls, "مدين", 1500.5, 0])
+    ws.append(["1", "الأصول", first_cls])
 
     head_fill = PatternFill("solid", fgColor="1F3A68")
     for cell in ws[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = head_fill
         cell.alignment = Alignment(horizontal="center", vertical="center")
-    for col, width in zip("ABCDEFG", (16, 40, 18, 28, 16, 20, 20)):
+    for col, width in zip("ABC", (22, 45, 38)):
         ws.column_dimensions[col].width = width
-    for row in range(2, 1002):  # الكود والأب كنص عشان الأصفار اللي في الأول ما تضيعش
+    for row in range(2, 1002):
         ws.cell(row=row, column=1).number_format = "@"
-        ws.cell(row=row, column=3).number_format = "@"
     ws.freeze_panes = "A2"
-
-    dv = DataValidation(type="list", formula1='"مدين,دائن"', allow_blank=False)
-    dv.add("E2:E1001")
-    ws.add_data_validation(dv)
 
     cls_ws = wb.create_sheet("التصنيفات")
     cls_ws.sheet_view.rightToLeft = True
@@ -319,11 +334,12 @@ def build_template(classification_names: list[str]) -> bytes:
     info = wb.create_sheet("تعليمات")
     info.sheet_view.rightToLeft = True
     for line in (
-        "كود الحساب واسم الحساب والتصنيف وطبيعة الرصيد: إجباريين.",
-        "كود الحساب الأب: اختياري — لازم يكون كود موجود في الملف أو في النظام.",
-        "طبيعة الرصيد: مدين أو دائن.",
-        "الرصيد الافتتاحي: إما مدين أو دائن، مش الاتنين، ومينفعش يبقى سالب.",
-        "امسح الصفين المثال قبل الاستيراد.",
+        "الأعمدة المطلوبة فقط: رمز الحساب، اسم الحساب، تبويب القوائم المالية.",
+        "النظام يحدد الحساب الأب تلقائيًا من أطول كود حساب أقصر يبدأ به كود الحساب.",
+        "طبيعة الحساب تُستنتج من اسم تبويب القوائم المالية؛ أي تصنيف غير واضح يظهر كخطأ للمراجعة.",
+        "كل الحسابات الجديدة تُضاف بأرصدة افتتاحية صفرية.",
+        "الحسابات الموجودة بنفس الكود يتم تخطيها دون تعديل أي بيانات.",
+        "أعمدة الأرصدة والحركات والإجماليات في ملفك الأصلي يتم تجاهلها.",
         "الاستيراد كله أو لا شيء: لو في خطأ في أي صف مفيش حاجة بتتحفظ.",
     ):
         info.append([line])
