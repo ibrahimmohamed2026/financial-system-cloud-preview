@@ -120,7 +120,7 @@ class RequisitionLineIn(BaseModel):
     quantity: Decimal = Field(gt=0)
     notes: str | None = None
 class RequisitionIn(BaseModel):
-    requisition_no: str = Field(min_length=1, max_length=60)
+    requisition_no: str | None = Field(default=None, max_length=60)
     request_date: date = Field(default_factory=date.today)
     required_date: date | None = None
     warehouse_id: int
@@ -132,7 +132,7 @@ class QuotationLineIn(BaseModel):
     quantity: Decimal = Field(gt=0)
     unit_price: Decimal = Field(ge=0)
 class QuotationIn(BaseModel):
-    quotation_no: str = Field(min_length=1, max_length=60)
+    quotation_no: str | None = Field(default=None, max_length=60)
     requisition_id: int
     supplier_name: str = Field(min_length=1, max_length=250)
     quotation_date: date = Field(default_factory=date.today)
@@ -909,8 +909,7 @@ def list_requisitions(_: User = Depends(require_permission("PurchaseCycle", "Vie
 
 @purchases.post("/requisitions", status_code=201)
 def create_requisition(body: RequisitionIn, user: User = Depends(require_permission("PurchaseCycle", "Add")), db: Session = Depends(get_db)):
-    if db.scalar(select(PurchaseRequisition.requisition_id).where(PurchaseRequisition.requisition_no == body.requisition_no)):
-        raise HTTPException(409, "رقم طلب الشراء مستخدم بالفعل")
+    # Document number is assigned by the server after the database allocates its ID.
     warehouse = db.get(InventoryWarehouse, body.warehouse_id)
     if not warehouse or not warehouse.is_active: raise HTTPException(422, "المخزن غير موجود أو غير نشط")
     if body.project_id and not db.get(Project, body.project_id): raise HTTPException(422, "المشروع غير موجود")
@@ -918,10 +917,11 @@ def create_requisition(body: RequisitionIn, user: User = Depends(require_permiss
     for line in body.lines:
         item = db.get(InventoryItem, line.item_id)
         if not item or not item.is_active: raise HTTPException(422, f"الصنف {line.item_id} غير موجود أو غير نشط")
-    x = PurchaseRequisition(requisition_no=body.requisition_no, request_date=body.request_date,
+    x = PurchaseRequisition(requisition_no=f"PR-PENDING-{uuid4().hex}", request_date=body.request_date,
         required_date=body.required_date, warehouse_id=body.warehouse_id, project_id=body.project_id,
         requested_by=user.user_id, status="PendingApproval", notes=body.notes)
     db.add(x); db.flush()
+    x.requisition_no = f"PR-{body.request_date.year}-{x.requisition_id:06d}"
     for line in body.lines: db.add(PurchaseRequisitionLine(requisition_id=x.requisition_id, item_id=line.item_id, quantity=line.quantity, notes=line.notes))
     write_audit(db, user.user_id, "Create", "PurchaseRequisitions", x.requisition_id,
         new={"requisition_no": x.requisition_no, "lines": len(body.lines), "status": x.status})
@@ -959,18 +959,18 @@ def list_quotations(_: User = Depends(require_permission("PurchaseCycle", "View"
 def create_quotation(body: QuotationIn, user: User = Depends(require_permission("PurchaseCycle", "Add")), db: Session = Depends(get_db)):
     req = db.get(PurchaseRequisition, body.requisition_id)
     if not req or req.status not in ("Approved", "Quoting"): raise HTTPException(409, "يجب اعتماد طلب الشراء قبل تسجيل عروض الأسعار")
-    if db.scalar(select(SupplierQuotation.quotation_id).where(SupplierQuotation.quotation_no == body.quotation_no)):
-        raise HTTPException(409, "رقم عرض السعر مستخدم بالفعل")
+    # Supplier quotation reference is generated internally; supplier's own quote reference can be stored in notes.
     req_lines = {l.item_id: l for l in db.scalars(select(PurchaseRequisitionLine).where(PurchaseRequisitionLine.requisition_id == req.requisition_id)).all()}
     if len({l.item_id for l in body.lines}) != len(body.lines): raise HTTPException(422, "لا تكرر الصنف داخل عرض السعر")
     if {l.item_id for l in body.lines} != set(req_lines): raise HTTPException(422, "يجب أن يغطي عرض السعر جميع أصناف طلب الشراء")
     for line in body.lines:
         if line.item_id not in req_lines or line.quantity != req_lines[line.item_id].quantity:
             raise HTTPException(422, "كميات عرض السعر يجب أن تطابق طلب الشراء")
-    q = SupplierQuotation(quotation_no=body.quotation_no, requisition_id=req.requisition_id, supplier_name=body.supplier_name,
+    q = SupplierQuotation(quotation_no=f"QT-PENDING-{uuid4().hex}", requisition_id=req.requisition_id, supplier_name=body.supplier_name,
         quotation_date=body.quotation_date, valid_until=body.valid_until, delivery_days=body.delivery_days,
         payment_terms=body.payment_terms, notes=body.notes, status="Submitted", created_by=user.user_id)
     db.add(q); db.flush()
+    q.quotation_no = f"QT-{body.quotation_date.year}-{q.quotation_id:06d}"
     for line in body.lines: db.add(SupplierQuotationLine(quotation_id=q.quotation_id, item_id=line.item_id, quantity=line.quantity, unit_price=line.unit_price))
     req.status = "Quoting"
     write_audit(db, user.user_id, "Create", "SupplierQuotations", q.quotation_id,
