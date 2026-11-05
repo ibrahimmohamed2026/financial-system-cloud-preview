@@ -95,9 +95,9 @@ const isHrSection = s => /^(hr|human[_ -]?resources)$/i.test(String(s.code || ""
 const sectionsOrdered = () => (NAV?.sections || []).filter(s => !isHrSection(s)).slice().sort((a, b) => rank(SEC_ORDER, a.code) - rank(SEC_ORDER, b.code));
 const screensOf = s => s.code === "ACCOUNTING" ? s.screens.slice().sort((a, b) => rank(SCR_ORDER, a.code) - rank(SCR_ORDER, b.code)) : s.screens;
 const ADMIN_ITEMS = [
-  { route: "/admin/company", title: "بيانات الشركة", icon: "file" },
-  { route: "/admin/users", title: "المستخدمون والصلاحيات", icon: "users" },
-  { route: "/admin/backup", title: "النسخ الاحتياطي", icon: "cloud" },
+  { route: "/admin/company", title: "بيانات الشركة", title_en: "Company Profile", icon: "file" },
+  { route: "/admin/users", title: "المستخدمون والصلاحيات", title_en: "Users & Permissions", icon: "users" },
+  { route: "/admin/backup", title: "النسخ الاحتياطي", title_en: "Backup & Restore", icon: "cloud" },
 ];
 
 function navItems() {          // كل الوجهات (للبحث العام)
@@ -139,7 +139,7 @@ function navHtml(path) {
       <div class="nav-sub">${scr.map(x => link({ route: x.route, title: tOf(x) }, true)).join("")}</div></div>`;
   }
   if (auth.can("AnalyticsReports", "View")) h += link({ route: "/reports/financial-control", title: tr("لوحة الرقابة المالية", "Financial Control"), icon: "chart" });
-  if (IS_ADMIN) h += `<div class="nav-sep"></div>` + ADMIN_ITEMS.map(a => link(a)).join("");
+  if (IS_ADMIN) h += `<div class="nav-sep"></div>` + ADMIN_ITEMS.map(a => link({ ...a, title: isEN() ? a.title_en : a.title })).join("");
   return h;
 }
 
@@ -222,6 +222,7 @@ function loginPage() {
     <div class="f"><label>${tr("اسم المستخدم", "Username")}</label><input name="u" autocomplete="username" required autofocus></div>
     <div class="f"><label>${tr("كلمة المرور", "Password")}</label><input name="p" type="password" autocomplete="current-password" required></div>
     <div class="err" id="e"></div><button class="btn primary" style="width:100%">${tr("دخول", "Sign in")}</button></form>`;
+  root.querySelector("#loginlang").onclick = () => { LANG = isEN() ? "ar" : "en"; try { localStorage.setItem("fs_lang", LANG); } catch {} applyLanguage(); loginPage(); };
   const f = root.querySelector("form");
   f.onsubmit = async ev => {
     ev.preventDefault(); const b = f.querySelector("button"); b.disabled = true;
