@@ -14,3 +14,9 @@ def test_contract_items_retain_original_boq_baseline():
     columns = ContractItem.__table__.columns
     assert "OriginalQuantity" in columns
     assert "OriginalUnitPrice" in columns
+
+
+def test_addendum_model_foreign_keys_resolve():
+    from app.models import Base
+
+    assert Base.metadata.sorted_tables
