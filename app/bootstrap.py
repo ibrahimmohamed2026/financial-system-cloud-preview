@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from .models import Permission, Role, RolePermission, Screen, Section, User, UserRole
+from .models import Permission, Role, RolePermission, Screen, Section, User, UserRole, JobProfile, JobProfilePermission
 
 ACTIONS = ["View", "Add", "Edit", "Delete", "Post", "Approve", "EngineeringApprove", "FinancialApprove", "ManagerApprove", "Print"]
 
@@ -172,6 +172,40 @@ def sync_permissions(db: Session) -> None:
         db.flush()
     for pid in db.scalars(select(Permission.permission_id)):
         grant(admin.role_id, pid)
+    db.commit()
+
+
+def seed_job_profiles(db: Session) -> None:
+    """Seed editable least-privilege templates once; never overwrite admin customization."""
+    templates = {
+        "مسؤول النظام IT": ("IT System Administrator", {"AuditLogs": ["View"], "AnalyticsReports": ["View"]}),
+        "المدير العام": ("General Manager", {"Contracts": ["View"], "ContractRequests": ["View"], "ContractSettlements": ["View", "ManagerApprove"], "SettlementManagerApproval": ["View"], "JournalBook": ["View"], "CostCenters": ["View"], "ChartOfAccounts": ["View"], "TrialBalance": ["View"], "BalanceSheet": ["View"], "IncomeStatement": ["View"], "AnalyticsReports": ["View"], "AuditLogs": ["View"]}),
+        "مدير المشروعات": ("Projects Manager", {"Contracts": ["View", "Edit"], "ContractRequests": ["View", "Edit"], "ContractSettlements": ["View"], "CostCenters": ["View"], "InventoryManagement": ["View"], "PurchaseCycle": ["View"], "AnalyticsReports": ["View"]}),
+        "مدير الموقع": ("Site Manager", {"Contracts": ["View"], "ContractSettlements": ["View"], "InventoryManagement": ["View", "Add", "Edit"], "PurchaseCycle": ["View", "Add"], "CostCenters": ["View"]}),
+        "مهندس موقع": ("Site Engineer", {"Contracts": ["View"], "ContractSettlements": ["View", "Add", "Edit"], "CostCenters": ["View"]}),
+        "مدير المكتب الفني": ("Technical Office Manager", {"Contracts": ["View", "Add", "Edit"], "ContractRequests": ["View", "Add", "Edit"], "ContractSettlements": ["View"], "CostCenters": ["View"]}),
+        "مراجع فني": ("Technical Reviewer", {"Contracts": ["View"], "ContractSettlements": ["View", "EngineeringApprove"], "CostCenters": ["View"]}),
+        "مسؤول العقود": ("Contracts Officer", {"Contracts": ["View", "Add", "Edit"], "ContractRequests": ["View", "Add", "Edit"], "Counterparties": ["View", "Add", "Edit"], "CostCenters": ["View"]}),
+        "محاسب": ("Accountant", {"ContractSettlements": ["View", "Add", "Edit"], "JournalBook": ["View", "Add", "Edit"], "ChartOfAccounts": ["View"], "Counterparties": ["View"], "TrialBalance": ["View"]}),
+        "مراجع مالي": ("Financial Reviewer", {"ContractSettlements": ["View", "FinancialApprove"], "JournalBook": ["View"], "ChartOfAccounts": ["View"], "TrialBalance": ["View"], "AuditLogs": ["View"]}),
+        "المدير المالي": ("Finance Manager", {"ContractSettlements": ["View", "ManagerApprove"], "SettlementManagerApproval": ["View"], "JournalBook": ["View"], "ChartOfAccounts": ["View"], "TrialBalance": ["View"], "BalanceSheet": ["View"], "IncomeStatement": ["View"], "AnalyticsReports": ["View"]}),
+        "محاسب خزينة": ("Treasury Accountant", {"CashAnalysis": ["View"], "BankCibEgp": ["View", "Add", "Edit", "Post"], "CashEgp": ["View", "Add", "Edit", "Post"], "CashUsd": ["View", "Add", "Edit", "Post"], "BankCairoEgp": ["View", "Add", "Edit", "Post"], "BankHdbEgp": ["View", "Add", "Edit", "Post"], "BankHdbUsd": ["View", "Add", "Edit", "Post"], "BankCibUsd": ["View", "Add", "Edit", "Post"], "ChecksCib": ["View", "Add", "Edit"], "ChecksCairoEgp": ["View", "Add", "Edit"], "ChecksCairoUsd": ["View", "Add", "Edit"], "FinancialChecks": ["View", "Add", "Edit"]}),
+        "مسؤول مشتريات": ("Procurement Officer", {"PurchaseCycle": ["View", "Add", "Edit"], "Counterparties": ["View"], "InventoryManagement": ["View"], "CostCenters": ["View"]}),
+        "أمين مخزن": ("Storekeeper", {"InventoryManagement": ["View", "Add", "Edit"], "CostCenters": ["View"]}),
+        "مراجع داخلي": ("Internal Auditor", {"AuditLogs": ["View"], "AnalyticsReports": ["View"], "Contracts": ["View"], "ContractRequests": ["View"], "ContractSettlements": ["View"], "JournalBook": ["View"], "CostCenters": ["View"], "ChartOfAccounts": ["View"], "TrialBalance": ["View"], "BalanceSheet": ["View"], "IncomeStatement": ["View"], "InventoryManagement": ["View"], "PurchaseCycle": ["View"], "Counterparties": ["View"], "FinancialChecks": ["View"]}),
+        "مستخدم مشاهدة فقط": ("Read Only User", {"Contracts": ["View"], "ContractRequests": ["View"], "ContractSettlements": ["View"], "JournalBook": ["View"], "CostCenters": ["View"], "ChartOfAccounts": ["View"], "TrialBalance": ["View"], "BalanceSheet": ["View"], "IncomeStatement": ["View"], "InventoryManagement": ["View"], "PurchaseCycle": ["View"], "Counterparties": ["View"], "AnalyticsReports": ["View"]}),
+    }
+    available = {(p.screen_code, p.action_code): p.permission_id for p in db.scalars(select(Permission))}
+    for name_ar, (name_en, grants) in templates.items():
+        if db.scalar(select(JobProfile.job_profile_id).where(JobProfile.name_ar == name_ar)) is not None:
+            continue
+        profile = JobProfile(name_ar=name_ar, name_en=name_en, is_active=True)
+        db.add(profile); db.flush()
+        for screen, actions in grants.items():
+            for action in actions:
+                pid = available.get((screen, action))
+                if pid is not None:
+                    db.add(JobProfilePermission(job_profile_id=profile.job_profile_id, permission_id=pid))
     db.commit()
 
 
