@@ -15,6 +15,7 @@ const SCREENS = {
   "/checks-register": L("./pages/financial_checks.js?v=20261105-financial-checks-i18n-2"),
   "/admin/users": L("./pages/admin.js?v=20261106-it-job-profile-admin-1"),
   "/admin/backup": L("./pages/backup.js?v=20261105-backup-i18n-2"),
+  "/admin/reset": L("./pages/reset.js?v=20261107-safe-reset-1"),
   "/admin/company": L("./pages/company.js?v=20261105-company-i18n-1"),
   "/accounts": L("./pages/accounts.js?v=20261105-accounts-i18n-3"),
   "/projects": L("./pages/projects.js?v=20261105-projects-i18n-1"),
@@ -115,6 +116,7 @@ const ADMIN_ITEMS = [
   { route: "/admin/company", title: "بيانات الشركة", title_en: "Company Profile", icon: "file" },
   { route: "/admin/users", title: "المستخدمون والصلاحيات", title_en: "Users & Permissions", icon: "users" },
   { route: "/admin/backup", title: "النسخ الاحتياطي", title_en: "Backup & Restore", icon: "cloud" },
+  { route: "/admin/reset", title: "إعادة ضبط البيانات", title_en: "Reset System Data", icon: "refresh" },
 ];
 const NAV_GROUPS = [
   { ar: "المشروعات والعقود", en: "Projects & Contracts", icon: "file", routes: ["/projects", "/contract-requests", "/contracts", "/settlements"] },

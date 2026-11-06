@@ -16,7 +16,7 @@ from .db_setup import ensure_schema
 from .bootstrap import seed_screens, sync_permissions, seed_job_profiles, create_admin
 from .models import User
 from .routers import (accounts, admin, auth, audit_logs, backup, checks, dashboard, journal, projects, reconciliation, reports, contracts, contract_erp, contract_requests, contract_attachments, technical_settlements, inventory, counterparties,
-                      treasury, trial_balance, data_exchange, pg_backup, financial_checks, financial_control)
+                      treasury, trial_balance, data_exchange, pg_backup, financial_checks, financial_control, reset)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -86,6 +86,7 @@ app.include_router(audit_logs.router)
 app.include_router(admin.router)
 app.include_router(admin.public_router)
 app.include_router(backup.router)
+app.include_router(reset.router)
 app.include_router(pg_backup.router)
 app.include_router(dashboard.router)
 app.include_router(accounts.router)
