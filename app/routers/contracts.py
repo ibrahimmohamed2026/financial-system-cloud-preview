@@ -340,6 +340,8 @@ def add_addendum_line(contract_id: int, addendum_id: int, body: AddendumLineIn,
                 .join(ContractSettlement, ContractSettlement.settlement_id == ContractSettlementItem.settlement_id)
                 .where(ContractSettlement.contract_id == contract_id,
                     ContractSettlement.status.in_(("Approved", "Posted", "PendingFinalApproval")),
+                    ContractSettlement.settlement_id.not_in(select(TechnicalSettlementEstimate.financial_settlement_id).where(
+                        TechnicalSettlementEstimate.financial_settlement_id.is_not(None))),
                     ContractSettlementItem.contract_item_id == target.item_id)) or 0
             if Decimal(str(target.quantity)) + body.quantity_delta < Decimal(str(used_technical)) + Decimal(str(used_financial)):
                 raise HTTPException(409, "التخفيض سيجعل كمية العقد أقل من الكميات التي سبق اعتمادها في المستخلصات")
@@ -476,6 +478,8 @@ def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(re
                 .join(ContractSettlement, ContractSettlement.settlement_id == ContractSettlementItem.settlement_id)
                 .where(ContractSettlement.contract_id == contract_id,
                     ContractSettlement.status.in_(("Approved", "Posted", "PendingFinalApproval")),
+                    ContractSettlement.settlement_id.not_in(select(TechnicalSettlementEstimate.financial_settlement_id).where(
+                        TechnicalSettlementEstimate.financial_settlement_id.is_not(None))),
                     ContractSettlementItem.contract_item_id == item.item_id)) or 0
             if next_quantity < Decimal(str(used_technical)) + Decimal(str(used_financial)):
                 raise HTTPException(409, f"التعديل يجعل كمية البند {item.item_no} أقل من الكميات المعتمدة في المستخلصات")
