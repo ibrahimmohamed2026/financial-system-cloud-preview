@@ -217,7 +217,7 @@ def _check_project(db: Session, pid: int | None):
 
 
 def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
-                        body: TxIn, user: User) -> str:
+                        body: TxIn, user: User, *, allow_legacy: bool = False) -> str:
     if body.exchange_rate is None or body.counterpart_account_id is None:
         raise HTTPException(422, "حركة الدولار تتطلب سعر الصرف وحساب الطرف المقابل")
     if body.counterpart_account_id == a.gl_account_id:
@@ -230,11 +230,18 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
         raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
 
     # Prevent new movements while legacy movements or draft journals remain unprocessed.
-    unlinked = db.scalar(select(func.count()).select_from(TreasuryTransaction).where(
+    unlinked_stmt = select(func.count()).select_from(TreasuryTransaction).where(
         TreasuryTransaction.treasury_account_id == a.treasury_account_id,
         TreasuryTransaction.journal_entry_id.is_(None),
         TreasuryTransaction.transaction_id != t.transaction_id,
-    )) or 0
+    )
+    if allow_legacy:
+        unlinked_stmt = unlinked_stmt.where(or_(
+            TreasuryTransaction.transaction_date < t.transaction_date,
+            (TreasuryTransaction.transaction_date == t.transaction_date)
+            & (TreasuryTransaction.transaction_id < t.transaction_id),
+        ))
+    unlinked = db.scalar(unlinked_stmt) or 0
     if unlinked:
         raise HTTPException(409, "يوجد حركات دولار قديمة غير مرتبطة بقيود؛ راجعها واربطها أولًا")
     pending = db.scalar(select(func.count()).select_from(TreasuryTransaction).join(
@@ -367,7 +374,7 @@ def edit_tx(screen_code: str, tid: int, body: TxIn,
     old = {"inflow": str(t.inflow), "outflow": str(t.outflow), "description": t.description}
     for k, v in body.model_dump().items():
         setattr(t, k, v)
-    journal_no = _create_usd_journal(db, _bound(db, screen_code), t, body, user) if _bound(db, screen_code).currency_code == "USD" else None
+    journal_no = _create_usd_journal(db, _bound(db, screen_code), t, body, user, allow_legacy=True) if _bound(db, screen_code).currency_code == "USD" else None
     write_audit(db, user.user_id, "Update", "TreasuryTransactions", tid, old, body.model_dump())
     db.commit()
     return {"transaction_id": tid, "journal_entry_no": journal_no, "journal_status": "Draft" if journal_no else None}
