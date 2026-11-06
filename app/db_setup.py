@@ -268,6 +268,34 @@ def ensure_schema(engine: Engine) -> None:
     if "Contracts" in table_names and "RequestId" not in contract_columns:
         with engine.begin() as conn:
             conn.execute(text('ALTER TABLE "Contracts" ADD COLUMN "RequestId" INTEGER NULL'))
+    # Additive columns required by the complete addendum workflow. create_all() does not
+    # alter existing tables, so upgrade each legacy table explicitly and idempotently.
+    schema_additions = {
+        "ContractItems": {
+            "OriginalQuantity": "NUMERIC(18,4) NULL",
+            "OriginalUnitPrice": "NUMERIC(18,4) NULL",
+        },
+        "ContractAddendums": {
+            "TechnicalReviewedBy": "INTEGER NULL",
+            "TechnicalReviewedAt": "TIMESTAMP NULL",
+            "TechnicalReviewNotes": "TEXT NULL",
+        },
+        "ContractAddendumLines": {
+            "BaselineQuantity": "NUMERIC(18,4) NULL",
+            "BaselineUnitPrice": "NUMERIC(18,4) NULL",
+        },
+    }
+    current_tables = set(inspect(engine).get_table_names())
+    for table_name, additions in schema_additions.items():
+        if table_name not in current_tables:
+            continue
+        current_columns = {col["name"] for col in inspect(engine).get_columns(table_name)}
+        missing = [(column_name, sql_type) for column_name, sql_type in additions.items()
+                   if column_name not in current_columns]
+        if missing:
+            with engine.begin() as conn:
+                for column_name, sql_type in missing:
+                    conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {sql_type}'))
     # Preserve legacy addenda as approved; the current workflow creates new addenda as Draft.
     if "ContractAddendums" in table_names:
         addendum_columns = {col["name"] for col in inspect(engine).get_columns("ContractAddendums")}
