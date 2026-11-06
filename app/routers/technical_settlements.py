@@ -151,7 +151,7 @@ def return_estimate_for_correction(estimate_id: int, body: TechnicalReturnIn,
 
 @router.post("/{estimate_id}/resubmit")
 def resubmit_corrected_estimate(estimate_id: int, body: TechnicalCorrectionIn,
-        user: User = Depends(require_permission("ContractSettlements", "Edit")),
+        user: User = Depends(require_permission("ContractSettlements", "Add")),
         db: Session = Depends(get_db)):
     x = db.scalar(select(TechnicalSettlementEstimate).where(
         TechnicalSettlementEstimate.estimate_id == estimate_id).with_for_update())
