@@ -389,7 +389,7 @@ def add_addendum_line(contract_id: int, addendum_id: int, body: AddendumLineIn,
 
 @router.delete("/{contract_id}/addendums/{addendum_id}/lines/{line_id}", status_code=204)
 def delete_addendum_line(contract_id: int, addendum_id: int, line_id: int,
-        user: User = Depends(require_permission("Contracts", "Delete")), db: Session = Depends(get_db)):
+        user: User = Depends(require_permission("Contracts", "Add")), db: Session = Depends(get_db)):
     a = db.scalar(select(ContractAddendum).where(ContractAddendum.addendum_id == addendum_id,
         ContractAddendum.contract_id == contract_id).with_for_update())
     if not a: raise HTTPException(404, "ملحق العقد غير موجود")
