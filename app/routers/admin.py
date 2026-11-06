@@ -178,7 +178,9 @@ def update_job_profile(profile_id: int, body: dict, actor: User = Depends(admin_
         raise HTTPException(422, "اسم الوظيفة غير صحيح")
     if db.scalar(select(JobProfile).where(JobProfile.name_ar == name_ar, JobProfile.job_profile_id != profile_id)):
         raise HTTPException(409, "اسم الوظيفة مستخدم بالفعل")
-    old = {"name_ar": p.name_ar, "name_en": p.name_en, "is_active": p.is_active}
+    old = {"name_ar": p.name_ar, "name_en": p.name_en, "is_active": p.is_active,
+           "permission_ids": sorted(db.scalars(select(JobProfilePermission.permission_id).where(
+               JobProfilePermission.job_profile_id == profile_id)).all())}
     p.name_ar, p.name_en = name_ar, name_en
     if "description" in body:
         p.description = (body.get("description") or "").strip() or None
@@ -194,8 +196,11 @@ def update_job_profile(profile_id: int, body: dict, actor: User = Depends(admin_
         db.execute(delete(JobProfilePermission).where(JobProfilePermission.job_profile_id == profile_id))
         for pid in sorted(valid):
             db.add(JobProfilePermission(job_profile_id=profile_id, permission_id=pid))
+    new_permissions = sorted(db.scalars(select(JobProfilePermission.permission_id).where(
+        JobProfilePermission.job_profile_id == profile_id)).all())
     write_audit(db, actor.user_id, "Update", "JobProfiles", profile_id, old,
-                {"name_ar": p.name_ar, "name_en": p.name_en, "is_active": p.is_active})
+                {"name_ar": p.name_ar, "name_en": p.name_en, "is_active": p.is_active,
+                 "permission_ids": new_permissions})
     db.commit()
     return {"ok": True}
 
