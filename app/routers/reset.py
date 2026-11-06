@@ -1,6 +1,4 @@
 """Safe, preview-first system data reset. Never deletes protected system configuration."""
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
@@ -9,7 +7,7 @@ from sqlalchemy.orm import Session
 from .. import backup_service
 from ..database import get_db
 from ..deps import get_current_user, write_audit
-from ..models import Base, User, Role, UserRole, Account, AuditLog
+from ..models import Base, User, Role, UserRole, Account
 from ..security import verify_password
 
 router = APIRouter(prefix="/admin/reset", tags=["System Reset"])
@@ -30,14 +28,14 @@ OPERATIONAL_TABLES = {
 }
 FULL_EXTRA_TABLES = {
     "CounterpartyAliases", "Counterparties", "Beneficiaries", "InventoryWarehouses",
-    "InventoryItems", "TreasuryAccounts", "ItemCatalog", "CheckPrintTemplates",
+    "InventoryItems", "ItemCatalog",
 }
 PROTECTED_TABLES = {
     "Companies", "FiscalYears", "AccountClassifications", "FinancialStatementLines",
     "ChartOfAccounts", "Users", "UserAvatars", "Roles", "Permissions", "RolePermissions",
     "UserRoles", "UserPermissions", "JobProfiles", "JobProfilePermissions",
     "Sections", "Screens", "AuditLog", "UserDeletionRequests", "Projects",
-    "ExchangeRates",
+    "ExchangeRates", "TreasuryAccounts", "CheckPrintTemplates",
 }
 
 def _admin(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
@@ -69,7 +67,7 @@ def preview(mode: str, _: User = Depends(_admin), db: Session = Depends(get_db))
             (Account.opening_debit != 0) | (Account.opening_credit != 0))) or 0)
     return {"mode": mode, "tables": result, "total_rows": sum(x["count"] for x in result),
             "accounts_opening_balances_to_zero": opening_count,
-            "protected": ["دليل الحسابات والتصنيفات", "الشركة والسنة المالية", "المستخدمون والصلاحيات", "سجل المراجعة", "المشروعات"]}
+            "protected": ["دليل الحسابات والتصنيفات", "الشركة والسنة المالية", "المستخدمون والصلاحيات", "سجل المراجعة", "المشروعات", "ربط الخزائن بالحسابات", "قوالب الشيكات"]}
 
 class ResetRequest(BaseModel):
     mode: str = Field(pattern="^(operational|full)$")
