@@ -290,7 +290,7 @@ def update_contract(contract_id: int, body: ContractIn, user: User = Depends(req
     if body.contract_no is not None and body.contract_no != c.contract_no:
         raise HTTPException(409, "رقم العقد يُنشأ تلقائيًا ولا يمكن تغييره")
     old = _contract(c)
-    values = body.model_dump(exclude={"items", "deduction_rules"})
+    values = body.model_dump(exclude={"items", "deduction_rules", "schedule_items"})
     values.pop("contract_no", None)
     if values.get("statement_distribution_method") is None:
         values.pop("statement_distribution_method", None)
