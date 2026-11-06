@@ -596,10 +596,6 @@ class ContractSettlementItem(Base):
     quantity: Mapped[Decimal] = C("Quantity", Numeric(18, 4))
     unit_price: Mapped[Decimal] = C("UnitPrice", Numeric(18, 4))
     amount: Mapped[Decimal] = C("Amount", Numeric(18, 2))
-    approved_quantity: Mapped[Optional[Decimal]] = C("ApprovedQuantity", Numeric(18, 4), nullable=True)
-    review_note: Mapped[Optional[str]] = C("ReviewNote", UnicodeText, nullable=True)
-    reviewed_by: Mapped[Optional[int]] = C("ReviewedBy", ForeignKey("Users.UserId"), nullable=True)
-    reviewed_at: Mapped[Optional[datetime]] = C("ReviewedAt", DateTime, nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
 
 class ContractChangeOrder(Base):
@@ -909,4 +905,8 @@ class TechnicalSettlementEstimateItem(Base):
     current_quantity: Mapped[Decimal] = C("CurrentQuantity", Numeric(18, 4))
     unit_price: Mapped[Decimal] = C("UnitPrice", Numeric(18, 4))
     amount: Mapped[Decimal] = C("Amount", Numeric(18, 2))
+    approved_quantity: Mapped[Optional[Decimal]] = C("ApprovedQuantity", Numeric(18, 4), nullable=True)
+    review_note: Mapped[Optional[str]] = C("ReviewNote", UnicodeText, nullable=True)
+    reviewed_by: Mapped[Optional[int]] = C("ReviewedBy", ForeignKey("Users.UserId"), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = C("ReviewedAt", DateTime, nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
