@@ -275,7 +275,7 @@ def approve_estimate(estimate_id:int,user:User=Depends(require_permission("Contr
     previous=money(Decimal(str(prior_technical))+Decimal(str(prior_financial)))
     # Match the financial settlement engine: remaining-contract deductions must use
     # the amended contract value, including approved change orders.
-    addenda_value=db.scalar(select(func.coalesce(func.sum(ContractAddendum.value_change),0)).where(ContractAddendum.contract_id==x.contract_id)) or 0
+    addenda_value=db.scalar(select(func.coalesce(func.sum(ContractAddendum.value_change),0)).where(ContractAddendum.contract_id==x.contract_id,ContractAddendum.status=="Approved")) or 0
     change_value=db.scalar(select(func.coalesce(func.sum(ContractChangeOrder.value_change),0)).where(ContractChangeOrder.contract_id==x.contract_id,ContractChangeOrder.status=="Approved")) or 0
     contract_value=money(Decimal(str(c.original_value or 0))+Decimal(str(addenda_value))+Decimal(str(change_value)))
     cumulative=money(previous+work)
