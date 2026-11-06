@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, write_audit
-from ..models import User, UserAvatar, Company, Role, UserRole, RolePermission, Permission, Screen, Section, UserPermission
+from ..models import User, UserAvatar, Company, Role, UserRole, RolePermission, Permission, Screen, Section, UserPermission, JobProfile, JobProfilePermission, Project
 from ..security import hash_password, validate_password
 
 router = APIRouter(prefix="/admin", tags=["Users & Roles"])
@@ -56,6 +56,8 @@ class UserCreate(BaseModel):
     password: str = Field(min_length=12, max_length=72)
     is_active: bool = True
     role_ids: list[int] = []
+    job_profile_id: int | None = None
+    project_id: int | None = None
 
     @field_validator("password")
     @classmethod
@@ -67,6 +69,8 @@ class UserUpdate(BaseModel):
     is_active: bool | None = None
     password: str | None = Field(default=None, min_length=12, max_length=72)
     role_ids: list[int] | None = None
+    job_profile_id: int | None = None
+    project_id: int | None = None
 
     @field_validator("password")
     @classmethod
@@ -129,6 +133,79 @@ def public_company_profile(user: User = Depends(get_current_user), db: Session =
     company = db.scalar(select(Company).where(Company.is_active == True).order_by(Company.company_id))
     return company_profile_out(company) if company else None
 
+@router.get("/job-profiles")
+def list_job_profiles(_: User = Depends(admin_user), db: Session = Depends(get_db)):
+    rows = db.scalars(select(JobProfile).order_by(JobProfile.name_ar)).all()
+    return [{"job_profile_id": p.job_profile_id, "name_ar": p.name_ar, "name_en": p.name_en,
+             "description": p.description, "is_active": p.is_active,
+             "permission_ids": db.scalars(select(JobProfilePermission.permission_id).where(
+                 JobProfilePermission.job_profile_id == p.job_profile_id)).all()} for p in rows]
+
+
+@router.post("/job-profiles", status_code=201)
+def create_job_profile(body: dict, actor: User = Depends(admin_user), db: Session = Depends(get_db)):
+    name_ar = str(body.get("name_ar") or "").strip()
+    name_en = str(body.get("name_en") or name_ar).strip()
+    ids = body.get("permission_ids") or []
+    if not name_ar or not name_en or len(name_ar) > 150 or len(name_en) > 150:
+        raise HTTPException(422, "اسم الوظيفة بالعربية والإنجليزية مطلوب")
+    if not isinstance(ids, list) or any(type(x) is not int for x in ids):
+        raise HTTPException(422, "قائمة الصلاحيات غير صحيحة")
+    if db.scalar(select(JobProfile).where(JobProfile.name_ar == name_ar)):
+        raise HTTPException(409, "الوظيفة موجودة بالفعل")
+    valid = set(db.scalars(select(Permission.permission_id).where(Permission.permission_id.in_(ids))).all()) if ids else set()
+    if valid != set(ids):
+        raise HTTPException(422, "توجد صلاحية غير صحيحة")
+    p = JobProfile(name_ar=name_ar, name_en=name_en, description=(body.get("description") or "").strip() or None,
+                   is_active=bool(body.get("is_active", True)))
+    db.add(p); db.flush()
+    for pid in sorted(valid):
+        db.add(JobProfilePermission(job_profile_id=p.job_profile_id, permission_id=pid))
+    write_audit(db, actor.user_id, "Create", "JobProfiles", p.job_profile_id,
+                new={"name_ar": name_ar, "permission_ids": sorted(valid)})
+    db.commit()
+    return {"job_profile_id": p.job_profile_id}
+
+
+@router.put("/job-profiles/{profile_id}")
+def update_job_profile(profile_id: int, body: dict, actor: User = Depends(admin_user), db: Session = Depends(get_db)):
+    p = db.get(JobProfile, profile_id)
+    if p is None:
+        raise HTTPException(404, "الوظيفة غير موجودة")
+    name_ar = str(body.get("name_ar", p.name_ar) or "").strip()
+    name_en = str(body.get("name_en", p.name_en) or "").strip()
+    if not name_ar or not name_en or len(name_ar) > 150 or len(name_en) > 150:
+        raise HTTPException(422, "اسم الوظيفة غير صحيح")
+    if db.scalar(select(JobProfile).where(JobProfile.name_ar == name_ar, JobProfile.job_profile_id != profile_id)):
+        raise HTTPException(409, "اسم الوظيفة مستخدم بالفعل")
+    old = {"name_ar": p.name_ar, "name_en": p.name_en, "is_active": p.is_active}
+    p.name_ar, p.name_en = name_ar, name_en
+    if "description" in body:
+        p.description = (body.get("description") or "").strip() or None
+    if "is_active" in body:
+        p.is_active = bool(body["is_active"])
+    if "permission_ids" in body:
+        ids = body["permission_ids"]
+        if not isinstance(ids, list) or any(type(x) is not int for x in ids):
+            raise HTTPException(422, "قائمة الصلاحيات غير صحيحة")
+        valid = set(db.scalars(select(Permission.permission_id).where(Permission.permission_id.in_(ids))).all()) if ids else set()
+        if valid != set(ids):
+            raise HTTPException(422, "توجد صلاحية غير صحيحة")
+        db.execute(delete(JobProfilePermission).where(JobProfilePermission.job_profile_id == profile_id))
+        for pid in sorted(valid):
+            db.add(JobProfilePermission(job_profile_id=profile_id, permission_id=pid))
+    write_audit(db, actor.user_id, "Update", "JobProfiles", profile_id, old,
+                {"name_ar": p.name_ar, "name_en": p.name_en, "is_active": p.is_active})
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/projects")
+def list_assignable_projects(_: User = Depends(admin_user), db: Session = Depends(get_db)):
+    return [{"project_id": p.project_id, "name_ar": p.name_ar, "is_active": p.is_active}
+            for p in db.scalars(select(Project).order_by(Project.name_ar)).all()]
+
+
 @router.get("/users")
 def list_users(_: User = Depends(admin_user), db: Session = Depends(get_db)):
     users = db.scalars(select(User).order_by(User.user_id)).all()
@@ -138,7 +215,8 @@ def list_users(_: User = Depends(admin_user), db: Session = Depends(get_db)):
         out.append({"user_id":u.user_id,"username":u.username,"full_name":u.full_name,"is_active":u.is_active,
                     "avatar_updated_at":u.avatar_updated_at,
                     "failed_login_count":u.failed_login_count,"locked_until":u.locked_until,"roles":roles,
-                    "role_ids":db.scalars(select(UserRole.role_id).where(UserRole.user_id==u.user_id)).all()})
+                    "role_ids":db.scalars(select(UserRole.role_id).where(UserRole.user_id==u.user_id)).all(),
+                    "job_profile_id":u.job_profile_id,"project_id":u.project_id})
     return out
 
 @router.post("/users", status_code=201)
@@ -148,7 +226,18 @@ def create_user(body: UserCreate, actor: User = Depends(admin_user), db: Session
     roles=db.scalars(select(Role).where(Role.role_id.in_(body.role_ids))).all() if body.role_ids else []
     if len(roles) != len(set(body.role_ids)):
         raise HTTPException(422, "يوجد دور غير صحيح")
-    u=User(username=body.username.strip(),full_name=body.full_name.strip(),password_hash=hash_password(body.password),is_active=body.is_active)
+    if body.job_profile_id is not None:
+        profile = db.get(JobProfile, body.job_profile_id)
+        if profile is None or not profile.is_active:
+            raise HTTPException(422, "الوظيفة غير موجودة أو غير نشطة")
+        if roles:
+            raise HTTPException(422, "لا يمكن الجمع بين الوظيفة وأدوار مستقلة")
+    if body.project_id is not None and db.get(Project, body.project_id) is None:
+        raise HTTPException(422, "المشروع أو الموقع غير موجود")
+    if body.job_profile_id is not None and body.project_id is None:
+        raise HTTPException(422, "يجب تحديد المشروع أو الموقع للموظف")
+    u=User(username=body.username.strip(),full_name=body.full_name.strip(),password_hash=hash_password(body.password),
+           is_active=body.is_active,job_profile_id=body.job_profile_id,project_id=body.project_id)
     db.add(u); db.flush()
     for r in roles: db.add(UserRole(user_id=u.user_id,role_id=r.role_id))
     write_audit(db, actor.user_id, "Create", "Users", u.user_id, new={"username":u.username,"roles":body.role_ids})
@@ -165,7 +254,24 @@ def update_user(user_id: int, body: UserUpdate, actor: User = Depends(admin_user
         u.is_active=body.is_active
     if body.password: u.password_hash=hash_password(body.password); u.failed_login_count=0; u.locked_until=None
     if body.password: u.token_version += 1
+    if body.job_profile_id is not None:
+        profile = db.get(JobProfile, body.job_profile_id)
+        if profile is None or not profile.is_active:
+            raise HTTPException(422, "الوظيفة غير موجودة أو غير نشطة")
+        if body.project_id is None and u.project_id is None:
+            raise HTTPException(422, "يجب تحديد المشروع أو الموقع للموظف")
+        if body.role_ids:
+            raise HTTPException(422, "لا يمكن الجمع بين الوظيفة وأدوار مستقلة")
+        u.job_profile_id = body.job_profile_id
+        admin_role_ids = select(Role.role_id).where(Role.role_name == "Admin")
+        db.execute(delete(UserRole).where(UserRole.user_id == u.user_id, UserRole.role_id.not_in(admin_role_ids)))
+    if body.project_id is not None:
+        if db.get(Project, body.project_id) is None:
+            raise HTTPException(422, "المشروع أو الموقع غير موجود")
+        u.project_id = body.project_id
     if body.role_ids is not None:
+        if u.job_profile_id is not None and body.role_ids:
+            raise HTTPException(422, "لا يمكن الجمع بين الوظيفة وأدوار مستقلة")
         roles=db.scalars(select(Role).where(Role.role_id.in_(body.role_ids))).all() if body.role_ids else []
         if len(roles)!=len(set(body.role_ids)): raise HTTPException(422,"يوجد دور غير صحيح")
         if u.user_id==actor.user_id and not any(r.role_name=="Admin" for r in roles): raise HTTPException(400,"لا يمكنك إزالة دور Admin من حسابك الحالي")
