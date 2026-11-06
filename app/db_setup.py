@@ -261,6 +261,16 @@ def ensure_schema(engine: Engine) -> None:
     if "Contracts" in table_names and "RequestId" not in contract_columns:
         with engine.begin() as conn:
             conn.execute(text('ALTER TABLE "Contracts" ADD COLUMN "RequestId" INTEGER NULL'))
+    # Preserve historical addenda as approved; newly created addenda start Pending.
+    if "ContractAddendums" in table_names:
+        addendum_columns = {col["name"] for col in inspect(engine).get_columns("ContractAddendums")}
+        with engine.begin() as conn:
+            if "Status" not in addendum_columns:
+                conn.execute(text("ALTER TABLE \"ContractAddendums\" ADD COLUMN \"Status\" VARCHAR(20) NOT NULL DEFAULT 'Approved'"))
+            if "ApprovedBy" not in addendum_columns:
+                conn.execute(text('ALTER TABLE "ContractAddendums" ADD COLUMN "ApprovedBy" INTEGER NULL'))
+            if "ApprovedAt" not in addendum_columns:
+                conn.execute(text('ALTER TABLE "ContractAddendums" ADD COLUMN "ApprovedAt" TIMESTAMP NULL'))
     with engine.begin() as conn:
         conn.execute(text(f'DROP VIEW IF EXISTS "{VIEW_NAME}"'))
         conn.execute(text(VIEW_SQL))

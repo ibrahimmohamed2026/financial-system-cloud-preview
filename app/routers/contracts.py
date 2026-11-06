@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal, Optional
 from uuid import uuid4
@@ -91,7 +91,8 @@ def _contract(c):
             "status":c.status,"notes":c.notes,"created_at":c.created_at}
 def _addendum(a):
     return {"addendum_id":a.addendum_id,"contract_id":a.contract_id,"addendum_no":a.addendum_no,
-            "addendum_date":a.addendum_date,"description":a.description,"value_change":str(a.value_change)}
+            "addendum_date":a.addendum_date,"description":a.description,"value_change":str(a.value_change),
+            "status":getattr(a,"status","Approved"),"approved_by":a.approved_by,"approved_at":a.approved_at}
 def _billing(b):
     return {"billing_id":b.billing_id,"contract_id":b.contract_id,"billing_no":b.billing_no,"billing_date":b.billing_date,
             "work_value":str(b.work_value),"retention_amount":str(b.retention_amount),"advance_deduction":str(b.advance_deduction),
@@ -267,8 +268,9 @@ def contract_detail(contract_id: int, _: User = Depends(require_permission("Cont
     if not c: raise HTTPException(404,"العقد غير موجود")
     add = db.scalars(select(ContractAddendum).where(ContractAddendum.contract_id==contract_id).order_by(ContractAddendum.addendum_date.desc())).all()
     bills = db.scalars(select(ProgressBilling).where(ProgressBilling.contract_id==contract_id).order_by(ProgressBilling.billing_date.desc())).all()
+    approved_addenda = [x for x in add if (getattr(x,"status","Approved") or "Approved") == "Approved"]
     return {"contract":_contract(c),"addendums":[_addendum(x) for x in add],"billings":[_billing(x) for x in bills],
-            "amended_value":str(c.original_value + sum((x.value_change for x in add),D0)),
+            "amended_value":str(c.original_value + sum((x.value_change for x in approved_addenda),D0)),
             "billed_value":str(sum((x.work_value for x in bills if x.status.lower() not in ("cancelled","canceled")),D0))}
 
 @router.post("/{contract_id}/addendums", status_code=201)
@@ -276,9 +278,23 @@ def create_addendum(contract_id: int, body: AddendumIn, user: User = Depends(req
     c=db.get(Contract,contract_id)
     if not c: raise HTTPException(404,"العقد غير موجود")
     values=body.model_dump(exclude={"addendum_no"})
-    a=ContractAddendum(contract_id=contract_id,addendum_no=f"AD-PENDING-{uuid4().hex}",**values,created_by=user.user_id)
+    a=ContractAddendum(contract_id=contract_id,addendum_no=f"AD-PENDING-{uuid4().hex}",**values,status="Pending",created_by=user.user_id)
     db.add(a); db.flush(); a.addendum_no=f"AD-{body.addendum_date.year}-{a.addendum_id:06d}"
     write_audit(db,user.user_id,"Create","ContractAddendums",a.addendum_id,new=_addendum(a)); db.commit(); db.refresh(a)
+    return _addendum(a)
+
+@router.post("/{contract_id}/addendums/{addendum_id}/approve")
+def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(require_permission("Contracts", "Approve")), db: Session = Depends(get_db)):
+    a = db.scalar(select(ContractAddendum).where(ContractAddendum.addendum_id == addendum_id, ContractAddendum.contract_id == contract_id).with_for_update())
+    if not a:
+        raise HTTPException(404, "ملحق العقد غير موجود")
+    if (getattr(a, "status", "Approved") or "Approved") != "Pending":
+        raise HTTPException(409, "ملحق العقد ليس في انتظار الاعتماد")
+    a.status = "Approved"
+    a.approved_by = user.user_id
+    a.approved_at = datetime.utcnow()
+    write_audit(db, user.user_id, "Approve", "ContractAddendums", a.addendum_id, new=_addendum(a))
+    db.commit(); db.refresh(a)
     return _addendum(a)
 
 @router.post("/{contract_id}/billings", status_code=201)

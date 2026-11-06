@@ -471,6 +471,9 @@ class ContractAddendum(Base):
     addendum_date: Mapped[date] = C("AddendumDate", Date)
     description: Mapped[str] = C("Description", Unicode(500))
     value_change: Mapped[Decimal] = C("ValueChange", Numeric(18, 2), default=Decimal("0"))
+    status: Mapped[str] = C("Status", Unicode(20), default="Approved")
+    approved_by: Mapped[Optional[int]] = C("ApprovedBy", ForeignKey("Users.UserId"), nullable=True)
+    approved_at: Mapped[Optional[datetime]] = C("ApprovedAt", DateTime, nullable=True)
     created_by: Mapped[Optional[int]] = C("CreatedBy", ForeignKey("Users.UserId"), nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
 

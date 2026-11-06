@@ -363,7 +363,7 @@ def contract_financial_summary(db: Session, contract_id: int, side: str):
     legacy = db.scalar(select(func.coalesce(func.sum(ProgressBilling.work_value), 0)).where(
         ProgressBilling.contract_id == contract_id, func.lower(ProgressBilling.status).in_(("approved", "paid", "posted")))) or ZERO
     previous = money(Decimal(str(previous_new)) + Decimal(str(legacy)))
-    addenda = db.scalar(select(func.coalesce(func.sum(ContractAddendum.value_change), 0)).where(ContractAddendum.contract_id == contract_id)) or ZERO
+    addenda = db.scalar(select(func.coalesce(func.sum(ContractAddendum.value_change), 0)).where(ContractAddendum.contract_id == contract_id, ContractAddendum.status == "Approved")) or ZERO
     changes = db.scalar(select(func.coalesce(func.sum(ContractChangeOrder.value_change), 0)).where(ContractChangeOrder.contract_id == contract_id, ContractChangeOrder.status == "Approved")) or ZERO
     contract_value = money(c.original_value + addenda + changes)
     return c, money(previous), contract_value
