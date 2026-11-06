@@ -239,8 +239,7 @@ def create_user(body: UserCreate, actor: User = Depends(admin_user), db: Session
             raise HTTPException(422, "لا يمكن الجمع بين الوظيفة وأدوار مستقلة")
     if body.project_id is not None and db.get(Project, body.project_id) is None:
         raise HTTPException(422, "المشروع أو الموقع غير موجود")
-    if body.job_profile_id is not None and body.project_id is None:
-        raise HTTPException(422, "يجب تحديد المشروع أو الموقع للموظف")
+    # Project/site is optional organizational metadata; it never scopes data access.
     u=User(username=body.username.strip(),full_name=body.full_name.strip(),password_hash=hash_password(body.password),
            is_active=body.is_active,job_profile_id=body.job_profile_id,project_id=body.project_id)
     db.add(u); db.flush()
@@ -263,8 +262,7 @@ def update_user(user_id: int, body: UserUpdate, actor: User = Depends(admin_user
         profile = db.get(JobProfile, body.job_profile_id)
         if profile is None or not profile.is_active:
             raise HTTPException(422, "الوظيفة غير موجودة أو غير نشطة")
-        if body.project_id is None and u.project_id is None:
-            raise HTTPException(422, "يجب تحديد المشروع أو الموقع للموظف")
+        # Job profile assignment does not require a project/site assignment.
         if body.role_ids:
             raise HTTPException(422, "لا يمكن الجمع بين الوظيفة وأدوار مستقلة")
         u.job_profile_id = body.job_profile_id
