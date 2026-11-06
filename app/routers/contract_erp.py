@@ -605,12 +605,12 @@ def manager_settlement_decision(settlement_id: int, body: ManagerSettlementDecis
         x.financial_approved_at = None
         x.manager_approved_by = None
         x.manager_approved_at = None
-        x.notes = ((x.notes or "").rstrip() + f"\\n[إعادة للحسابات بواسطة المستخدم {user.user_id}]: {(body.notes or '').strip()}").strip()
+        x.notes = ((x.notes or "").rstrip() + f"\n[إعادة للحسابات بواسطة المستخدم {user.user_id}]: {(body.notes or '').strip()}").strip()
         action = "ManagerReturn"
     else:
         # Rejected is terminal through the normal workflow; reopening requires an audited admin action.
         x.status = "Rejected"
-        x.notes = ((x.notes or "").rstrip() + f"\\n[رفض نهائي بواسطة المستخدم {user.user_id}]: {(body.notes or '').strip()}").strip()
+        x.notes = ((x.notes or "").rstrip() + f"\n[رفض نهائي بواسطة المستخدم {user.user_id}]: {(body.notes or '').strip()}").strip()
         action = "ManagerReject"
     write_audit(db, user.user_id, action, "ContractSettlements", x.settlement_id,
                 old=old, new={"status": x.status, "decision": body.decision,
