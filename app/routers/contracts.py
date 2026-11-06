@@ -300,6 +300,8 @@ def update_contract(contract_id: int, body: ContractIn, user: User = Depends(req
     values.pop("contract_no", None)
     if values.get("statement_distribution_method") is None:
         values.pop("statement_distribution_method", None)
+    if "agreed_statement_count" not in body.model_fields_set:
+        values.pop("agreed_statement_count", None)
     requested_status = values.pop("status", None)
     if "status" in body.model_fields_set and requested_status != c.status:
         raise HTTPException(409, "تغيير حالة العقد يتم فقط من خلال إجراءات دورة الاعتماد")
