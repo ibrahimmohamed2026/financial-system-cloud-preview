@@ -377,6 +377,25 @@ def add_addendum_line(contract_id: int, addendum_id: int, body: AddendumLineIn,
         "description":line.description,"unit":line.unit,"quantity_delta":str(line.quantity_delta),
         "unit_price":str(line.unit_price),"amount_change":str(line.amount_change)}
 
+@router.delete("/{contract_id}/addendums/{addendum_id}/lines/{line_id}", status_code=204)
+def delete_addendum_line(contract_id: int, addendum_id: int, line_id: int,
+        user: User = Depends(require_permission("Contracts", "Delete")), db: Session = Depends(get_db)):
+    a = db.scalar(select(ContractAddendum).where(ContractAddendum.addendum_id == addendum_id,
+        ContractAddendum.contract_id == contract_id).with_for_update())
+    if not a: raise HTTPException(404, "ملحق العقد غير موجود")
+    if a.status not in ("Draft", "ReturnedForCorrection"):
+        raise HTTPException(409, "لا يمكن حذف بند بعد إرسال الملحق للمراجعة")
+    line = db.scalar(select(ContractAddendumLine).where(
+        ContractAddendumLine.addendum_line_id == line_id,
+        ContractAddendumLine.addendum_id == addendum_id).with_for_update())
+    if not line: raise HTTPException(404, "بند الملحق غير موجود")
+    write_audit(db, user.user_id, "DeleteBOQLine", "ContractAddendums", addendum_id,
+        old={"line_id":line.addendum_line_id,"item_no":line.item_no,"quantity_delta":str(line.quantity_delta),
+             "unit_price":str(line.unit_price)}, new=None)
+    db.delete(line)
+    db.commit()
+
+
 @router.post("/{contract_id}/addendums/{addendum_id}/submit")
 def submit_addendum(contract_id: int, addendum_id: int, user: User = Depends(require_permission("Contracts", "Add")), db: Session = Depends(get_db)):
     a = db.scalar(select(ContractAddendum).where(ContractAddendum.addendum_id == addendum_id,
