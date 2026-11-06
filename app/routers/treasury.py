@@ -125,15 +125,37 @@ def gl_list(screen_code: str, q: str | None = None, _: User = Depends(require_dy
 
 
 @router.get("/{screen_code}/counterpart-accounts")
-def counterpart_accounts(screen_code: str, _: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
+def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="^(inflow|outflow)$"),
+                         _: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
                          db: Session = Depends(get_db)):
-    _bound(db, screen_code)
+    """Return active leaf accounts with the correct counterpart posting side for this movement."""
+    treasury = _bound(db, screen_code)
     parents = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
-    rows = db.scalars(select(Account).where(
-        Account.is_active == True, Account.account_id != _bound(db, screen_code).gl_account_id, Account.account_id.not_in(parents)
-    ).order_by(Account.account_code).limit(1000)).all()
-    return [{"account_id": a.account_id, "label": f"{a.account_code} — {a.account_name_ar}"}
-            for a in rows]
+    rows = db.execute(
+        select(Account, AccountClassification)
+        .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
+        .where(
+            Account.is_active == True,
+            Account.account_id != treasury.gl_account_id,
+            Account.account_id.not_in(parents),
+            Account.account_code.not_in(("32102001", "47101001")),
+        )
+        .order_by(AccountClassification.statement_type, AccountClassification.name_ar, Account.account_code)
+        .limit(1000)
+    ).all()
+    # An inflow credits the counterpart; an outflow debits it. Both balance-sheet
+    # and income-statement leaf accounts may be valid on either side depending on
+    # the underlying transaction, so do not incorrectly filter by normal balance.
+    posting_side = "credit" if direction == "inflow" else "debit"
+    side_ar = "دائن" if direction == "inflow" else "مدين"
+    return [{
+        "account_id": a.account_id,
+        "label": f"{cl.name_ar} — {a.account_code} — {a.account_name_ar} ({side_ar})",
+        "classification": cl.name_ar,
+        "statement_type": cl.statement_type,
+        "normal_balance": a.normal_balance,
+        "posting_side": posting_side,
+    } for a, cl in rows]
 
 
 @router.post("/{screen_code}/account", status_code=201)
@@ -225,9 +247,17 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     counterpart = db.get(Account, body.counterpart_account_id)
     if counterpart is None or not counterpart.is_active:
         raise HTTPException(400, "حساب الطرف المقابل غير موجود أو غير نشط")
+    if counterpart.account_id == a.gl_account_id or counterpart.account_code in ("32102001", "47101001"):
+        raise HTTPException(400, "لا يمكن اختيار حساب الخزينة أو حساب فروق العملة المحققة كطرف مقابل يدوي")
     parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
     if counterpart.account_id in parents:
         raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
+    if body.inflow > 0:
+        counterpart_posting_side = "credit"
+    else:
+        counterpart_posting_side = "debit"
+    if counterpart_posting_side not in ("credit", "debit"):
+        raise HTTPException(400, "اتجاه حركة الخزينة غير صحيح")
 
     # Prevent new movements while legacy movements or draft journals remain unprocessed.
     unlinked_stmt = select(func.count()).select_from(TreasuryTransaction).where(
