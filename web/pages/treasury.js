@@ -66,7 +66,7 @@ export async function render(main, { api, auth, route }) {
       const typeDirections = { funding: "inflow", customer_collection: "inflow", customer_advance: "inflow",
         supplier_payment: "outflow", supplier_advance: "outflow", expense_payment: "outflow",
         asset_purchase: "outflow", cash_transfer: "either" };
-      const currentDirection = () => +inflow.value > 0 ? "inflow" : "outflow";
+      const currentDirection = () => +outflow.value > 0 ? "outflow" : "inflow";
       const refreshCounterparts = async direction => {
         const selected = directionSelect.value, transactionType = typeSelect.value;
         directionSelect.disabled = true;
