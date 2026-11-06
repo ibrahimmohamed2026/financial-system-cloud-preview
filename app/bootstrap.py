@@ -227,8 +227,8 @@ def seed_job_profiles(db: Session) -> None:
                 # The old Admin role represented system-wide administration; preserve that
                 # authority by migrating every such account to the dedicated IT profile.
                 legacy_user.job_profile_id = it_profile.job_profile_id
-                db.execute(delete(UserRole).where(
-                    UserRole.user_id == legacy_user.user_id, UserRole.role_id == legacy_admin.role_id))
+                # Job profile assignment replaces all legacy role-based permissions.
+                db.execute(delete(UserRole).where(UserRole.user_id == legacy_user.user_id))
     db.commit()
 
 
