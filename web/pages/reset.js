@@ -6,23 +6,16 @@ export async function render(main, { api }) {
     <h3>${tr("إعادة ضبط بيانات النظام","System Data Reset")}</h3>
     <div class="panel" style="padding:16px">
       <div class="tag no">${tr("إجراء حساس — لا يتم الحذف قبل المعاينة والتأكيد","Sensitive action — nothing is deleted before preview and confirmation")}</div>
-      <p>${tr("اختر مستوى إعادة الضبط. ستظهر لك الجداول وعدد السجلات المتأثرة قبل أي تنفيذ.","Choose a reset level. A table-by-table count is shown before anything is executed.")}</p>
-      <div class="formgrid" style="margin-top:16px">
-        <div>
-          <h4>${tr("تصفير البيانات","Reset data")}</h4>
-          <p class="muted">${tr("يمسح القيود والحركات والمستندات التشغيلية فقط، مع الاحتفاظ بالأطراف والأصناف والمخازن والخزائن وكل الإعدادات الأساسية.","Deletes transactions and operational documents only; preserves parties, items, warehouses, treasuries and core configuration.")}</p>
-          <button class="btn primary reset-preview" data-mode="operational">${tr("معاينة تصفير البيانات","Preview data reset")}</button>
-        </div>
-        <div>
-          <h4>${tr("ضبط مصنع","Factory reset")}</h4>
-          <p class="muted">${tr("يمسح البيانات التشغيلية والبيانات الأساسية التشغيلية، ويصفّر الأرصدة الافتتاحية. يحتفظ بالشركة والسنة المالية والمشروعات وكل المستخدمين والصلاحيات والوظائف ودليل الحسابات والخزائن والبنوك وربطها المحاسبي وقوالب الشيكات.","Clears operational data and operational master records, and zeros opening balances. Preserves company, fiscal year, projects, all users, permissions, job profiles, chart of accounts, treasuries, banks, their GL links and cheque templates.")}</p>
-          <button class="btn danger reset-preview" data-mode="full">${tr("معاينة ضبط المصنع","Preview factory reset")}</button>
-        </div>
+      <p>${tr("ستظهر لك الجداول وعدد السجلات التي سيتم تصفيرها قبل أي تنفيذ.","Review the table-by-table counts before executing the complete reset.")}</p>
+      <div style="margin-top:16px">
+        <h4>${tr("التصفير الشامل","Complete reset")}</h4>
+        <p class="muted">${tr("يمسح جميع الحركات والقيود والمستندات والأطراف والأصناف والمخازن، ويصفّر كل الأرصدة الافتتاحية. ميزان المراجعة وأرصدة الخزائن ستصبح صفرًا. يحتفظ بالمستخدمين والصلاحيات والوظائف ودليل الحسابات والشركة والسنة المالية والمشروعات وتعريفات الخزائن وربطها وأسعار الصرف وقوالب الشيكات وسجل المراجعة. لا يحذف قاعدة البيانات أو هيكلها.","Deletes all transactions, journal entries, documents, parties, items and warehouses, and zeros all opening balances. Trial balance and treasury balances will be zero. Preserves users, permissions, job profiles, chart of accounts, company, fiscal year, projects, treasury definitions and GL links, exchange rates, cheque templates and audit history. The database and schema are not deleted.")}</p>
+        <button class="btn danger reset-preview" data-mode="full">${tr("معاينة التصفير الشامل","Preview complete reset")}</button>
       </div>
       <div id="previewbox" style="margin-top:16px"></div>
       <div id="confirmbox" hidden style="margin-top:16px;border-top:1px solid var(--line);padding-top:16px">
         <h4>${tr("التأكيد النهائي","Final confirmation")}</h4>
-        <p class="muted">${tr("سيتم إنشاء نسخة احتياطية كاملة تلقائيًا أولاً. إذا فشلت النسخة فلن يتم حذف أي بيانات.","A complete backup is created first. If backup creation fails, no data is deleted.")}</p>
+        <p class="muted">${tr("سيتم إنشاء نسخة احتياطية للطوارئ أولًا، ثم حذف البيانات الموضحة في المعاينة من قاعدة التشغيل. النسخة لا تُستعاد تلقائيًا.","An emergency backup is created first, then the previewed data is cleared from the live database. The backup is not restored automatically.")}</p>
         <div class="formgrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;align-items:end">
           <div style="display:grid;gap:8px;min-width:0">
             <label for="resetpassword" style="display:block;font-weight:600">${tr("كلمة مرور المدير","Administrator password")}</label>
@@ -77,7 +70,8 @@ export async function render(main, { api }) {
       $("#previewbox").innerHTML = `<h4>${tr("ملخص المعاينة","Preview summary")}</h4>
         <p><b>${tr("عدد السجلات التي ستُحذف:","Rows to delete:")} ${d.total_rows.toLocaleString()}</b></p>
         ${d.tables.length ? `<div class="tbl-wrap"><table><thead><tr><th>${tr("الجدول","Table")}</th><th>${tr("عدد السجلات","Rows")}</th></tr></thead><tbody>${d.tables.map(x=>`<tr><td>${esc(labels[x.table] || x.table)}</td><td>${x.count.toLocaleString()}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">${tr("لا توجد سجلات في الجداول المحددة للحذف.","No records found in the selected tables.")}</p>`}
-        ${d.accounts_opening_balances_to_zero ? `<p>${tr("حسابات سيتم تصفير أرصدتها الافتتاحية:","Accounts with opening balances to zero:")} <b>${d.accounts_opening_balances_to_zero}</b></p>` : ""}
+        <p>${tr("حسابات سيتم تصفير أرصدتها الافتتاحية:","Accounts with opening balances to zero:")} <b>${d.accounts_opening_balances_to_zero}</b></p>
+        <p><b>${tr("بعد نجاح التنفيذ: ميزان المراجعة = صفر، وأرصدة الخزائن = صفر.","After successful execution: trial balance = zero and treasury balances = zero.")}</b></p>
         <p class="muted">${tr("بيانات ستظل محفوظة:","Data that will be preserved:")} ${d.protected.map(esc).join("، ")}</p>
         <p class="muted">${tr("راجع القائمة جيدًا. لن يتم الحذف بمجرد المعاينة.","Review carefully. Preview alone never deletes data.")}</p>`;
       $("#confirmbox").hidden = false;
@@ -85,7 +79,7 @@ export async function render(main, { api }) {
     finally { busy(false); }
   }));
   $("#execute").onclick = async () => {
-    if (!previewMode) { $("#reseterr").textContent = tr("اختر تصفير البيانات أو ضبط المصنع وأعد المعاينة قبل التنفيذ.","Choose a reset action and preview it before execution."); return; }
+    if (!previewMode) { $("#reseterr").textContent = tr("أعد معاينة التصفير الشامل قبل التنفيذ.","Preview the complete reset before execution."); return; }
     if ($("#resetphrase").value !== "RESET") { $("#reseterr").textContent = tr("اكتب RESET كما هو.","Type RESET exactly."); return; }
     if (!$("#resetpassword").value) { $("#reseterr").textContent = tr("أدخل كلمة مرور المدير.","Enter the administrator password."); return; }
     const promptText = tr("تأكيد أخير: سيتم أخذ نسخة احتياطية ثم حذف البيانات الموضحة في المعاينة. هل تريد الاستمرار؟","Final confirmation: a backup will be created, then the previewed data will be deleted. Continue?");
