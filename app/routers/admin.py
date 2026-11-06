@@ -193,6 +193,15 @@ def update_job_profile(profile_id: int, body: dict, actor: User = Depends(admin_
         raise HTTPException(422, "اسم الوظيفة غير صحيح")
     if db.scalar(select(JobProfile).where(JobProfile.name_ar == name_ar, JobProfile.job_profile_id != profile_id)):
         raise HTTPException(409, "اسم الوظيفة مستخدم بالفعل")
+    if p.name_ar == "مسؤول النظام IT":
+        all_permission_ids = set(db.scalars(select(Permission.permission_id)).all())
+        requested_permission_ids = body.get("permission_ids")
+        if name_ar != p.name_ar or body.get("is_active", True) is False:
+            raise HTTPException(400, "وظيفة مسؤول النظام IT أساسية ولا يمكن تغيير اسمها أو تعطيلها")
+        if requested_permission_ids is not None and (
+                not isinstance(requested_permission_ids, list)
+                or set(requested_permission_ids) != all_permission_ids):
+            raise HTTPException(400, "لا يمكن تقليل صلاحيات وظيفة مسؤول النظام IT")
     old = {"name_ar": p.name_ar, "name_en": p.name_en, "is_active": p.is_active,
            "permission_ids": sorted(db.scalars(select(JobProfilePermission.permission_id).where(
                JobProfilePermission.job_profile_id == profile_id)).all())}
