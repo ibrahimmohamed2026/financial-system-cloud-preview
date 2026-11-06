@@ -30,7 +30,7 @@ class ItemIn(BaseModel):
     min_quantity: Decimal = Field(default=Decimal("0"), ge=0)
     is_active: bool = True
 class MovementIn(BaseModel):
-    movement_no: str = Field(min_length=1, max_length=60)
+    movement_no: str | None = Field(default=None, max_length=60)
     item_id: int
     warehouse_id: int
     movement_date: date = Field(default_factory=date.today)
@@ -44,7 +44,7 @@ class MovementBatchLineIn(BaseModel):
     quantity: Decimal = Field(gt=0)
     unit_cost: Decimal = Field(default=Decimal("0"), ge=0)
 class MovementBatchIn(BaseModel):
-    movement_no: str = Field(min_length=1, max_length=50)
+    movement_no: str | None = Field(default=None, max_length=50)
     warehouse_id: int
     movement_date: date = Field(default_factory=date.today)
     movement_type: str
@@ -58,7 +58,7 @@ class InventoryReturnLineIn(BaseModel):
     purchase_order_line_id: int | None = None
     site_issue_line_id: int | None = None
 class InventoryReturnIn(BaseModel):
-    return_no: str = Field(min_length=1, max_length=60)
+    return_no: str | None = Field(default=None, max_length=60)
     return_type: str
     return_date: date = Field(default_factory=date.today)
     warehouse_id: int
@@ -71,7 +71,7 @@ class StocktakeLineIn(BaseModel):
     item_id: int
     counted_quantity: Decimal = Field(ge=0)
 class StocktakeIn(BaseModel):
-    stocktake_no: str = Field(min_length=1, max_length=60)
+    stocktake_no: str | None = Field(default=None, max_length=60)
     warehouse_id: int
     stocktake_date: date = Field(default_factory=date.today)
     notes: str | None = None
@@ -81,7 +81,7 @@ class SiteIssueRequestLineIn(BaseModel):
     item_id: int
     quantity: Decimal = Field(gt=0)
 class SiteIssueRequestIn(BaseModel):
-    request_no: str = Field(min_length=1, max_length=60)
+    request_no: str | None = Field(default=None, max_length=60)
     request_date: date = Field(default_factory=date.today)
     needed_by: date | None = None
     project_id: int | None = None
@@ -103,7 +103,7 @@ class StockTransferLineIn(BaseModel):
     unit_cost: Decimal = Field(default=Decimal("0"), ge=0)
 
 class StockTransferIn(BaseModel):
-    transfer_no: str = Field(min_length=1, max_length=35)
+    transfer_no: str | None = Field(default=None, max_length=35)
     transfer_date: date = Field(default_factory=date.today)
     source_warehouse_id: int
     destination_warehouse_id: int
@@ -240,8 +240,6 @@ def list_site_issue_requests(_: User = Depends(require_permission("InventoryMana
 
 @inventory.post("/site-issue-requests", status_code=201)
 def create_site_issue_request(body: SiteIssueRequestIn, user: User = Depends(require_permission("InventoryManagement", "Add")), db: Session = Depends(get_db)):
-    if db.scalar(select(SiteIssueRequest.request_id).where(SiteIssueRequest.request_no == body.request_no)):
-        raise HTTPException(409, "رقم طلب الصرف مستخدم بالفعل")
     if body.project_id is not None and not db.get(Project, body.project_id):
         raise HTTPException(422, "المشروع المحدد غير موجود")
     if len({line.item_id for line in body.lines}) != len(body.lines):
@@ -250,12 +248,13 @@ def create_site_issue_request(body: SiteIssueRequestIn, user: User = Depends(req
         item = db.get(InventoryItem, line.item_id)
         if not item or not item.is_active:
             raise HTTPException(422, f"الصنف {line.item_id} غير موجود أو غير نشط")
-    request = SiteIssueRequest(request_no=body.request_no, request_date=body.request_date,
+    request = SiteIssueRequest(request_no=f"TEMP-{uuid4().hex}", request_date=body.request_date,
         needed_by=body.needed_by, project_id=body.project_id, site_name=body.site_name,
         requested_by=user.user_id, status="PendingApproval", notes=body.notes)
     db.add(request)
     try:
         db.flush()
+        request.request_no = f"ISS-{request.request_date.year}-{request.request_id:06d}"
         for line in body.lines:
             db.add(SiteIssueRequestLine(request_id=request.request_id, item_id=line.item_id,
                 requested_quantity=line.quantity, approved_quantity=0, issued_quantity=0))
@@ -403,8 +402,6 @@ def list_stocktakes(_: User = Depends(require_permission("InventoryManagement", 
 
 @inventory.post("/stocktakes", status_code=201)
 def create_stocktake(body: StocktakeIn, user: User = Depends(require_permission("InventoryManagement", "Add")), db: Session = Depends(get_db)):
-    if db.scalar(select(InventoryStocktake.stocktake_id).where(InventoryStocktake.stocktake_no == body.stocktake_no)):
-        raise HTTPException(409, "رقم محضر الجرد مستخدم بالفعل")
     warehouse = db.get(InventoryWarehouse, body.warehouse_id)
     if not warehouse or not warehouse.is_active:
         raise HTTPException(422, "المخزن غير موجود أو غير نشط")
@@ -416,11 +413,12 @@ def create_stocktake(body: StocktakeIn, user: User = Depends(require_permission(
         if not item or not item.is_active:
             raise HTTPException(422, f"الصنف {line.item_id} غير موجود أو غير نشط")
         prepared.append((line, _balance(db, line.item_id, body.warehouse_id)))
-    x = InventoryStocktake(stocktake_no=body.stocktake_no, warehouse_id=body.warehouse_id,
+    x = InventoryStocktake(stocktake_no=f"TEMP-{uuid4().hex}", warehouse_id=body.warehouse_id,
         stocktake_date=body.stocktake_date, status="PendingApproval", notes=body.notes, created_by=user.user_id)
     db.add(x)
     try:
         db.flush()
+        x.stocktake_no = f"STK-{x.stocktake_date.year}-{x.stocktake_id:06d}"
         for line, system_qty in prepared:
             counted = Decimal(str(line.counted_quantity))
             db.add(InventoryStocktakeLine(stocktake_id=x.stocktake_id, item_id=line.item_id,
@@ -566,8 +564,6 @@ def list_inventory_returns(_: User = Depends(require_permission("InventoryManage
 def create_inventory_return(body: InventoryReturnIn, user: User = Depends(require_permission("InventoryManagement", "Add")), db: Session = Depends(get_db)):
     if body.return_type not in ("Supplier", "Site"):
         raise HTTPException(422, "نوع المرتجع غير صحيح")
-    if db.scalar(select(InventoryReturn.return_id).where(InventoryReturn.return_no == body.return_no)):
-        raise HTTPException(409, "رقم المرتجع مستخدم بالفعل")
     warehouse = db.get(InventoryWarehouse, body.warehouse_id)
     if not warehouse or not warehouse.is_active:
         raise HTTPException(422, "المخزن غير موجود أو غير نشط")
@@ -615,12 +611,13 @@ def create_inventory_return(body: InventoryReturnIn, user: User = Depends(requir
             if Decimal(str(row.quantity)) > available:
                 raise HTTPException(409, f"كمية المرتجع تتجاوز الكمية المصروفة المتبقية للصنف {item.name}")
         prepared.append(row)
-    x = InventoryReturn(return_no=body.return_no, return_type=body.return_type, return_date=body.return_date,
+    x = InventoryReturn(return_no=f"TEMP-{uuid4().hex}", return_type=body.return_type, return_date=body.return_date,
         warehouse_id=body.warehouse_id, counterparty_name=body.counterparty_name, source_document=body.source_document,
         notes=body.notes, status="PendingApproval", created_by=user.user_id)
     db.add(x)
     try:
         db.flush()
+        x.return_no = f"RET-{x.return_date.year}-{x.return_id:06d}"
         for row in prepared:
             db.add(InventoryReturnLine(return_id=x.return_id, item_id=row.item_id, quantity=row.quantity,
                 unit_cost=row.unit_cost, purchase_order_line_id=row.purchase_order_line_id, site_issue_line_id=row.site_issue_line_id))
@@ -798,9 +795,8 @@ def item_stock_card(item_id: int, date_from: date | None = None, date_to: date |
 def create_movement(body: MovementIn, user: User = Depends(require_permission("InventoryManagement", "Add")), db: Session = Depends(get_db)):
     if body.movement_type not in ("IN","OUT"): raise HTTPException(422,"نوع الحركة يجب أن يكون IN أو OUT")
     if not db.get(InventoryItem,body.item_id) or not db.get(InventoryWarehouse,body.warehouse_id): raise HTTPException(422,"الصنف أو المخزن غير موجود")
-    if db.scalar(select(InventoryMovement.movement_id).where(InventoryMovement.movement_no==body.movement_no)): raise HTTPException(409,"رقم الحركة مستخدم بالفعل")
     if body.movement_type=="OUT" and _balance(db,body.item_id,body.warehouse_id)<body.quantity: raise HTTPException(409,"الرصيد غير كافٍ للصرف")
-    x=InventoryMovement(**body.model_dump(),created_by=user.user_id);db.add(x);db.flush();write_audit(db,user.user_id,"Create","InventoryMovements",x.movement_id,new=body.model_dump());db.commit()
+    x=InventoryMovement(**{**body.model_dump(exclude={"movement_no"}),"movement_no":f"TEMP-{uuid4().hex}"},created_by=user.user_id);db.add(x);db.flush();x.movement_no=f"IM-{x.movement_date.year}-{x.movement_id:06d}";audit_data={**body.model_dump(exclude={"movement_no"}),"movement_no":x.movement_no};write_audit(db,user.user_id,"Create","InventoryMovements",x.movement_id,new=audit_data);db.commit()
     return {"movement_id":x.movement_id,"movement_no":x.movement_no,"message":"تم حفظ حركة المخزون"}
 
 @inventory.post("/movements/batch", status_code=201)
@@ -820,21 +816,24 @@ def create_movement_batch(body: MovementBatchIn, user: User = Depends(require_pe
             if _balance(db, item_id, body.warehouse_id) < quantity:
                 item = db.get(InventoryItem, item_id)
                 raise HTTPException(409, f"الرصيد غير كافٍ للصنف {item.code if item else item_id}")
-    refs = [f"{body.movement_no}-{n:03d}" for n in range(1, len(body.lines) + 1)]
-    duplicate = db.scalar(select(InventoryMovement.movement_id).where(InventoryMovement.movement_no.in_(refs)).limit(1))
-    if duplicate:
-        raise HTTPException(409, "رقم مستند الحركة مستخدم من قبل")
     created = []
-    for ref, line in zip(refs, body.lines):
-        movement = InventoryMovement(movement_no=ref, item_id=line.item_id, warehouse_id=body.warehouse_id,
+    document_no = None
+    for index, line in enumerate(body.lines, start=1):
+        movement = InventoryMovement(movement_no=f"TEMP-{uuid4().hex}", item_id=line.item_id, warehouse_id=body.warehouse_id,
             movement_date=body.movement_date, movement_type=body.movement_type, quantity=line.quantity,
-            unit_cost=line.unit_cost, reference=body.reference or body.movement_no, notes=body.notes, created_by=user.user_id)
+            unit_cost=line.unit_cost, reference=body.reference, notes=body.notes, created_by=user.user_id)
         db.add(movement); db.flush()
+        if document_no is None:
+            document_no = f"IMB-{body.movement_date.year}-{movement.movement_id:06d}"
+        ref = f"{document_no}-{index:03d}"
+        movement.movement_no = ref
+        if not movement.reference:
+            movement.reference = document_no
         write_audit(db, user.user_id, "Create", "InventoryMovements", movement.movement_id,
-            new={"movement_no":ref,"batch_no":body.movement_no,"item_id":line.item_id,"quantity":str(line.quantity),"movement_type":body.movement_type})
+            new={"movement_no":ref,"batch_no":document_no,"item_id":line.item_id,"quantity":str(line.quantity),"movement_type":body.movement_type})
         created.append({"movement_id":movement.movement_id,"movement_no":ref,"item_id":line.item_id,"quantity":str(line.quantity)})
     db.commit()
-    return {"movement_no":body.movement_no,"items":created,"message":"تم حفظ مستند المخزون متعدد البنود"}
+    return {"movement_no":document_no,"items":created,"message":"تم حفظ مستند المخزون متعدد البنود"}
 
 @inventory.post("/transfers", status_code=201)
 def create_stock_transfer(body: StockTransferIn, user: User = Depends(require_permission("InventoryManagement", "Add")), db: Session = Depends(get_db)):
@@ -860,42 +859,42 @@ def create_stock_transfer(body: StockTransferIn, user: User = Depends(require_pe
         available = _balance(db, item_id, body.source_warehouse_id)
         if available < quantity:
             raise HTTPException(409, f"الرصيد غير كافٍ للصنف {item.code}: المتاح {available} والمطلوب {quantity}")
-    movement_numbers = []
-    for index in range(1, len(body.lines) + 1):
-        movement_numbers.extend((f"{body.transfer_no}-OUT-{index:03d}", f"{body.transfer_no}-IN-{index:03d}"))
-    duplicate = db.scalar(select(InventoryMovement.movement_id).where(InventoryMovement.movement_no.in_(movement_numbers)).limit(1))
-    if duplicate:
-        raise HTTPException(409, "رقم مستند التحويل مستخدم من قبل")
     created = []
-    for index, line in enumerate(body.lines, start=1):
-        item = found[line.item_id]
-        for suffix, warehouse_id, movement_type in (
-            ("OUT", body.source_warehouse_id, "OUT"),
-            ("IN", body.destination_warehouse_id, "IN"),
-        ):
-            number = f"{body.transfer_no}-{suffix}-{index:03d}"
-            movement = InventoryMovement(movement_no=number, item_id=line.item_id,
-                warehouse_id=warehouse_id, movement_date=body.transfer_date,
-                movement_type=movement_type, quantity=line.quantity, unit_cost=line.unit_cost,
-                reference=body.reference or body.transfer_no,
-                notes=body.notes or f"تحويل مخزني {body.transfer_no}: {source.name} ← {destination.name}",
-                created_by=user.user_id)
-            db.add(movement)
-            db.flush()
-            write_audit(db, user.user_id, "Create", "InventoryMovements", movement.movement_id,
-                new={"movement_no": number, "transfer_no": body.transfer_no, "item_id": line.item_id,
-                     "quantity": str(line.quantity), "movement_type": movement_type,
-                     "warehouse_id": warehouse_id, "source_warehouse_id": body.source_warehouse_id,
-                     "destination_warehouse_id": body.destination_warehouse_id})
-            created.append({"movement_id": movement.movement_id, "movement_no": number,
-                "item_id": line.item_id, "warehouse_id": warehouse_id, "type": movement_type,
-                "quantity": str(line.quantity)})
+    transfer_no = None
     try:
+        for index, line in enumerate(body.lines, start=1):
+            item = found[line.item_id]
+            for suffix, warehouse_id, movement_type in (
+                ("OUT", body.source_warehouse_id, "OUT"),
+                ("IN", body.destination_warehouse_id, "IN"),
+            ):
+                movement = InventoryMovement(movement_no=f"TEMP-{uuid4().hex}", item_id=line.item_id,
+                    warehouse_id=warehouse_id, movement_date=body.transfer_date,
+                    movement_type=movement_type, quantity=line.quantity, unit_cost=line.unit_cost,
+                    reference=body.reference, notes=body.notes, created_by=user.user_id)
+                db.add(movement)
+                db.flush()
+                if transfer_no is None:
+                    transfer_no = f"TRF-{body.transfer_date.year}-{movement.movement_id:06d}"
+                number = f"{transfer_no}-{suffix}-{index:03d}"
+                movement.movement_no = number
+                if not movement.reference:
+                    movement.reference = transfer_no
+                if not movement.notes:
+                    movement.notes = f"تحويل مخزني {transfer_no}: {source.name} ← {destination.name}"
+                write_audit(db, user.user_id, "Create", "InventoryMovements", movement.movement_id,
+                    new={"movement_no": number, "transfer_no": transfer_no, "item_id": line.item_id,
+                         "quantity": str(line.quantity), "movement_type": movement_type,
+                         "warehouse_id": warehouse_id, "source_warehouse_id": body.source_warehouse_id,
+                         "destination_warehouse_id": body.destination_warehouse_id})
+                created.append({"movement_id": movement.movement_id, "movement_no": number,
+                    "item_id": line.item_id, "warehouse_id": warehouse_id, "type": movement_type,
+                    "quantity": str(line.quantity)})
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(409, "تعذر حفظ التحويل؛ راجع رقم المستند وحاول مرة أخرى")
-    return {"transfer_no": body.transfer_no, "source_warehouse": source.name,
+        raise HTTPException(409, "تعذر حفظ التحويل؛ راجع بيانات المستند وحاول مرة أخرى")
+    return {"transfer_no": transfer_no, "source_warehouse": source.name,
         "destination_warehouse": destination.name, "movements": created,
         "message": "تم ترحيل التحويل وتحديث رصيد المخزنين"}
 
