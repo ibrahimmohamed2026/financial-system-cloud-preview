@@ -542,13 +542,80 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
     db.commit();db.refresh(x)
     return settlement_out(x, db)
 
+class FinancialReviewLine(BaseModel):
+    settlement_item_id: int = Field(gt=0)
+    verified: bool
+    review_note: str | None = Field(default=None, max_length=2000)
+
+class FinancialSettlementReview(BaseModel):
+    checks: dict[str, bool]
+    items: list[FinancialReviewLine] = Field(default_factory=list)
+    notes: str | None = Field(default=None, max_length=4000)
+
+REQUIRED_FINANCIAL_REVIEW_CHECKS = {
+    "quantities_verified", "unit_prices_verified", "work_value_verified",
+    "deductions_verified", "vat_verified", "net_amount_verified",
+    "ledger_accounts_verified", "prior_settlements_verified",
+    "supporting_documents_checked",
+}
+
 @router.post("/settlements/{settlement_id}/approve")
 @router.post("/settlements/{settlement_id}/financial-approve")
-def approve_settlement(settlement_id:int,user:User=Depends(require_permission("ContractSettlements","FinancialApprove")),db:Session=Depends(get_db)):
+def approve_settlement(settlement_id:int, body:FinancialSettlementReview, user:User=Depends(require_permission("ContractSettlements","FinancialApprove")),db:Session=Depends(get_db)):
     """Stage 1: financial review. Manager approval is a separate, mandatory stage."""
     x=db.scalar(select(ContractSettlement).where(ContractSettlement.settlement_id==settlement_id).with_for_update())
     if not x: raise HTTPException(404,"المستخلص غير موجود")
     if x.status not in ("Draft", "PendingApproval"): raise HTTPException(409,"المستخلص ليس بانتظار المراجعة المالية")
+    if x.created_by == user.user_id:
+        raise HTTPException(403, "لا يجوز لمُعدّ المستخلص إجراء المراجعة المالية لنفسه")
+    if set(body.checks) != REQUIRED_FINANCIAL_REVIEW_CHECKS or not all(body.checks.values()):
+        raise HTTPException(422, "يجب استكمال جميع عناصر قائمة المراجعة المالية قبل الاعتماد")
+    lines=db.scalars(select(ContractSettlementItem).where(
+        ContractSettlementItem.settlement_id==x.settlement_id).with_for_update()).all()
+    submitted={row.settlement_item_id:row for row in body.items}
+    if len(submitted)!=len(body.items) or set(submitted)!={line.settlement_item_id for line in lines}:
+        raise HTTPException(422, "يجب مراجعة كل بند مالي مرة واحدة دون تكرار أو إغفال")
+    reviewed_lines=[]
+    line_total=ZERO
+    for line in lines:
+        decision=submitted[line.settlement_item_id]
+        if not decision.verified:
+            raise HTTPException(422, "يجب تأكيد مراجعة كل بند مالي")
+        item=db.get(ContractItem,line.contract_item_id)
+        if item is None:
+            raise HTTPException(409, "أحد بنود المستخلص لم يعد موجوداً في العقد")
+        expected=money(Decimal(str(line.quantity))*Decimal(str(line.unit_price)))
+        if money(line.amount)!=expected:
+            raise HTTPException(409, f"قيمة البند {item.item_no} لا تطابق الكمية × سعر الوحدة")
+        line_total+=expected
+        reviewed_lines.append({"settlement_item_id":line.settlement_item_id,
+            "contract_item_id":line.contract_item_id,"item_no":item.item_no,
+            "quantity":str(line.quantity),"unit_price":str(line.unit_price),
+            "amount":str(line.amount),"verified":True,
+            "review_note":(decision.review_note or "").strip() or None})
+    if lines and money(line_total)!=money(x.work_value):
+        raise HTTPException(409, "إجمالي بنود المستخلص لا يطابق قيمة الأعمال المسجلة")
+    deductions=dict(x.deductions_json or {})
+    deduction_total=ZERO
+    live_rules={r.code:r for r in db.scalars(select(ContractDeductionRule).where(
+        ContractDeductionRule.contract_id==x.contract_id,
+        ContractDeductionRule.settlement_side==x.settlement_side)).all()}
+    for code,d in deductions.items():
+        amount=money(d.get("amount",0))
+        if amount<ZERO:
+            raise HTTPException(422, f"قيمة الخصم {code} لا يمكن أن تكون سالبة")
+        deduction_total+=amount
+        rule=live_rules.get(code)
+        if rule and rule.cap_amount is not None and amount>money(rule.cap_amount):
+            raise HTTPException(422, f"قيمة الخصم {d.get('name',code)} تتجاوز الحد الأقصى المتفق عليه")
+        if amount>ZERO:
+            account_id=d.get("account_id") or (rule.gl_account_id if rule else None)
+            if not account_id:
+                raise HTTPException(422, f"الخصم {d.get('name',code)} موجب ولا يرتبط بحساب أستاذ")
+            leaf_account_or_422(db, account_id, f"حساب الخصم {d.get('name',code)}: ")
+    expected_net=money(Decimal(str(x.work_value))+Decimal(str(x.vat_amount))-deduction_total)
+    if expected_net<ZERO or money(x.net_amount)!=expected_net:
+        raise HTTPException(409, "صافي المستخلص لا يساوي الأعمال + الضريبة − إجمالي الخصومات")
     contract = db.scalar(select(Contract).where(Contract.contract_id==x.contract_id).with_for_update())
     if not contract or contract.status.lower() != "active": raise HTTPException(409,"لا يمكن اعتماد مستخلص لعقد غير فعّال")
     lines=db.scalars(select(ContractSettlementItem).where(ContractSettlementItem.settlement_id==x.settlement_id)).all()
@@ -570,7 +637,11 @@ def approve_settlement(settlement_id:int,user:User=Depends(require_permission("C
     x.financial_approved_by=user.user_id
     x.financial_approved_at=datetime.utcnow()
     x.status="PendingFinalApproval"
-    write_audit(db,user.user_id,"FinancialApprove","ContractSettlements",x.settlement_id,new=settlement_out(x, db))
+    write_audit(db,user.user_id,"FinancialApprove","ContractSettlements",x.settlement_id,
+        new={"settlement":settlement_out(x, db),"review_checklist":body.checks,
+             "reviewed_items":reviewed_lines,"review_notes":(body.notes or "").strip() or None,
+             "verified_totals":{"work_value":str(x.work_value),"deductions":str(money(deduction_total)),
+                                "vat_amount":str(x.vat_amount),"net_amount":str(x.net_amount)}})
     db.commit();db.refresh(x)
     return settlement_out(x, db)
 
