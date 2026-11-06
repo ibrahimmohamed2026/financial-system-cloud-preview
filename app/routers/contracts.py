@@ -158,9 +158,11 @@ def _build_contract_schedule(body: ContractIn):
     if count < 1:
         raise HTTPException(422, "حدد عدد المستخلصات أولاً")
     method = body.statement_distribution_method or "Manual"
-    if method == "Manual":
+    if method in ("Manual", "Milestones"):
         if len(body.schedule_items) != count:
             raise HTTPException(422, f"أدخل {count} صفًا في جدول المواعيد اليدوي")
+        if method == "Milestones" and any(not (row.label or "").strip() for row in body.schedule_items):
+            raise HTTPException(422, "اكتب اسم مرحلة التنفيذ لكل مستخلص مخطط")
         rows = body.schedule_items
     else:
         if not body.start_date or not body.end_date:
@@ -169,8 +171,6 @@ def _build_contract_schedule(body: ContractIn):
             raise HTTPException(422, "نهاية العقد تسبق بدايته")
         rows = []
         total_days = (body.end_date - body.start_date).days + 1
-        if method == "Milestones" and count > total_days:
-            raise HTTPException(422, "عدد مراحل التنفيذ أكبر من عدد أيام مدة العقد")
         cursor = body.start_date
         for n in range(1, count + 1):
             if method == "Monthly":
@@ -182,12 +182,7 @@ def _build_contract_schedule(body: ContractIn):
                 if cursor > body.end_date:
                     raise HTTPException(422, "مدة العقد لا تكفي لعدد المستخلصات كل أسبوعين المحدد")
                 period_end = min(cursor + timedelta(days=13), body.end_date)
-            else:
-                start_offset = ((n - 1) * total_days) // count
-                end_offset = (n * total_days) // count - 1
-                cursor = body.start_date + timedelta(days=start_offset)
-                period_end = body.start_date + timedelta(days=end_offset)
-            rows.append(ContractScheduleItemIn(label=("مرحلة التنفيذ " if method == "Milestones" else "المستخلص ") + str(n),
+            rows.append(ContractScheduleItemIn(label="المستخلص " + str(n),
                 period_start=cursor, period_end=period_end, planned_submission_date=period_end + timedelta(days=5),
                 due_date=period_end + timedelta(days=35),
                 expected_amount=(body.original_value / count).quantize(Decimal("0.01")) if body.original_value else None))
