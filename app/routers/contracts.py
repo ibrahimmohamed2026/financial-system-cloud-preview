@@ -192,9 +192,13 @@ def _build_contract_schedule(body: ContractIn):
             cursor = period_end + timedelta(days=1)
     if method in ("Monthly", "Biweekly") and rows and body.end_date and rows[-1].period_end < body.end_date:
         raise HTTPException(422, "عدد المستخلصات لا يغطي مدة العقد بالكامل؛ زوّد العدد أو اختر طريقة أخرى")
+    previous_end = None
     for n, row in enumerate(rows, start=1):
         if body.start_date and row.period_start < body.start_date or body.end_date and row.period_end > body.end_date:
             raise HTTPException(422, f"فترة المستخلص رقم {n} خارج مدة العقد")
+        if previous_end is not None and row.period_start <= previous_end:
+            raise HTTPException(422, "فترات المستخلصات اليدوية يجب أن تكون مرتبة وغير متداخلة")
+        previous_end = row.period_end
     return rows
 
 def _schedule_out(row):
@@ -202,7 +206,7 @@ def _schedule_out(row):
         "label": row.label, "period_start": row.period_start, "period_end": row.period_end,
         "planned_submission_date": row.planned_submission_date, "due_date": row.due_date,
         "expected_amount": str(row.expected_amount) if row.expected_amount is not None else None,
-        "status": row.status, "technical_estimate_id": row.technical_estimate_id}
+        "status": ("Overdue" if row.status == "Planned" and row.technical_estimate_id is None and row.planned_submission_date < date.today() else row.status), "technical_estimate_id": row.technical_estimate_id}
 
 @router.get("")
 def list_contracts(q: str | None = None, skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500),
