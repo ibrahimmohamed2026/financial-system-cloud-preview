@@ -23,4 +23,5 @@ jobs:
       - name: Run tests
         env:
           PYTHONPATH: ${{ github.workspace }}
+          JWT_SECRET: "ci-only-test-secret-not-for-production-2026"
         run: pytest -q
