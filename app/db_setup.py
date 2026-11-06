@@ -296,6 +296,11 @@ def ensure_schema(engine: Engine) -> None:
             with engine.begin() as conn:
                 for column_name, sql_type in missing:
                     conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {sql_type}'))
+    # Backfill signed BOQ baselines only after missing columns have been added.
+    if "ContractItems" in current_tables:
+        with engine.begin() as conn:
+            conn.execute(text('UPDATE "ContractItems" SET "OriginalQuantity"="Quantity" WHERE "OriginalQuantity" IS NULL'))
+            conn.execute(text('UPDATE "ContractItems" SET "OriginalUnitPrice"="UnitPrice" WHERE "OriginalUnitPrice" IS NULL'))
     # Preserve legacy addenda as approved; the current workflow creates new addenda as Draft.
     if "ContractAddendums" in table_names:
         addendum_columns = {col["name"] for col in inspect(engine).get_columns("ContractAddendums")}
