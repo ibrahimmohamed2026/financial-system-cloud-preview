@@ -38,12 +38,12 @@ export async function render(main, { api, auth, route }) {
       { name: "description", label: tr("البيان","Description"), full: true }, { name: "status", label: tr("الحالة (مثال: تمويل)","Status (e.g. Funding)") }, { name: "recipient_name", label: tr("المستلم","Recipient") },
       { name: "project_id", label: tr("مركز التكلفة","Cost center"), type: "select", optional: true, options: projs.map(p => [p.project_id, p.name_ar]), full: true }],
     onSubmit: async v => {
-      await api(t ? `${base}/transactions/${t.transaction_id}` : base + "/transactions", { method: t ? "PUT" : "POST", json: {
+      const saved = await api(t ? `${base}/transactions/${t.transaction_id}` : base + "/transactions", { method: t ? "PUT" : "POST", json: {
         transaction_date: v.transaction_date, inflow: v.inflow || "0", outflow: v.outflow || "0", description: v.description || null, voucher_no: v.voucher_no || null,
         status: v.status || null, recipient_name: v.recipient_name || null, project_id: v.project_id ? +v.project_id : null,
         exchange_rate: acc.currency_code === "USD" ? v.exchange_rate : null,
         counterpart_account_id: acc.currency_code === "USD" ? Number(v.counterpart_account_id) : null } });
-      toast(acc.currency_code === "USD" ? tr("تم الحفظ وإنشاء قيد يومية كمسودة","Saved and a draft journal entry was created") : tr("تم الحفظ","Saved")); await load();
+      toast(acc.currency_code === "USD" ? `${tr("تم الحفظ وإنشاء القيد كمسودة","Saved; draft journal created")}: ${saved.journal_entry_no || "—"}` : tr("تم الحفظ","Saved")); await load();
     } });
   for (const id of ["#df", "#dt"]) $(id).onchange = safe(load);
   let tm; $("#q").oninput = () => { clearTimeout(tm); tm = setTimeout(safe(load), 300); };
