@@ -474,6 +474,9 @@ class ContractAddendum(Base):
     status: Mapped[str] = C("Status", Unicode(20), default="Approved")
     approved_by: Mapped[Optional[int]] = C("ApprovedBy", ForeignKey("Users.UserId"), nullable=True)
     approved_at: Mapped[Optional[datetime]] = C("ApprovedAt", DateTime, nullable=True)
+    technical_reviewed_by: Mapped[Optional[int]] = C("TechnicalReviewedBy", ForeignKey("Users.UserId"), nullable=True)
+    technical_reviewed_at: Mapped[Optional[datetime]] = C("TechnicalReviewedAt", DateTime, nullable=True)
+    technical_review_notes: Mapped[Optional[str]] = C("TechnicalReviewNotes", UnicodeText, nullable=True)
     created_by: Mapped[Optional[int]] = C("CreatedBy", ForeignKey("Users.UserId"), nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
 
@@ -497,6 +500,8 @@ class ContractAddendumLine(Base):
     quantity_delta: Mapped[Decimal] = C("QuantityDelta", Numeric(18, 4))
     unit_price: Mapped[Decimal] = C("UnitPrice", Numeric(18, 4))
     amount_change: Mapped[Decimal] = C("AmountChange", Numeric(18, 2), default=Decimal("0"))
+    baseline_quantity: Mapped[Optional[Decimal]] = C("BaselineQuantity", Numeric(18, 4), nullable=True)
+    baseline_unit_price: Mapped[Optional[Decimal]] = C("BaselineUnitPrice", Numeric(18, 4), nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
 
 
