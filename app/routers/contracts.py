@@ -169,6 +169,8 @@ def _build_contract_schedule(body: ContractIn):
             raise HTTPException(422, "نهاية العقد تسبق بدايته")
         rows = []
         total_days = (body.end_date - body.start_date).days + 1
+        if method == "Milestones" and count > total_days:
+            raise HTTPException(422, "عدد مراحل التنفيذ أكبر من عدد أيام مدة العقد")
         cursor = body.start_date
         for n in range(1, count + 1):
             if method == "Monthly":
