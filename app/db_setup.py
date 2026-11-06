@@ -268,7 +268,7 @@ def ensure_schema(engine: Engine) -> None:
     if "Contracts" in table_names and "RequestId" not in contract_columns:
         with engine.begin() as conn:
             conn.execute(text('ALTER TABLE "Contracts" ADD COLUMN "RequestId" INTEGER NULL'))
-    # Preserve historical addenda as approved; newly created addenda start Pending.
+    # Preserve legacy addenda as approved; the current workflow creates new addenda as Draft.
     if "ContractAddendums" in table_names:
         addendum_columns = {col["name"] for col in inspect(engine).get_columns("ContractAddendums")}
         with engine.begin() as conn:
