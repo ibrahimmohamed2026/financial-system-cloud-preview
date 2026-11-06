@@ -28,6 +28,8 @@ USD_TRANSACTION_TYPES = {
                 "classifications": ("عملاء وأوراق قبض", "مدينون و ارصدة مدينة اخرى", "مدينون و ارصدة مدينة أخرى")},
     "customer_advance": {"label": "تحصيل دفعة مقدمة من عميل", "direction": "inflow",
                 "classifications": ("عملاء دفعات مقدمه",)},
+    "direct_income": {"label": "تحصيل إيراد مباشر", "direction": "inflow",
+                "classifications": ("مبيعات / إيرادات", "فوائد دائنة")},
     "supplier_payment": {"label": "سداد مورد أو مقاول", "direction": "outflow",
                 "classifications": ("موردون و اوراق دفع", "دائنون و ارصدة دائنة اخرى", "دائنون و ارصدة دائنة أخرى")},
     "supplier_advance": {"label": "دفعة مقدمة لمورد أو مقاول", "direction": "outflow",
