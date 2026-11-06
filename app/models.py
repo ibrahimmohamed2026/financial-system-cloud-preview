@@ -343,12 +343,27 @@ class User(Base):
     full_name: Mapped[str] = C("FullName", Unicode(150))
     preferred_language: Mapped[str] = C("PreferredLanguage", Unicode(5), default="ar")
     is_active: Mapped[bool] = C("IsActive", Boolean, default=True)
+    is_deleted: Mapped[bool] = C("IsDeleted", Boolean, default=False, server_default="false")
     last_login_at: Mapped[Optional[datetime]] = C("LastLoginAt", DateTime, nullable=True)
     failed_login_count: Mapped[int] = C("FailedLoginCount", Integer, default=0)
     locked_until: Mapped[Optional[datetime]] = C("LockedUntil", DateTime, nullable=True)
     token_version: Mapped[int] = C("TokenVersion", Integer, default=0, nullable=False, server_default="0")
     avatar_updated_at: Mapped[Optional[datetime]] = C("AvatarUpdatedAt", DateTime, nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
+
+
+class UserDeletionRequest(Base):
+    """Two-person approval workflow for archiving a user without breaking historical references."""
+    __tablename__ = "UserDeletionRequests"
+    request_id: Mapped[int] = C("RequestId", Integer, primary_key=True)
+    user_id: Mapped[int] = C("UserId", ForeignKey("Users.UserId"), index=True)
+    requested_by: Mapped[int] = C("RequestedBy", ForeignKey("Users.UserId"))
+    approved_by: Mapped[Optional[int]] = C("ApprovedBy", ForeignKey("Users.UserId"), nullable=True)
+    status: Mapped[str] = C("Status", Unicode(20), default="Pending", index=True)
+    reason: Mapped[str] = C("Reason", Unicode(500))
+    decision_note: Mapped[Optional[str]] = C("DecisionNote", Unicode(500), nullable=True)
+    requested_at: Mapped[datetime] = C("RequestedAt", DateTime, default=utcnow)
+    decided_at: Mapped[Optional[datetime]] = C("DecidedAt", DateTime, nullable=True)
 
 
 class UserAvatar(Base):
