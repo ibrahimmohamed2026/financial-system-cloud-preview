@@ -334,6 +334,8 @@ def approve_estimate(estimate_id:int,user:User=Depends(require_permission("Contr
         if approved_qty > 0:
             db.add(ContractSettlementItem(settlement_id=fin.settlement_id,contract_item_id=line.contract_item_id,quantity=approved_qty,unit_price=line.unit_price,amount=money(approved_qty*line.unit_price)))
     x.status="TechnicallyApproved";x.reviewed_by=user.user_id;x.reviewed_at=datetime.utcnow();x.financial_settlement_id=fin.settlement_id
+    linked_schedule=db.scalar(select(ContractSettlementSchedule).where(ContractSettlementSchedule.technical_estimate_id==x.estimate_id).with_for_update())
+    if linked_schedule is not None: linked_schedule.status="Completed"
     write_audit(db,user.user_id,"Approve","TechnicalSettlementEstimates",x.estimate_id,new={"status":x.status,"financial_settlement_id":fin.settlement_id,"work_value":str(work)})
     db.commit();db.refresh(fin)
     return {"estimate":estimate_out(x,db),"financial_settlement_id":fin.settlement_id,"financial_settlement_no":fin.settlement_no,"financial_status":fin.status,"net_amount":str(fin.net_amount),"message":"تم الاعتماد الهندسي وإنشاء مستخلص الحسابات كمسودة؛ يلزم مراجعته واعتماده وترحيله من شاشة المستخلصات المالية."}
@@ -344,6 +346,10 @@ def delete_estimate(estimate_id: int, cascade: bool = False,
                     user: User = Depends(require_permission("ContractSettlements", "Delete")), db: Session = Depends(get_db)):
     x = db.scalar(select(TechnicalSettlementEstimate).where(TechnicalSettlementEstimate.estimate_id == estimate_id).with_for_update())
     if not x: raise HTTPException(404, "المستخلص الفني غير موجود")
+    linked_schedule=db.scalar(select(ContractSettlementSchedule).where(ContractSettlementSchedule.technical_estimate_id==x.estimate_id).with_for_update())
+    if linked_schedule is not None:
+        linked_schedule.technical_estimate_id=None
+        linked_schedule.status="Planned"
     if cascade:
         require_admin(db, user.user_id)
         financial = db.get(ContractSettlement, x.financial_settlement_id) if x.financial_settlement_id else None
