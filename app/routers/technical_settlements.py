@@ -57,7 +57,7 @@ def estimate_out(x, db):
           "description":(db.get(ContractItem,i.contract_item_id).description if db.get(ContractItem,i.contract_item_id) else ""),
           "unit":(db.get(ContractItem,i.contract_item_id).unit if db.get(ContractItem,i.contract_item_id) else ""),
           "contract_quantity":str(db.get(ContractItem,i.contract_item_id).quantity if db.get(ContractItem,i.contract_item_id) else 0),"previous_quantity":str(i.previous_quantity),"current_quantity":str(i.current_quantity),
-          "total_quantity":str(i.previous_quantity+i.current_quantity),"progress_percent":str((i.previous_quantity+(i.approved_quantity if i.approved_quantity is not None else i.current_quantity))/Decimal(str(db.get(ContractItem,i.contract_item_id).quantity or 1))*Decimal("100")) if db.get(ContractItem,i.contract_item_id) and Decimal(str(db.get(ContractItem,i.contract_item_id).quantity or 0))>0 else "0","unit_price":str(i.unit_price),"amount":str(i.amount),"approved_quantity":str(i.approved_quantity) if i.approved_quantity is not None else None,"review_note":i.review_note,"reviewed_by":i.reviewed_by,"reviewed_at":i.reviewed_at} for i in lines]}
+          "total_quantity":str(i.previous_quantity+(i.approved_quantity if i.approved_quantity is not None else i.current_quantity)),"progress_percent":str((i.previous_quantity+(i.approved_quantity if i.approved_quantity is not None else i.current_quantity))/Decimal(str(db.get(ContractItem,i.contract_item_id).quantity or 1))*Decimal("100")) if db.get(ContractItem,i.contract_item_id) and Decimal(str(db.get(ContractItem,i.contract_item_id).quantity or 0))>0 else "0","unit_price":str(i.unit_price),"amount":str(i.amount),"approved_quantity":str(i.approved_quantity) if i.approved_quantity is not None else None,"review_note":i.review_note,"reviewed_by":i.reviewed_by,"reviewed_at":i.reviewed_at} for i in lines]}
 
 def next_estimate_no(db: Session, contract_id: int) -> str:
     """Return the first unused technical estimate number for a contract."""
@@ -161,7 +161,7 @@ def review_estimate(estimate_id: int, body: TechnicalReviewIn,
     write_audit(db, user.user_id, "TechnicalReview", "TechnicalSettlementEstimates", estimate_id,
         old={"status": "UnderReview"}, new={"status": x.status, "work_value": str(approved_total), "items": audit_lines, "notes": body.notes})
     if body.notes and body.notes.strip():
-        x.notes = (x.notes or "") + f"\\nملاحظات المراجعة الفنية: {body.notes.strip()}"
+        x.notes = (x.notes or "") + f"\nملاحظات المراجعة الفنية: {body.notes.strip()}"
     db.commit()
     db.refresh(x)
     return {"estimate": estimate_out(x, db), "message": "تم حفظ مراجعة البنود. المستخلص جاهز للاعتماد الفني النهائي."}
