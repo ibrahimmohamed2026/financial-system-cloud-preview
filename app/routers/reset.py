@@ -1,13 +1,13 @@
 """Safe, preview-first system data reset. Never deletes protected system configuration."""
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from .. import backup_service
 from ..database import get_db
 from ..deps import get_current_user, write_audit
-from ..models import Base, User, Role, UserRole, Account
+from ..models import Base, User, Role, UserRole, Account, JournalEntry, ContractSettlement
 from ..security import verify_password
 
 router = APIRouter(prefix="/admin/reset", tags=["System Reset"])
@@ -91,6 +91,10 @@ def execute_reset(body: ResetRequest, user: User = Depends(_admin), db: Session 
 
     deleted = {}
     try:
+        # Break the nullable circular FK between journal entries and settlements
+        # before deleting either side; both tables are part of every reset mode.
+        db.execute(update(JournalEntry).values(source_settlement_id=None))
+        db.execute(update(ContractSettlement).values(journal_entry_id=None))
         for table in tables:
             result = db.execute(delete(table))
             deleted[table.name] = int(result.rowcount or 0)
