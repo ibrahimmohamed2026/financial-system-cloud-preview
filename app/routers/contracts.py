@@ -393,7 +393,7 @@ def submit_addendum(contract_id: int, addendum_id: int, user: User = Depends(req
 
 @router.post("/{contract_id}/addendums/{addendum_id}/technical-review")
 def review_addendum_technical(contract_id: int, addendum_id: int, body: AddendumTechnicalDecision,
-        user: User = Depends(require_permission("ContractSettlements", "EngineeringApprove")), db: Session = Depends(get_db)):
+        user: User = Depends(require_permission("Contracts", "EngineeringApprove")), db: Session = Depends(get_db)):
     a = db.scalar(select(ContractAddendum).where(ContractAddendum.addendum_id == addendum_id,
         ContractAddendum.contract_id == contract_id).with_for_update())
     if not a: raise HTTPException(404, "ملحق العقد غير موجود")
@@ -414,10 +414,18 @@ def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(re
     a = db.scalar(select(ContractAddendum).where(ContractAddendum.addendum_id == addendum_id,
         ContractAddendum.contract_id == contract_id).with_for_update())
     if not a: raise HTTPException(404, "ملحق العقد غير موجود")
-    if a.status != "TechnicallyApproved":
-        raise HTTPException(409, "يجب إتمام المراجعة الفنية قبل الاعتماد الإداري والمالي")
     lines = db.scalars(select(ContractAddendumLine).where(
         ContractAddendumLine.addendum_id == addendum_id).with_for_update()).all()
+    # Compatibility: pre-workflow addenda created by the previous release had no BOQ lines.
+    if a.status == "Pending" and not lines:
+        a.status = "Approved"
+        a.approved_by = user.user_id
+        a.approved_at = datetime.utcnow()
+        write_audit(db, user.user_id, "ApproveLegacyAddendum", "ContractAddendums", a.addendum_id, new=_addendum(a))
+        db.commit(); db.refresh(a)
+        return _addendum(a)
+    if a.status != "TechnicallyApproved":
+        raise HTTPException(409, "يجب إتمام المراجعة الفنية قبل الاعتماد الإداري والمالي")
     if not lines: raise HTTPException(409, "لا توجد بنود معتمدة في الملحق")
     applied = []
     for line in lines:
@@ -440,6 +448,8 @@ def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(re
             if next_quantity < Decimal(str(used_technical)) + Decimal(str(used_financial)):
                 raise HTTPException(409, f"التعديل يجعل كمية البند {item.item_no} أقل من الكميات المعتمدة في المستخلصات")
             if next_quantity < 0: raise HTTPException(409, f"التعديل يجعل كمية البند {item.item_no} سالبة")
+            if item.original_quantity is None: item.original_quantity = item.quantity
+            if item.original_unit_price is None: item.original_unit_price = item.unit_price
             item.quantity = next_quantity
             item.unit_price = line.unit_price
             line.effective_item_id = item.item_id
@@ -449,7 +459,8 @@ def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(re
             item = ContractItem(contract_id=contract_id, catalog_item_id=line.catalog_item_id,
                 account_id=line.account_id, project_id=line.project_id, item_no=line.item_no,
                 description=line.description, unit=line.unit, quantity=line.quantity_delta,
-                unit_price=line.unit_price)
+                unit_price=line.unit_price, original_quantity=line.quantity_delta,
+                original_unit_price=line.unit_price)
             db.add(item); db.flush(); line.effective_item_id = item.item_id
             applied.append({"item_id":item.item_id,"item_no":item.item_no,"quantity":str(item.quantity)})
     a.value_change = sum((Decimal(str(x.amount_change)) for x in lines), D0)
