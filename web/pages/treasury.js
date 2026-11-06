@@ -7,10 +7,7 @@ export async function render(main, { api, auth, route }) {
   const info = await api(base + "/account");
   if (!info.account) return setup(info);
   const acc = info.account;
-  const [projs, counterpartAccounts] = await Promise.all([
-    api("/projects/lookup").catch(() => []),
-    acc.currency_code === "USD" && can("Add") ? api(base + "/counterpart-accounts").catch(() => []) : Promise.resolve([])
-  ]);
+  const projs = await api("/projects/lookup").catch(() => []);
   main.innerHTML = `<h3 style="margin-top:0">${esc(localStorage.getItem("fs_lang")==="en"?(acc.name_en||acc.name_ar):acc.name_ar)} <small class="muted">${esc(acc.currency_code)} — ${esc(acc.gl_account)}</small> ${auth.can(SC,"Edit") || auth.can(SC,"Add") ? `<button class="btn sm" id="edit-gl-link">${tr("تصحيح ربط شجرة الحسابات","Fix chart of accounts link")}</button>` : ""}</h3>
     <div class="toolbar"><div class="w" style="width:150px"><label>${tr("من","From")}</label><input type="date" id="df"></div><div class="w" style="width:150px"><label>${tr("إلى","To")}</label><input type="date" id="dt"></div>
     <div class="grow"><label>${tr("بحث","Search")}</label><input id="q"></div>${can("Add") ? `<button class="btn primary" id="add">+ ${tr("حركة","Transaction")}</button>` : ""}</div>
@@ -27,12 +24,16 @@ export async function render(main, { api, auth, route }) {
       <td>${t.locked ? `<span class="tag">${tr("مرتبط بقيد","Linked to journal entry")}</span>` : `${can("Edit") ? `<button class="btn sm" data-e="${t.transaction_id}">${tr("تعديل","Edit")}</button> ` : ""}${can("Delete") ? `<button class="btn sm danger" data-d="${t.transaction_id}">${tr("حذف","Delete")}</button>` : ""}`}</td></tr>`).join("")
       || `<tr><td colspan="${acc.currency_code === "USD" ? 10 : 9}" class="muted">${tr("لا توجد حركات","No transactions")}</td></tr>`;
   };
-  const form = t => formDialog({
+  const form = async t => {
+    const initialDirection = t ? (+t.inflow > 0 ? "inflow" : "outflow") : "inflow";
+    const initialCounterparts = acc.currency_code === "USD"
+      ? await api(base + "/counterpart-accounts?direction=" + initialDirection).catch(() => []) : [];
+    return formDialog({
     title: t ? tr("تعديل حركة","Edit transaction") : tr("حركة جديدة","New transaction"), values: t ? { ...t, inflow: +t.inflow || "", outflow: +t.outflow || "", project_id: t.project_id ?? "" } : { transaction_date: today() },
     fields: [{ name: "transaction_date", label: tr("التاريخ","Date"), type: "date", required: true },
       ...(acc.currency_code === "USD" ? [
         { name: "exchange_rate", label: tr("سعر الدولار مقابل الجنيه","USD exchange rate to EGP"), type: "number", step: "0.000001", min: "0.000001", required: true },
-        { name: "counterpart_account_id", label: tr("حساب الطرف المقابل","Counterpart account"), type: "select", options: counterpartAccounts.map(a => [String(a.account_id), a.label]), required: true, full: true }
+        { name: "counterpart_account_id", label: tr("حساب الطرف المقابل","Counterpart account"), type: "select", searchable: true, options: initialCounterparts.map(a => [String(a.account_id), a.label]), required: true, full: true }
       ] : []),
       { name: "voucher_no", label: tr("رقم الإذن","Voucher No.") }, { name: "inflow", label: tr("وارد","Inflow"), type: "number", step: "0.01", min: 0 }, { name: "outflow", label: tr("منصرف","Outflow"), type: "number", step: "0.01", min: 0 },
       { name: "description", label: tr("البيان","Description"), full: true }, { name: "status", label: tr("الحالة (مثال: تمويل)","Status (e.g. Funding)") }, { name: "recipient_name", label: tr("المستلم","Recipient") },
@@ -44,13 +45,41 @@ export async function render(main, { api, auth, route }) {
         exchange_rate: acc.currency_code === "USD" ? v.exchange_rate : null,
         counterpart_account_id: acc.currency_code === "USD" ? Number(v.counterpart_account_id) : null } });
       toast(acc.currency_code === "USD" ? `${tr("تم الحفظ وإنشاء القيد كمسودة","Saved; draft journal created")}: ${saved.journal_entry_no || "—"}` : tr("تم الحفظ","Saved")); await load();
+    },
+    onOpen: (dlg, formEl) => {
+      if (acc.currency_code !== "USD") return;
+      const directionSelect = formEl.elements.namedItem("counterpart_account_id");
+      const refreshCounterparts = async direction => {
+        const selected = directionSelect.value;
+        directionSelect.disabled = true;
+        try {
+          const options = await api(base + "/counterpart-accounts?direction=" + direction);
+          directionSelect.innerHTML = '<option value="">—</option>' + options.map(a =>
+            `<option value="${String(a.account_id)}">${esc(a.label)}</option>`).join("");
+          if (options.some(a => String(a.account_id) === selected)) directionSelect.value = selected;
+        } finally { directionSelect.disabled = false; }
+      };
+      const inflow = formEl.elements.namedItem("inflow"), outflow = formEl.elements.namedItem("outflow");
+      inflow.addEventListener("input", () => { if (+inflow.value > 0) refreshCounterparts("inflow"); });
+      outflow.addEventListener("input", () => { if (+outflow.value > 0) refreshCounterparts("outflow"); });
+      const sideHint = document.createElement("small");
+      sideHint.className = "muted";
+      sideHint.textContent = (+inflow.value > 0 || (!+outflow.value && !+inflow.value))
+        ? "الوارد: حساب الطرف المقابل يظهر في الجانب الدائن من القيد."
+        : "المنصرف: حساب الطرف المقابل يظهر في الجانب المدين من القيد.";
+      directionSelect.parentElement.appendChild(sideHint);
+      const updateHint = () => { sideHint.textContent = +inflow.value > 0
+        ? "الوارد: حساب الطرف المقابل يظهر في الجانب الدائن من القيد."
+        : "المنصرف: حساب الطرف المقابل يظهر في الجانب المدين من القيد."; };
+      inflow.addEventListener("input", updateHint); outflow.addEventListener("input", updateHint);
     } });
+  };
   for (const id of ["#df", "#dt"]) $(id).onchange = safe(load);
   let tm; $("#q").oninput = () => { clearTimeout(tm); tm = setTimeout(safe(load), 300); };
-  if (can("Add")) $("#add").onclick = () => form(null);
+  if (can("Add")) $("#add").onclick = safe(() => form(null));
   $("#rows").onclick = safe(async ev => {
     const e = ev.target.closest("[data-e]"), d = ev.target.closest("[data-d]");
-    if (e) form(items.find(x => x.transaction_id == e.dataset.e));
+    if (e) await form(items.find(x => x.transaction_id == e.dataset.e));
     if (d && confirm(tr("حذف الحركة؟","Delete this transaction?"))) { await api(`${base}/transactions/${d.dataset.d}`, { method: "DELETE" }); toast(tr("تم الحذف","Deleted")); await load(); }
   });
   await load();
