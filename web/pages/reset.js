@@ -39,6 +39,7 @@ export async function render(main, { api }) {
     const m = button.dataset.mode;
     previewMode = null; $("#previewbox").innerHTML = "";
     busy(true); $("#reseterr").textContent = ""; $("#confirmbox").hidden = true;
+    try {
       const d = await api("/admin/reset/preview?mode=" + encodeURIComponent(m));
       previewMode = m;
       const labels = {
