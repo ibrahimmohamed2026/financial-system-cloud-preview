@@ -273,6 +273,7 @@ def ensure_schema(engine: Engine) -> None:
     schema_additions = {
         "Contracts": {
             "AgreedStatementCount": "INTEGER NULL",
+            "StatementDistributionMethod": "VARCHAR(20) NOT NULL DEFAULT 'Manual'",
         },
         "ContractItems": {
             "OriginalQuantity": "NUMERIC(18,4) NULL",

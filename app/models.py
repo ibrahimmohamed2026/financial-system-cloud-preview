@@ -458,9 +458,28 @@ class Contract(Base):
     end_date: Mapped[Optional[date]] = C("EndDate", Date, nullable=True)
     original_value: Mapped[Decimal] = C("OriginalValue", Numeric(18, 2), default=Decimal("0"))
     agreed_statement_count: Mapped[Optional[int]] = C("AgreedStatementCount", Integer, nullable=True)
+    statement_distribution_method: Mapped[str] = C("StatementDistributionMethod", Unicode(20), default="Manual")
     status: Mapped[str] = C("Status", Unicode(30), default="Active")
     notes: Mapped[Optional[str]] = C("Notes", UnicodeText, nullable=True)
     created_by: Mapped[Optional[int]] = C("CreatedBy", ForeignKey("Users.UserId"), nullable=True)
+    created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
+
+
+class ContractSettlementSchedule(Base):
+    __tablename__ = "ContractSettlementSchedules"
+    __table_args__ = (UniqueConstraint("ContractId", "SequenceNo", name="UQ_ContractSettlementSchedules_Sequence"),
+                      UniqueConstraint("TechnicalEstimateId", name="UQ_ContractSettlementSchedules_TechnicalEstimate"))
+    schedule_id: Mapped[int] = C("ScheduleId", Integer, primary_key=True)
+    contract_id: Mapped[int] = C("ContractId", ForeignKey("Contracts.ContractId", ondelete="CASCADE"), index=True)
+    sequence_no: Mapped[int] = C("SequenceNo", Integer)
+    label: Mapped[Optional[str]] = C("Label", Unicode(200), nullable=True)
+    period_start: Mapped[date] = C("PeriodStart", Date)
+    period_end: Mapped[date] = C("PeriodEnd", Date)
+    planned_submission_date: Mapped[date] = C("PlannedSubmissionDate", Date)
+    due_date: Mapped[date] = C("DueDate", Date)
+    expected_amount: Mapped[Optional[Decimal]] = C("ExpectedAmount", Numeric(18, 2), nullable=True)
+    status: Mapped[str] = C("Status", Unicode(20), default="Planned")
+    technical_estimate_id: Mapped[Optional[int]] = C("TechnicalEstimateId", ForeignKey("TechnicalSettlementEstimates.EstimateId"), nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
 
 

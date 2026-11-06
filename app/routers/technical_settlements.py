@@ -14,7 +14,7 @@ from ..database import get_db
 from ..deps import require_permission, write_audit
 from ..models import (User, Contract, ContractItem, ContractSettlement, ContractSettlementItem,
     TechnicalSettlementEstimate, TechnicalSettlementEstimateItem, ContractDeductionRule,
-    ContractAccountingConfig, ProgressBilling, ContractAddendum, ContractChangeOrder)
+    ContractAccountingConfig, ProgressBilling, ContractAddendum, ContractChangeOrder, ContractSettlementSchedule)
 
 from .contract_erp import resolve_rule_account
 from ..contract_deletion import delete_settlement_tree, require_admin
@@ -27,6 +27,7 @@ class EstimateLine(BaseModel):
     current_quantity: Decimal = Field(gt=0)
 class EstimateIn(BaseModel):
     contract_id: int = Field(gt=0)
+    planned_schedule_id: int | None = Field(default=None, gt=0)
     settlement_side: Literal["Customer", "Subcontractor"]
     # Optional for backward compatibility; the server assigns the final number.
     estimate_no: str | None = Field(default=None, max_length=50)
@@ -62,7 +63,7 @@ def estimate_out(x, db):
     return {"estimate_id":x.estimate_id,"contract_id":x.contract_id,"contract_no":c.contract_no if c else "",
         "contract_title":c.title if c else "", "contract_title_en":c.title_en if c else None,"settlement_side":x.settlement_side,"estimate_no":x.estimate_no,
         "estimate_date":x.estimate_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),
-        "status":x.status,"notes":x.notes,"created_by":x.created_by,"financial_settlement_id":x.financial_settlement_id,
+        "status":x.status,"notes":x.notes,"created_by":x.created_by,"financial_settlement_id":x.financial_settlement_id,"planned_schedule_id":next((r.schedule_id for r in db.scalars(select(ContractSettlementSchedule).where(ContractSettlementSchedule.technical_estimate_id==x.estimate_id)).all()),None),
         "items":[{"estimate_item_id":i.estimate_item_id,"contract_item_id":i.contract_item_id,
           "item_no":(db.get(ContractItem,i.contract_item_id).item_no if db.get(ContractItem,i.contract_item_id) else ""),
           "description":(db.get(ContractItem,i.contract_item_id).description if db.get(ContractItem,i.contract_item_id) else ""),
@@ -96,6 +97,15 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     if not c: raise HTTPException(404,"العقد غير موجود")
     if (c.status or "").lower()!="active": raise HTTPException(409,"لا يمكن إعداد مستخلص فني إلا لعقد نشط ومعتمد نهائياً")
     estimate_no = next_estimate_no(db, c.contract_id)
+    planned_row = None
+    if body.planned_schedule_id is not None:
+        planned_row = db.scalar(select(ContractSettlementSchedule).where(
+            ContractSettlementSchedule.schedule_id == body.planned_schedule_id,
+            ContractSettlementSchedule.contract_id == c.contract_id).with_for_update())
+        if not planned_row:
+            raise HTTPException(422, "المستخلص المخطط لا يتبع هذا العقد")
+        if planned_row.technical_estimate_id is not None:
+            raise HTTPException(409, "تم ربط هذا المستخلص المخطط بمستخلص فني بالفعل")
     legacy=db.scalar(select(func.coalesce(func.sum(ProgressBilling.work_value),0)).where(ProgressBilling.contract_id==c.contract_id,func.lower(ProgressBilling.status).in_(("approved","paid","posted")))) or 0
     if Decimal(str(legacy))>0: raise HTTPException(409,"يوجد تاريخ مستخلصات قديمة غير موزع على بنود؛ راجع الكميات التاريخية قبل إعداد مستخلص فني جديد")
     seen=set(); prepared=[]; total=Decimal("0")
@@ -119,6 +129,9 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
        estimate_date=(body.estimate_date if body.estimate_date else datetime.utcnow().date()),counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,
        work_value=total,status="UnderReview",notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
+    if planned_row is not None:
+        planned_row.technical_estimate_id = x.estimate_id
+        planned_row.status = "Submitted"
     for item,prev,qty,amount in prepared:
         db.add(TechnicalSettlementEstimateItem(estimate_id=x.estimate_id,contract_item_id=item.item_id,previous_quantity=prev,current_quantity=qty,unit_price=item.unit_price,amount=amount))
     write_audit(db,user.user_id,"Create","TechnicalSettlementEstimates",x.estimate_id,new={"estimate_no":x.estimate_no,"work_value":str(total),"status":x.status})
@@ -321,6 +334,8 @@ def approve_estimate(estimate_id:int,user:User=Depends(require_permission("Contr
         if approved_qty > 0:
             db.add(ContractSettlementItem(settlement_id=fin.settlement_id,contract_item_id=line.contract_item_id,quantity=approved_qty,unit_price=line.unit_price,amount=money(approved_qty*line.unit_price)))
     x.status="TechnicallyApproved";x.reviewed_by=user.user_id;x.reviewed_at=datetime.utcnow();x.financial_settlement_id=fin.settlement_id
+    linked_schedule=db.scalar(select(ContractSettlementSchedule).where(ContractSettlementSchedule.technical_estimate_id==x.estimate_id).with_for_update())
+    if linked_schedule is not None: linked_schedule.status="Completed"
     write_audit(db,user.user_id,"Approve","TechnicalSettlementEstimates",x.estimate_id,new={"status":x.status,"financial_settlement_id":fin.settlement_id,"work_value":str(work)})
     db.commit();db.refresh(fin)
     return {"estimate":estimate_out(x,db),"financial_settlement_id":fin.settlement_id,"financial_settlement_no":fin.settlement_no,"financial_status":fin.status,"net_amount":str(fin.net_amount),"message":"تم الاعتماد الهندسي وإنشاء مستخلص الحسابات كمسودة؛ يلزم مراجعته واعتماده وترحيله من شاشة المستخلصات المالية."}
@@ -331,6 +346,10 @@ def delete_estimate(estimate_id: int, cascade: bool = False,
                     user: User = Depends(require_permission("ContractSettlements", "Delete")), db: Session = Depends(get_db)):
     x = db.scalar(select(TechnicalSettlementEstimate).where(TechnicalSettlementEstimate.estimate_id == estimate_id).with_for_update())
     if not x: raise HTTPException(404, "المستخلص الفني غير موجود")
+    linked_schedule=db.scalar(select(ContractSettlementSchedule).where(ContractSettlementSchedule.technical_estimate_id==x.estimate_id).with_for_update())
+    if linked_schedule is not None:
+        linked_schedule.technical_estimate_id=None
+        linked_schedule.status="Planned"
     if cascade:
         require_admin(db, user.user_id)
         financial = db.get(ContractSettlement, x.financial_settlement_id) if x.financial_settlement_id else None
