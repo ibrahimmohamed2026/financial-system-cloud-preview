@@ -85,6 +85,7 @@ class AddendumIn(BaseModel):
 class AddendumLineIn(BaseModel):
     target_item_id: int | None = Field(default=None, gt=0)
     catalog_item_id: int | None = Field(default=None, gt=0)
+    account_id: int | None = Field(default=None, gt=0)
     item_no: str | None = Field(default=None, max_length=50)
     description: str = Field(min_length=1, max_length=500)
     unit: str = Field(default="وحدة", max_length=30)
@@ -375,10 +376,13 @@ def add_addendum_line(contract_id: int, addendum_id: int, body: AddendumLineIn,
         if body.quantity_delta < 0:
             raise HTTPException(422, "البند الجديد يجب أن تكون كميته موجبة")
         catalog = db.get(ItemCatalog, body.catalog_item_id) if body.catalog_item_id else None
-        if not catalog or not catalog.is_active:
-            raise HTTPException(422, "اختر بندًا مركزيًا نشطًا للبند الجديد")
-        account = leaf_account_or_422(db, catalog.account_id, "حساب البند: ")
-        catalog_item_id, account_id = catalog.catalog_item_id, account.account_id
+        if body.catalog_item_id and (not catalog or not catalog.is_active):
+            raise HTTPException(422, "البند المركزي المختار غير موجود أو غير نشط")
+        selected_account_id = catalog.account_id if catalog else body.account_id
+        if not selected_account_id:
+            raise HTTPException(422, "اختر حسابًا تفصيليًا من شجرة الحسابات للبند الجديد")
+        account = leaf_account_or_422(db, selected_account_id, "حساب البند: ")
+        catalog_item_id, account_id = (catalog.catalog_item_id if catalog else None), account.account_id
         project_id = body.project_id if body.project_id is not None else db.get(Contract, contract_id).project_id
         item_no = (body.item_no or "").strip()
         if not item_no:
