@@ -19,6 +19,18 @@ from .contract_erp import leaf_account_or_422
 router = APIRouter(prefix="/api/contracts", tags=["Contracts & Technical Office"])
 D0 = Decimal("0.00")
 
+def _addendum_line_amount_change(target_quantity, target_unit_price, quantity_delta, new_unit_price):
+    """Calculate the signed change in BOQ value for an addendum line."""
+    quantity_delta = Decimal(str(quantity_delta))
+    new_unit_price = Decimal(str(new_unit_price))
+    if target_quantity is None:
+        amount = quantity_delta * new_unit_price
+    else:
+        amount = ((new_unit_price - Decimal(str(target_unit_price))) * Decimal(str(target_quantity))
+                  + quantity_delta * new_unit_price)
+    return amount.quantize(Decimal("0.01"))
+
+
 class ContractCreateItem(BaseModel):
     catalog_item_id: int = Field(gt=0)
     description: str = Field(default="", max_length=500)
@@ -368,14 +380,34 @@ def add_addendum_line(contract_id: int, addendum_id: int, body: AddendumLineIn,
         account = leaf_account_or_422(db, catalog.account_id, "حساب البند: ")
         catalog_item_id, account_id = catalog.catalog_item_id, account.account_id
         project_id = body.project_id if body.project_id is not None else db.get(Contract, contract_id).project_id
-        item_no = body.item_no or f"AD{addendum_id}-{db.scalar(select(func.count()).select_from(ContractAddendumLine).where(ContractAddendumLine.addendum_id == addendum_id)) + 1}"
+        item_no = (body.item_no or "").strip()
+        if not item_no:
+            suffix = 1
+            while True:
+                candidate = f"AD{addendum_id}-{suffix}"
+                exists_on_contract = db.scalar(select(ContractItem.item_id).where(
+                    ContractItem.contract_id == contract_id, ContractItem.item_no == candidate).limit(1))
+                exists_in_addendum = db.scalar(select(ContractAddendumLine.addendum_line_id).where(
+                    ContractAddendumLine.addendum_id == addendum_id, ContractAddendumLine.item_no == candidate).limit(1))
+                if not exists_on_contract and not exists_in_addendum:
+                    item_no = candidate
+                    break
+                suffix += 1
+        else:
+            duplicate_no = db.scalar(select(ContractItem.item_id).where(
+                ContractItem.contract_id == contract_id, ContractItem.item_no == item_no).limit(1))
+            duplicate_line_no = db.scalar(select(ContractAddendumLine.addendum_line_id).where(
+                ContractAddendumLine.addendum_id == addendum_id, ContractAddendumLine.item_no == item_no).limit(1))
+            if duplicate_no or duplicate_line_no:
+                raise HTTPException(409, "رقم البند مستخدم بالفعل داخل العقد أو الملحق")
         description, unit = body.description.strip(), body.unit or catalog.unit
     line = ContractAddendumLine(addendum_id=addendum_id, target_item_id=target.item_id if target else None,
         catalog_item_id=catalog_item_id, account_id=account_id, project_id=project_id, item_no=item_no,
         description=description, unit=unit, quantity_delta=body.quantity_delta, unit_price=body.unit_price,
-        amount_change=(((body.unit_price - Decimal(str(target.unit_price))) * Decimal(str(target.quantity))
-            + body.quantity_delta * body.unit_price) if target else
-            (body.quantity_delta * body.unit_price)).quantize(Decimal("0.01")),
+        amount_change=_addendum_line_amount_change(
+            Decimal(str(target.quantity)) if target else None,
+            Decimal(str(target.unit_price)) if target else None,
+            body.quantity_delta, body.unit_price),
         baseline_quantity=Decimal(str(target.quantity)) if target else None,
         baseline_unit_price=Decimal(str(target.unit_price)) if target else None)
     db.add(line)
@@ -444,6 +476,10 @@ def review_addendum_technical(contract_id: int, addendum_id: int, body: Addendum
 
 @router.post("/{contract_id}/addendums/{addendum_id}/approve")
 def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(require_permission("Contracts", "Approve")), db: Session = Depends(get_db)):
+    # Serialize all addendum approvals for this contract so concurrent approvals
+    # cannot calculate against the same stale contract value / BOQ snapshot.
+    contract = db.scalar(select(Contract).where(Contract.contract_id == contract_id).with_for_update())
+    if not contract: raise HTTPException(404, "العقد غير موجود")
     a = db.scalar(select(ContractAddendum).where(ContractAddendum.addendum_id == addendum_id,
         ContractAddendum.contract_id == contract_id).with_for_update())
     if not a: raise HTTPException(404, "ملحق العقد غير موجود")
@@ -503,7 +539,6 @@ def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(re
             db.add(item); db.flush(); line.effective_item_id = item.item_id
             applied.append({"item_id":item.item_id,"item_no":item.item_no,"quantity":str(item.quantity)})
     a.value_change = sum((Decimal(str(x.amount_change)) for x in lines), D0)
-    contract = db.get(Contract, contract_id)
     approved_addenda_value = db.scalar(select(func.coalesce(func.sum(ContractAddendum.value_change), 0)).where(
         ContractAddendum.contract_id == contract_id, ContractAddendum.status == "Approved",
         ContractAddendum.addendum_id != addendum_id)) or 0
