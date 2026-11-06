@@ -231,6 +231,8 @@ def add_item(contract_id:int, body:ItemIn, user:User=Depends(require_permission(
     requested_no = next_contract_item_no(db, contract_id)
     values=body.model_dump()
     values["item_no"] = requested_no
+    values["original_quantity"] = body.quantity
+    values["original_unit_price"] = body.unit_price
     if body.catalog_item_id:
         catalog=db.get(ItemCatalog,body.catalog_item_id)
         if not catalog or not catalog.is_active: raise HTTPException(422,"البند المركزي غير موجود أو غير نشط")
