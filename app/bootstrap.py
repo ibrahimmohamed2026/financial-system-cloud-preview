@@ -165,13 +165,13 @@ def sync_permissions(db: Session) -> None:
             for permission_id in settlement_stage_ids:
                 grant(role_id, permission_id)
 
+    # Keep the legacy role record for compatibility, but it has no global grants.
     admin = db.scalar(select(Role).where(Role.role_name == "Admin"))
     if admin is None:
         admin = Role(role_name="Admin")
         db.add(admin)
         db.flush()
-    for pid in db.scalars(select(Permission.permission_id)):
-        grant(admin.role_id, pid)
+    db.execute(delete(RolePermission).where(RolePermission.role_id == admin.role_id))
     db.commit()
 
 
@@ -252,9 +252,13 @@ def create_admin(db: Session, username: str, password: str, full_name: str = "Sy
         user = User(username=username, password_hash=hash_password(password), full_name=full_name)
         db.add(user)
         db.flush()
+    it_profile = db.scalar(select(JobProfile).where(JobProfile.name_ar == "مسؤول النظام IT"))
+    if it_profile is None:
+        raise RuntimeError("وظيفة مسؤول النظام IT غير مهيأة؛ شغّل seed_job_profiles أولاً")
+    user.job_profile_id = it_profile.job_profile_id
     admin = db.scalar(select(Role).where(Role.role_name == "Admin"))
-    if db.get(UserRole, (user.user_id, admin.role_id)) is None:
-        db.add(UserRole(user_id=user.user_id, role_id=admin.role_id))
+    if admin is not None:
+        db.execute(delete(UserRole).where(UserRole.user_id == user.user_id, UserRole.role_id == admin.role_id))
     db.commit()
     return user
 
