@@ -503,6 +503,29 @@ def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(re
             db.add(item); db.flush(); line.effective_item_id = item.item_id
             applied.append({"item_id":item.item_id,"item_no":item.item_no,"quantity":str(item.quantity)})
     a.value_change = sum((Decimal(str(x.amount_change)) for x in lines), D0)
+    contract = db.get(Contract, contract_id)
+    approved_addenda_value = db.scalar(select(func.coalesce(func.sum(ContractAddendum.value_change), 0)).where(
+        ContractAddendum.contract_id == contract_id, ContractAddendum.status == "Approved",
+        ContractAddendum.addendum_id != addendum_id)) or 0
+    approved_change_value = db.scalar(select(func.coalesce(func.sum(ContractChangeOrder.value_change), 0)).where(
+        ContractChangeOrder.contract_id == contract_id, ContractChangeOrder.status == "Approved")) or 0
+    revised_contract_value = Decimal(str(contract.original_value)) + Decimal(str(approved_addenda_value)) + Decimal(str(approved_change_value)) + Decimal(str(a.value_change))
+    linked_financial_ids = select(TechnicalSettlementEstimate.financial_settlement_id).where(
+        TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
+    for side in ("Customer", "Subcontractor"):
+        financial_work = db.scalar(select(func.coalesce(func.sum(ContractSettlement.work_value), 0)).where(
+            ContractSettlement.contract_id == contract_id, ContractSettlement.settlement_side == side,
+            ContractSettlement.status.in_(("Approved", "Posted", "PendingFinalApproval")),
+            ContractSettlement.settlement_id.not_in(linked_financial_ids))) or 0
+        technical_work = db.scalar(select(func.coalesce(func.sum(TechnicalSettlementEstimate.work_value), 0)).where(
+            TechnicalSettlementEstimate.contract_id == contract_id, TechnicalSettlementEstimate.settlement_side == side,
+            TechnicalSettlementEstimate.status == "TechnicallyApproved")) or 0
+        legacy_work = db.scalar(select(func.coalesce(func.sum(ProgressBilling.work_value), 0)).where(
+            ProgressBilling.contract_id == contract_id,
+            func.lower(ProgressBilling.status).in_(("approved", "paid", "posted")))) or 0
+        certified_work = Decimal(str(financial_work)) + Decimal(str(technical_work)) + Decimal(str(legacy_work))
+        if revised_contract_value < certified_work:
+            raise HTTPException(409, f"لا يمكن اعتماد الملحق لأن قيمة العقد بعد التعديل ({revised_contract_value}) أقل من الأعمال المعتمدة سابقًا ({certified_work}) لنوع المستخلص {side}")
     a.status = "Approved"
     a.approved_by = user.user_id
     a.approved_at = datetime.utcnow()
