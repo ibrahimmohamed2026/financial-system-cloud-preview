@@ -271,6 +271,9 @@ def ensure_schema(engine: Engine) -> None:
     # Additive columns required by the complete addendum workflow. create_all() does not
     # alter existing tables, so upgrade each legacy table explicitly and idempotently.
     schema_additions = {
+        "Contracts": {
+            "AgreedStatementCount": "INTEGER NULL",
+        },
         "ContractItems": {
             "OriginalQuantity": "NUMERIC(18,4) NULL",
             "OriginalUnitPrice": "NUMERIC(18,4) NULL",
