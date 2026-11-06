@@ -6,7 +6,7 @@
 import argparse
 import getpass
 
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -85,7 +85,7 @@ def seed_screens(db: Session) -> None:
 
 
 def sync_permissions(db: Session) -> None:
-    """بيعمل صلاحيات (كل الإجراءات) لكل شاشة مسجّلة، ويدّي دور Admin كلها."""
+    """ينشئ صلاحيات الشاشات، دون منح دور Admin القديم تجاوزًا عامًا للصلاحيات."""
     codes = db.scalars(select(Screen.screen_code)).all()
     existing = {(p.screen_code, p.action_code) for p in db.scalars(select(Permission))}
     for code in codes:
@@ -206,6 +206,26 @@ def seed_job_profiles(db: Session) -> None:
                 pid = available.get((screen, action))
                 if pid is not None:
                     db.add(JobProfilePermission(job_profile_id=profile.job_profile_id, permission_id=pid))
+    # مسؤول النظام IT هو ملف الصلاحيات الإداري الوحيد، ويحتاج إدارة جميع شاشات النظام.
+    it_profile = db.scalar(select(JobProfile).where(JobProfile.name_ar == "مسؤول النظام IT"))
+    if it_profile is not None:
+        existing_ids = set(db.scalars(select(JobProfilePermission.permission_id).where(
+            JobProfilePermission.job_profile_id == it_profile.job_profile_id)))
+        all_ids = set(db.scalars(select(Permission.permission_id)))
+        for permission_id in all_ids - existing_ids:
+            db.add(JobProfilePermission(job_profile_id=it_profile.job_profile_id, permission_id=permission_id))
+
+        # ترحيل الحسابات التي كانت تعتمد على Admin القديم إلى الوظيفة المعتمدة.
+        legacy_admin = db.scalar(select(Role).where(Role.role_name == "Admin"))
+        if legacy_admin is not None:
+            legacy_users = db.scalars(select(User).join(
+                UserRole, UserRole.user_id == User.user_id).where(
+                UserRole.role_id == legacy_admin.role_id)).all()
+            for legacy_user in legacy_users:
+                if legacy_user.job_profile_id is None:
+                    legacy_user.job_profile_id = it_profile.job_profile_id
+                db.execute(delete(UserRole).where(
+                    UserRole.user_id == legacy_user.user_id, UserRole.role_id == legacy_admin.role_id))
     db.commit()
 
 
