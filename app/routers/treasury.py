@@ -130,7 +130,7 @@ def counterpart_accounts(screen_code: str, _: User = Depends(require_dynamic("Ad
     _bound(db, screen_code)
     parents = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
     rows = db.scalars(select(Account).where(
-        Account.is_active == True, Account.account_id.not_in(parents)
+        Account.is_active == True, Account.account_id != _bound(db, screen_code).gl_account_id, Account.account_id.not_in(parents)
     ).order_by(Account.account_code).limit(1000)).all()
     return [{"account_id": a.account_id, "label": f"{a.account_code} — {a.account_name_ar}"}
             for a in rows]
@@ -203,7 +203,7 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
                     "inflow": money(t.inflow), "outflow": money(t.outflow), "balance": money(run),
                     "description": t.description, "voucher_no": t.voucher_no, "status": t.status,
                     "recipient_name": t.recipient_name, "project_id": t.project_id,
-                    "exchange_rate": money(t.exchange_rate) if t.exchange_rate is not None else None,
+                    "exchange_rate": str(t.exchange_rate) if t.exchange_rate is not None else None,
                     "counterpart_account_id": t.counterpart_account_id,
                     "journal_entry_id": t.journal_entry_id,
                     "locked": t.journal_entry_id is not None})
