@@ -7,9 +7,18 @@ export async function render(main, { api }) {
     <div class="panel" style="padding:16px">
       <div class="tag no">${tr("إجراء حساس — لا يتم الحذف قبل المعاينة والتأكيد","Sensitive action — nothing is deleted before preview and confirmation")}</div>
       <p>${tr("اختر مستوى إعادة الضبط. ستظهر لك الجداول وعدد السجلات المتأثرة قبل أي تنفيذ.","Choose a reset level. A table-by-table count is shown before anything is executed.")}</p>
-      <label style="display:block;margin:12px 0"><input type="radio" name="resetmode" value="operational" checked> <b>${tr("تصفير البيانات التشغيلية","Operational data reset")}</b><br><small class="muted">${tr("يحذف القيود والحركات والمستندات التشغيلية، ويحتفظ بدليل الحسابات والأطراف والأصناف والخزائن وربطها المحاسبي والمستخدمين والإعدادات.","Deletes accounting entries, movements and operational documents while keeping the chart of accounts, parties, items, treasuries, users and configuration.")}</small></label>
-      <label style="display:block;margin:12px 0"><input type="radio" name="resetmode" value="full"> <b>${tr("إعادة ضبط كاملة","Full reset")}</b><br><small class="muted">${tr("يحذف البيانات التشغيلية والبيانات الأساسية التشغيلية مثل الأطراف والأصناف والخزائن، ويصفّر الأرصدة الافتتاحية للحسابات. يحتفظ بالشركة والمستخدمين والصلاحيات ودليل الحسابات وربط الخزائن بالحسابات وقوالب الشيكات والمشروعات والسنة المالية.","Deletes operational records and operational master data such as parties, items and treasuries, and zeros chart opening balances. Keeps company, users, permissions, chart of accounts, projects and fiscal years.")}</small></label>
-      <button class="btn primary" id="preview">${tr("معاينة البيانات التي ستُحذف","Preview affected data")}</button>
+      <div class="formgrid" style="margin-top:16px">
+        <div>
+          <h4>${tr("تصفير البيانات","Reset data")}</h4>
+          <p class="muted">${tr("يمسح القيود والحركات والمستندات التشغيلية فقط، مع الاحتفاظ بالأطراف والأصناف والمخازن والخزائن وكل الإعدادات الأساسية.","Deletes transactions and operational documents only; preserves parties, items, warehouses, treasuries and core configuration.")}</p>
+          <button class="btn primary reset-preview" data-mode="operational">${tr("معاينة تصفير البيانات","Preview data reset")}</button>
+        </div>
+        <div>
+          <h4>${tr("ضبط مصنع","Factory reset")}</h4>
+          <p class="muted">${tr("يمسح البيانات التشغيلية والبيانات الأساسية التشغيلية، ويصفّر الأرصدة الافتتاحية. يحتفظ بالشركة والسنة المالية والمشروعات وكل المستخدمين والصلاحيات والوظائف ودليل الحسابات والخزائن والبنوك وربطها المحاسبي وقوالب الشيكات.","Clears operational data and operational master records, and zeros opening balances. Preserves company, fiscal year, projects, all users, permissions, job profiles, chart of accounts, treasuries, banks, their GL links and cheque templates.")}</p>
+          <button class="btn danger reset-preview" data-mode="full">${tr("معاينة ضبط المصنع","Preview factory reset")}</button>
+        </div>
+      </div>
       <div id="previewbox" style="margin-top:16px"></div>
       <div id="confirmbox" hidden style="margin-top:16px;border-top:1px solid var(--line);padding-top:16px">
         <h4>${tr("التأكيد النهائي","Final confirmation")}</h4>
@@ -25,15 +34,8 @@ export async function render(main, { api }) {
   </section>`;
   const $ = s => main.querySelector(s);
   let previewMode = null;
-  const mode = () => $('input[name="resetmode"]:checked').value;
   const busy = v => main.querySelectorAll("button,input").forEach(x => x.disabled = v);
-  $('input[name="resetmode"]').forEach(r => r.addEventListener("change", () => {
-    previewMode = null; $("#previewbox").innerHTML = ""; $("#confirmbox").hidden = true; $("#reseterr").textContent = "";
-  }));
-  $("#preview").onclick = async () => {
-    busy(true); $("#reseterr").textContent = ""; $("#confirmbox").hidden = true;
-    try {
-      const m = mode(), d = await api("/admin/reset/preview?mode=" + encodeURIComponent(m));
+      const d = await api("/admin/reset/preview?mode=" + encodeURIComponent(m));
       previewMode = m;
       const labels = {
         JournalEntryDetails:"تفاصيل قيود اليومية", JournalEntries:"قيود اليومية",
@@ -71,7 +73,7 @@ export async function render(main, { api }) {
     finally { busy(false); }
   };
   $("#execute").onclick = async () => {
-    if (!previewMode || previewMode !== mode()) { $("#reseterr").textContent = tr("أعد المعاينة قبل التنفيذ.","Run the preview again before execution."); return; }
+    if (!previewMode) { $("#reseterr").textContent = tr("اختر تصفير البيانات أو ضبط المصنع وأعد المعاينة قبل التنفيذ.","Choose a reset action and preview it before execution."); return; }
     if ($("#resetphrase").value !== "RESET") { $("#reseterr").textContent = tr("اكتب RESET كما هو.","Type RESET exactly."); return; }
     if (!$("#resetpassword").value) { $("#reseterr").textContent = tr("أدخل كلمة مرور المدير.","Enter the administrator password."); return; }
     const promptText = tr("تأكيد أخير: سيتم أخذ نسخة احتياطية ثم حذف البيانات الموضحة في المعاينة. هل تريد الاستمرار؟","Final confirmation: a backup will be created, then the previewed data will be deleted. Continue?");
