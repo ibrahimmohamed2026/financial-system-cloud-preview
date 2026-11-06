@@ -178,7 +178,7 @@ def ensure_schema(engine: Engine) -> None:
     # to create their indexes. This is additive and leaves every existing row intact.
     existing_tables = set(inspect(engine).get_table_names())
     for table_name in ("Users", "Companies", "Counterparties", "ChartOfAccounts", "AccountClassifications", "ContractRequests", "Contracts", "ContractSettlements", "JournalEntries",
-                       "TechnicalSettlementEstimates", "TechnicalSettlementEstimateItems", "TreasuryTransactions", "PurchaseOrders", "SupplierInvoices", "Checks",
+                       "ContractItems", "TechnicalSettlementEstimates", "TechnicalSettlementEstimateItems", "TreasuryTransactions", "PurchaseOrders", "SupplierInvoices", "Checks",
                        "CheckPrintTemplates", "FinancialChecks"):
         if table_name in existing_tables:
             _add_model_columns(engine, table_name)
@@ -200,6 +200,13 @@ def ensure_schema(engine: Engine) -> None:
                 with engine.begin() as conn:
                     conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {sql_type}'))
     Base.metadata.create_all(engine)
+    # Capture the pre-addendum BOQ baseline exactly once; never overwrite it on later revisions.
+    if "ContractItems" in inspect(engine).get_table_names():
+        with engine.begin() as conn:
+            item_columns = {col["name"] for col in inspect(conn).get_columns("ContractItems")}
+            if {"OriginalQuantity", "OriginalUnitPrice", "Quantity", "UnitPrice"}.issubset(item_columns):
+                conn.execute(text('UPDATE "ContractItems" SET "OriginalQuantity"="Quantity" WHERE "OriginalQuantity" IS NULL'))
+                conn.execute(text('UPDATE "ContractItems" SET "OriginalUnitPrice"="UnitPrice" WHERE "OriginalUnitPrice" IS NULL'))
     # Safely migrate the old Lux/Dumas tags only when one project has that exact
     # Arabic or English name. Ambiguous or unmatched records remain unassigned.
     table_names = set(inspect(engine).get_table_names())
