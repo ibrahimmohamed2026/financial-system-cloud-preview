@@ -66,6 +66,7 @@ class ContractIn(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     original_value: Decimal = Field(default=D0, ge=0)
+    agreed_statement_count: int | None = Field(default=None, ge=0, le=500)
     status: str = Field(default="Draft", max_length=30)
     notes: Optional[str] = None
     items: list[ContractCreateItem] = Field(default_factory=list, max_length=500)
@@ -121,6 +122,7 @@ class BillingIn(BaseModel):
 def _contract(c):
     return {"contract_id":c.contract_id,"request_id":getattr(c,"request_id",None),"contract_no":c.contract_no,"title":c.title,"title_en":c.title_en,"client_name":c.client_name,"client_name_en":c.client_name_en,
             "project_id":c.project_id,"start_date":c.start_date,"end_date":c.end_date,"original_value":str(c.original_value),
+            "agreed_statement_count":getattr(c,"agreed_statement_count",None),
             "status":c.status,"notes":c.notes,"created_at":c.created_at}
 def _addendum(a):
     return {"addendum_id":a.addendum_id,"contract_id":a.contract_id,"addendum_no":a.addendum_no,
