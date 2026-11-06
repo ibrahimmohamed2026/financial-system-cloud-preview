@@ -358,7 +358,7 @@ class UserDeletionRequest(Base):
     request_id: Mapped[int] = C("RequestId", Integer, primary_key=True)
     user_id: Mapped[int] = C("UserId", ForeignKey("Users.UserId"), index=True)
     requested_by: Mapped[int] = C("RequestedBy", ForeignKey("Users.UserId"))
-    approved_by: Mapped[Optional[int]] = C("ApprovedBy", ForeignKey("Users.UserId"), nullable=True)
+    decided_by: Mapped[Optional[int]] = C("DecidedBy", ForeignKey("Users.UserId"), nullable=True)
     status: Mapped[str] = C("Status", Unicode(20), default="Pending", index=True)
     reason: Mapped[str] = C("Reason", Unicode(500))
     decision_note: Mapped[Optional[str]] = C("DecisionNote", Unicode(500), nullable=True)
