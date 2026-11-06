@@ -81,7 +81,7 @@ class ContractIn(BaseModel):
     end_date: Optional[date] = None
     original_value: Decimal = Field(default=D0, ge=0)
     agreed_statement_count: int | None = Field(default=None, ge=0, le=500)
-    statement_distribution_method: Literal["Monthly", "Biweekly", "Milestones", "Manual"] = "Manual"
+    statement_distribution_method: Literal["Monthly", "Biweekly", "Milestones", "Manual"] | None = None
     schedule_items: list[ContractScheduleItemIn] = Field(default_factory=list, max_length=500)
     status: str = Field(default="Draft", max_length=30)
     notes: Optional[str] = None
@@ -157,7 +157,8 @@ def _build_contract_schedule(body: ContractIn):
     count = body.agreed_statement_count or 0
     if count < 1:
         raise HTTPException(422, "حدد عدد المستخلصات أولاً")
-    if body.statement_distribution_method == "Manual":
+    method = body.statement_distribution_method or "Manual"
+    if method == "Manual":
         if len(body.schedule_items) != count:
             raise HTTPException(422, f"أدخل {count} صفًا في جدول المواعيد اليدوي")
         rows = body.schedule_items
@@ -170,12 +171,12 @@ def _build_contract_schedule(body: ContractIn):
         total_days = (body.end_date - body.start_date).days + 1
         cursor = body.start_date
         for n in range(1, count + 1):
-            if body.statement_distribution_method == "Monthly":
+            if method == "Monthly":
                 if cursor > body.end_date:
                     raise HTTPException(422, "مدة العقد لا تكفي لعدد المستخلصات الشهرية المحدد")
                 next_month = date(cursor.year + (1 if cursor.month == 12 else 0), 1 if cursor.month == 12 else cursor.month + 1, 1)
                 period_end = min(next_month - timedelta(days=1), body.end_date)
-            elif body.statement_distribution_method == "Biweekly":
+            elif method == "Biweekly":
                 if cursor > body.end_date:
                     raise HTTPException(422, "مدة العقد لا تكفي لعدد المستخلصات كل أسبوعين المحدد")
                 period_end = min(cursor + timedelta(days=13), body.end_date)
@@ -184,11 +185,13 @@ def _build_contract_schedule(body: ContractIn):
                 end_offset = (n * total_days) // count - 1
                 cursor = body.start_date + timedelta(days=start_offset)
                 period_end = body.start_date + timedelta(days=end_offset)
-            rows.append(ContractScheduleItemIn(label=("مرحلة التنفيذ " if body.statement_distribution_method == "Milestones" else "المستخلص ") + str(n),
+            rows.append(ContractScheduleItemIn(label=("مرحلة التنفيذ " if method == "Milestones" else "المستخلص ") + str(n),
                 period_start=cursor, period_end=period_end, planned_submission_date=period_end + timedelta(days=5),
                 due_date=period_end + timedelta(days=35),
                 expected_amount=(body.original_value / count).quantize(Decimal("0.01")) if body.original_value else None))
             cursor = period_end + timedelta(days=1)
+    if method in ("Monthly", "Biweekly") and rows and body.end_date and rows[-1].period_end < body.end_date:
+        raise HTTPException(422, "عدد المستخلصات لا يغطي مدة العقد بالكامل؛ زوّد العدد أو اختر طريقة أخرى")
     for n, row in enumerate(rows, start=1):
         if body.start_date and row.period_start < body.start_date or body.end_date and row.period_end > body.end_date:
             raise HTTPException(422, f"فترة المستخلص رقم {n} خارج مدة العقد")
@@ -239,6 +242,7 @@ def create_contract(body: ContractIn, user: User = Depends(require_permission("C
         prepared_rules.append(data)
     schedule_rows = _build_contract_schedule(body)
     values = body.model_dump(exclude={"items", "deduction_rules", "schedule_items"})
+    values["statement_distribution_method"] = body.statement_distribution_method or "Manual"
     # New contracts await accounting review; the reviewer activates them after checking deductions.
     values["status"] = "PendingEngineering"
     values["contract_no"] = f"CT-PENDING-{uuid4().hex}"
@@ -288,6 +292,8 @@ def update_contract(contract_id: int, body: ContractIn, user: User = Depends(req
     old = _contract(c)
     values = body.model_dump(exclude={"items", "deduction_rules"})
     values.pop("contract_no", None)
+    if values.get("statement_distribution_method") is None:
+        values.pop("statement_distribution_method", None)
     requested_status = values.pop("status", None)
     if "status" in body.model_fields_set and requested_status != c.status:
         raise HTTPException(409, "تغيير حالة العقد يتم فقط من خلال إجراءات دورة الاعتماد")
