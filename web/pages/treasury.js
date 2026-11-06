@@ -1,7 +1,7 @@
 import { esc, money, toast, safe, formDialog, today, errText } from "../ui.js";
 import { translate as tr } from "../i18n.js";
 const CODE = { "cib-egp": "BankCibEgp", "cash-usd": "CashUsd", "cash-egp": "CashEgp", "cairo-egp": "BankCairoEgp", "hdb-usd": "BankHdbUsd", "hdb-egp": "BankHdbEgp", "cib-usd": "BankCibUsd" };
-const USD_TX_LABELS = { funding: "تمويل", customer_collection: "تحصيل عميل", customer_advance: "دفعة مقدمة من عميل", direct_income: "إيراد مباشر", supplier_payment: "سداد مورد/مقاول", supplier_advance: "دفعة مقدمة لمورد", expense_payment: "مصروفات", asset_purchase: "شراء أصل/مخزون", cash_transfer: "تحويل نقدي" };
+const USD_TX_LABELS = { funding: tr("تمويل","Funding"), customer_collection: tr("تحصيل عميل","Customer collection"), customer_advance: tr("دفعة مقدمة من عميل","Customer advance"), direct_income: tr("إيراد مباشر","Direct income"), supplier_payment: tr("سداد مورد/مقاول","Supplier/contractor payment"), supplier_advance: tr("دفعة مقدمة لمورد","Supplier advance"), expense_payment: tr("مصروفات","Expenses"), asset_purchase: tr("شراء أصل/مخزون","Asset/inventory purchase"), cash_transfer: tr("تحويل نقدي","Cash transfer") };
 
 export async function render(main, { api, auth, route }) {
   const SC = CODE[route.split("/").pop()], can = a => auth.can(SC, a), base = "/treasury/" + SC;
@@ -35,15 +35,15 @@ export async function render(main, { api, auth, route }) {
     fields: [{ name: "transaction_date", label: tr("التاريخ","Date"), type: "date", required: true },
       ...(acc.currency_code === "USD" ? [
         { name: "transaction_type", label: tr("نوع الحركة","Transaction type"), type: "select", options: [
-          ["funding", "تمويل من المساهمين أو الأطراف ذات العلاقة"],
-          ["customer_collection", "تحصيل مستحقات من عميل"],
-          ["customer_advance", "تحصيل دفعة مقدمة من عميل"],
-          ["direct_income", "تحصيل إيراد مباشر"],
-          ["supplier_payment", "سداد مورد أو مقاول"],
-          ["supplier_advance", "دفعة مقدمة لمورد أو مقاول"],
-          ["expense_payment", "سداد مصروفات"],
-          ["asset_purchase", "شراء أصل أو مخزون أو أعمال تحت التنفيذ"],
-          ["cash_transfer", "تحويل بين حسابات نقدية"]
+          ["funding", tr("تمويل من المساهمين أو الأطراف ذات العلاقة","Shareholder/related-party funding")],
+          ["customer_collection", tr("تحصيل مستحقات من عميل","Customer receivable collection")],
+          ["customer_advance", tr("تحصيل دفعة مقدمة من عميل","Customer advance receipt")],
+          ["direct_income", tr("تحصيل إيراد مباشر","Direct income receipt")],
+          ["supplier_payment", tr("سداد مورد أو مقاول","Supplier/contractor payment")],
+          ["supplier_advance", tr("دفعة مقدمة لمورد أو مقاول","Supplier/contractor advance")],
+          ["expense_payment", tr("سداد مصروفات","Expense payment")],
+          ["asset_purchase", tr("شراء أصل أو مخزون أو أعمال تحت التنفيذ","Asset, inventory or work-in-progress purchase")],
+          ["cash_transfer", tr("تحويل بين حسابات نقدية","Transfer between cash/bank accounts")]
         ], required: true, full: true },
         { name: "exchange_rate", label: tr("سعر الدولار مقابل الجنيه","USD exchange rate to EGP"), type: "number", step: "0.000001", min: "0.000001", required: true },
         { name: "counterpart_account_id", label: tr("حساب الطرف المقابل","Counterpart account"), type: "select", searchable: true, options: initialCounterparts.map(a => [String(a.account_id), a.label]), required: true, full: true }
