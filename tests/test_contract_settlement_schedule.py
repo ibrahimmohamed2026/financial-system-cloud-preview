@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -44,7 +44,7 @@ def test_milestone_schedule_covers_the_entire_contract_period():
     rows = _build_contract_schedule(make_contract("Milestones", 3))
     assert rows[0].period_start == date(2026, 1, 1)
     assert rows[-1].period_end == date(2026, 3, 31)
-    assert rows[0].period_end + (rows[1].period_start - rows[0].period_end) == __import__("datetime").timedelta(days=1)
+    assert rows[1].period_start == rows[0].period_end + timedelta(days=1)
 
 
 def test_manual_schedule_requires_exact_count_and_keeps_user_dates():
