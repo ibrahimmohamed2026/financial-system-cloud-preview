@@ -313,10 +313,7 @@ class UserDeletionDecision(BaseModel):
 
 @router.get("/user-deletion-requests")
 def list_user_deletion_requests(actor: User = Depends(admin_user), db: Session = Depends(get_db)):
-    rows = db.execute(select(UserDeletionRequest, User, User).join(
-        User, User.user_id == UserDeletionRequest.user_id).join(
-        User, User.user_id == UserDeletionRequest.requested_by)).all()
-    # Use explicit aliases to avoid ambiguous self-joins on Users.
+    # Use explicit aliases because both target and requester reference Users.
     from sqlalchemy.orm import aliased
     target = aliased(User)
     requester = aliased(User)
