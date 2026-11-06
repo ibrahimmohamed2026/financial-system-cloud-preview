@@ -40,8 +40,17 @@ def test_biweekly_schedule_uses_fourteen_day_periods():
     ]
 
 
-def test_milestone_schedule_covers_the_entire_contract_period():
-    rows = _build_contract_schedule(make_contract("Milestones", 3))
+def test_milestone_schedule_uses_named_user_defined_execution_phases():
+    phases = [
+        {"label": "الأساسات", "period_start": date(2026, 1, 1), "period_end": date(2026, 1, 30),
+         "planned_submission_date": date(2026, 2, 4), "due_date": date(2026, 3, 6)},
+        {"label": "الهيكل", "period_start": date(2026, 1, 31), "period_end": date(2026, 2, 28),
+         "planned_submission_date": date(2026, 3, 5), "due_date": date(2026, 4, 4)},
+        {"label": "التشطيبات", "period_start": date(2026, 3, 1), "period_end": date(2026, 3, 31),
+         "planned_submission_date": date(2026, 4, 5), "due_date": date(2026, 5, 5)},
+    ]
+    rows = _build_contract_schedule(make_contract("Milestones", 3, schedule_items=phases))
+    assert [r.label for r in rows] == ["الأساسات", "الهيكل", "التشطيبات"]
     assert rows[0].period_start == date(2026, 1, 1)
     assert rows[-1].period_end == date(2026, 3, 31)
     assert rows[1].period_start == rows[0].period_end + timedelta(days=1)
