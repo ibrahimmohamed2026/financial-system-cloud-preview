@@ -158,15 +158,28 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
     if config is None or config["direction"] not in (direction, "either"):
         raise HTTPException(400, "نوع الحركة لا يتوافق مع اتجاه الوارد أو المنصرف")
     parents = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
-    rows = db.execute(
-        select(Account, AccountClassification)
-        .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
-        .where(Account.is_active == True, Account.account_id != treasury.gl_account_id,
-               Account.account_id.not_in(parents),
-               Account.account_code.not_in(("32102001", "47101001")),
-               AccountClassification.name_ar.in_(config["classifications"]))
-        .order_by(Account.account_code).limit(500)
-    ).all()
+    if transaction_type == "cash_transfer":
+        # Transfers must target another configured USD treasury/bank account,
+        # not an arbitrary ledger account that merely shares the cash classification.
+        rows = db.execute(
+            select(Account, AccountClassification)
+            .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
+            .join(TreasuryAccount, TreasuryAccount.gl_account_id == Account.account_id)
+            .where(TreasuryAccount.is_active == True, TreasuryAccount.currency_code == "USD",
+                   TreasuryAccount.treasury_account_id != treasury.treasury_account_id,
+                   Account.is_active == True, Account.account_id.not_in(parents))
+            .order_by(Account.account_code).limit(500)
+        ).all()
+    else:
+        rows = db.execute(
+            select(Account, AccountClassification)
+            .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
+            .where(Account.is_active == True, Account.account_id != treasury.gl_account_id,
+                   Account.account_id.not_in(parents),
+                   Account.account_code.not_in(("32102001", "47101001")),
+                   AccountClassification.name_ar.in_(config["classifications"]))
+            .order_by(Account.account_code).limit(500)
+        ).all()
     posting_side = "credit" if direction == "inflow" else "debit"
     side_ar = "دائن" if direction == "inflow" else "مدين"
     return [{"account_id": a.account_id, "label": f"{a.account_code} — {a.account_name_ar} ({side_ar})",
@@ -274,7 +287,16 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     if config is None or config["direction"] not in (direction, "either"):
         raise HTTPException(422, "اختَر نوع حركة صحيحًا ومتوافقًا مع الوارد أو المنصرف")
     counterpart_class = db.get(AccountClassification, counterpart.classification_id)
-    if counterpart_class is None or counterpart_class.name_ar not in config["classifications"]:
+    if body.transaction_type == "cash_transfer":
+        target_treasury = db.scalar(select(TreasuryAccount).where(
+            TreasuryAccount.gl_account_id == counterpart.account_id,
+            TreasuryAccount.currency_code == "USD",
+            TreasuryAccount.is_active == True,
+            TreasuryAccount.treasury_account_id != a.treasury_account_id,
+        ))
+        if target_treasury is None:
+            raise HTTPException(400, "التحويل لازم يكون إلى خزينة أو بنك آخر مُسجّل بالدولار")
+    elif counterpart_class is None or counterpart_class.name_ar not in config["classifications"]:
         raise HTTPException(400, "الحساب المختار لا يتبع التصنيف المسموح لنوع الحركة")
     counterpart_posting_side = "credit" if direction == "inflow" else "debit"
     if counterpart_posting_side not in ("credit", "debit"):
