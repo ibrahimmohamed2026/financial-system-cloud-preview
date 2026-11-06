@@ -7,6 +7,8 @@ IMAGE_NAME="adex-test:latest"
 ROLLBACK_IMAGE="adex-rollback:previous"
 LOCK_FILE="/var/lock/adex-deploy.lock"
 HEALTH_URL="http://127.0.0.1:10000/health"
+BACKUP_DIR="$APP_DIR/backups"
+BACKUP_FILE="$BACKUP_DIR/neon-predeploy-$(date -u +%Y%m%dT%H%M%SZ).dump"
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
@@ -23,6 +25,19 @@ if ! docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
   echo "Current container '$CONTAINER_NAME' was not found; refusing first-time deployment."
   exit 1
 fi
+
+mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
+echo "Creating a pre-deployment Neon PostgreSQL backup..."
+docker run --rm \
+  --env-file "$APP_DIR/.env" \
+  -e BACKUP_FILE="/backups/$(basename "$BACKUP_FILE")" \
+  -v "$BACKUP_DIR:/backups" \
+  postgres:17-alpine \
+  sh -ec 'test -n "$DATABASE_URL"; pg_dump "$DATABASE_URL" --format=custom --no-owner --no-acl -f "$BACKUP_FILE"; pg_restore --list "$BACKUP_FILE" >/dev/null'
+chmod 600 "$BACKUP_FILE"
+test -s "$BACKUP_FILE"
+echo "Database backup created: $BACKUP_FILE"
 
 OLD_IMAGE_ID="$(docker inspect --format '{{.Image}}' "$CONTAINER_NAME")"
 docker image tag "$OLD_IMAGE_ID" "$ROLLBACK_IMAGE"
@@ -84,4 +99,5 @@ if [[ "$healthy" != "1" ]]; then
 fi
 
 echo "Deployment successful."
+find "$BACKUP_DIR" -type f -name 'neon-predeploy-*.dump' -mtime +7 -delete
 docker image prune -f >/dev/null
