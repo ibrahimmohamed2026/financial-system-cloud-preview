@@ -572,6 +572,53 @@ def approve_settlement(settlement_id:int,user:User=Depends(require_permission("C
     db.commit();db.refresh(x)
     return settlement_out(x, db)
 
+class ManagerSettlementDecision(BaseModel):
+    decision: Literal["approve", "return", "reject"]
+    notes: str | None = Field(default=None, max_length=2000)
+
+@router.post("/settlements/{settlement_id}/manager-decision")
+def manager_settlement_decision(settlement_id: int, body: ManagerSettlementDecision,
+        user: User = Depends(require_permission("ContractSettlements", "ManagerApprove")),
+        db: Session = Depends(get_db)):
+    """Manager gate: approve, return to accounting, or permanently reject with an audited reason."""
+    x = db.scalar(select(ContractSettlement).where(
+        ContractSettlement.settlement_id == settlement_id).with_for_update())
+    if not x:
+        raise HTTPException(404, "المستخلص غير موجود")
+    if x.status != "PendingFinalApproval" or not x.financial_approved_by:
+        raise HTTPException(409, "المستخلص ليس في انتظار اعتماد المدير بعد المراجعة المالية")
+    if x.financial_approved_by == user.user_id:
+        raise HTTPException(403, "يجب أن يكون قرار المدير من مستخدم مختلف عن المراجع المالي")
+    if body.decision in ("return", "reject") and not (body.notes or "").strip():
+        raise HTTPException(422, "يجب كتابة سبب الإرجاع أو الرفض")
+    old = {"status": x.status, "financial_approved_by": x.financial_approved_by,
+           "manager_approved_by": x.manager_approved_by, "manager_approved_at": x.manager_approved_at}
+    if body.decision == "approve":
+        x.manager_approved_by = user.user_id
+        x.manager_approved_at = datetime.utcnow()
+        x.status = "Approved"
+        action = "ManagerApprove"
+    elif body.decision == "return":
+        # Re-open only the accounting review stage; no journal can exist at this point.
+        x.status = "PendingApproval"
+        x.financial_approved_by = None
+        x.financial_approved_at = None
+        x.manager_approved_by = None
+        x.manager_approved_at = None
+        x.notes = ((x.notes or "").rstrip() + f"\\n[إعادة للحسابات بواسطة المستخدم {user.user_id}]: {(body.notes or '').strip()}").strip()
+        action = "ManagerReturn"
+    else:
+        # Rejected is terminal through the normal workflow; reopening requires an audited admin action.
+        x.status = "Rejected"
+        x.notes = ((x.notes or "").rstrip() + f"\\n[رفض نهائي بواسطة المستخدم {user.user_id}]: {(body.notes or '').strip()}").strip()
+        action = "ManagerReject"
+    write_audit(db, user.user_id, action, "ContractSettlements", x.settlement_id,
+                old=old, new={"status": x.status, "decision": body.decision,
+                              "notes": (body.notes or "").strip() or None})
+    db.commit()
+    db.refresh(x)
+    return settlement_out(x, db)
+
 @router.post("/settlements/{settlement_id}/manager-approve")
 def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permission("ContractSettlements","ManagerApprove")),db:Session=Depends(get_db)):
     """Stage 2: manager approval. Only this stage unlocks accounting posting."""
