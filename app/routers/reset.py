@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from .. import backup_service
 from ..database import get_db
 from ..deps import get_current_user, write_audit
-from ..models import Base, User, Role, UserRole, Account, JournalEntry, ContractSettlement
+from ..models import Base, User, JobProfile, Account, JournalEntry, ContractSettlement
 from ..security import verify_password
 
 router = APIRouter(prefix="/admin/reset", tags=["System Reset"])
@@ -39,10 +39,17 @@ PROTECTED_TABLES = {
 }
 
 def _admin(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
-    role = db.scalar(select(UserRole.user_id).join(Role, Role.role_id == UserRole.role_id)
-        .where(UserRole.user_id == user.user_id, Role.role_name == "Admin"))
-    if not role:
-        raise HTTPException(403, "إعادة ضبط النظام متاحة لمدير النظام فقط")
+    allowed = db.scalar(select(User.user_id).join(
+        JobProfile, JobProfile.job_profile_id == User.job_profile_id
+    ).where(
+        User.user_id == user.user_id,
+        User.is_active.is_(True),
+        User.is_deleted.is_(False),
+        JobProfile.name_ar == "مسؤول النظام IT",
+        JobProfile.is_active.is_(True),
+    ))
+    if not allowed:
+        raise HTTPException(403, "إعادة ضبط البيانات متاحة لوظيفة مسؤول النظام IT فقط")
     return user
 
 def _tables(mode: str):
