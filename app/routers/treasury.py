@@ -221,19 +221,73 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     if body.exchange_rate is None or body.counterpart_account_id is None:
         raise HTTPException(422, "حركة الدولار تتطلب سعر الصرف وحساب الطرف المقابل")
     if body.counterpart_account_id == a.gl_account_id:
-        raise HTTPException(422, "حساب الطرف المقابل لازم يختلف عن حساب خزينة الدولار")
+        raise HTTPException(422, "حساب الطرف المقابل لازم يختلف عن حساب الخزينة")
     counterpart = db.get(Account, body.counterpart_account_id)
     if counterpart is None or not counterpart.is_active:
         raise HTTPException(400, "حساب الطرف المقابل غير موجود أو غير نشط")
     parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
     if counterpart.account_id in parents:
         raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
+
+    # Prevent new movements while legacy movements or draft journals remain unprocessed.
+    unlinked = db.scalar(select(func.count()).select_from(TreasuryTransaction).where(
+        TreasuryTransaction.treasury_account_id == a.treasury_account_id,
+        TreasuryTransaction.journal_entry_id.is_(None),
+        TreasuryTransaction.transaction_id != t.transaction_id,
+    )) or 0
+    if unlinked:
+        raise HTTPException(409, "يوجد حركات دولار قديمة غير مرتبطة بقيود؛ راجعها واربطها أولًا")
+    pending = db.scalar(select(func.count()).select_from(TreasuryTransaction).join(
+        JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id
+    ).where(TreasuryTransaction.treasury_account_id == a.treasury_account_id,
+            JournalEntry.status == "Draft")) or 0
+    if pending:
+        raise HTTPException(409, "رحّل أو ألغِ مسودة القيد السابقة قبل تسجيل حركة دولار جديدة")
+
     from .journal import _fy_for, _next_no
     fy = _fy_for(db, body.transaction_date)
     amount_usd = body.inflow if body.inflow > 0 else body.outflow
-    amount_egp = (amount_usd * body.exchange_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    if amount_egp <= 0:
+    spot_egp = (amount_usd * body.exchange_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if spot_egp <= 0:
         raise HTTPException(422, "القيمة المقابلة بالجنيه لازم تكون أكبر من صفر")
+
+    cash_egp = spot_egp
+    cash_rate = body.exchange_rate
+    fx_difference = Decimal("0")
+    fx_account = None
+    cash_is_debit = body.inflow > 0
+
+    if not cash_is_debit:
+        posted_rows = db.execute(
+            select(JournalEntryDetail.fcy_amount, JournalEntryDetail.debit_amount,
+                   JournalEntryDetail.credit_amount)
+            .join(JournalEntry, JournalEntry.journal_entry_id == JournalEntryDetail.journal_entry_id)
+            .where(JournalEntryDetail.account_id == a.gl_account_id,
+                   JournalEntry.status == "Posted",
+                   JournalEntryDetail.fcy_amount.is_not(None))
+        ).all()
+        usd_carrying = sum(
+            (r.fcy_amount if r.debit_amount > 0 else -r.fcy_amount for r in posted_rows),
+            Decimal("0"),
+        )
+        egp_carrying = sum(
+            (r.debit_amount - r.credit_amount for r in posted_rows),
+            Decimal("0"),
+        )
+        if usd_carrying < amount_usd or usd_carrying <= 0 or egp_carrying <= 0:
+            raise HTTPException(409, "الرصيد الدولاري المرحّل غير كافٍ أو لا توجد تكلفة دفترية موثقة؛ راجع الرصيد الافتتاحي أولًا")
+        carrying_rate = egp_carrying / usd_carrying
+        cash_egp = (amount_usd * carrying_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        cash_rate = (cash_egp / amount_usd).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+        fx_difference = spot_egp - cash_egp
+        if fx_difference > 0:
+            fx_account = db.scalar(select(Account).where(Account.account_code == "32102001"))
+        elif fx_difference < 0:
+            fx_account = db.scalar(select(Account).where(Account.account_code == "47101001"))
+        if fx_difference != 0:
+            if fx_account is None or not fx_account.is_active or fx_account.account_id in parents:
+                raise HTTPException(409, "حساب فروق العملة المعتمد غير موجود أو غير نشط في شجرة الحسابات")
+
     entry = JournalEntry(
         entry_no=_next_no(db, fy), entry_date=body.transaction_date,
         company_id=fy.company_id, fiscal_year_id=fy.fiscal_year_id,
@@ -242,29 +296,42 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     )
     db.add(entry)
     db.flush()
-    cash_is_debit = body.inflow > 0
     db.add_all([
         JournalEntryDetail(
             journal_entry_id=entry.journal_entry_id, line_no=1,
             account_id=a.gl_account_id, project_id=body.project_id,
-            debit_amount=amount_egp if cash_is_debit else Decimal("0"),
-            credit_amount=Decimal("0") if cash_is_debit else amount_egp,
-            fcy_amount=amount_usd, exchange_rate=body.exchange_rate,
+            debit_amount=cash_egp if cash_is_debit else Decimal("0"),
+            credit_amount=Decimal("0") if cash_is_debit else cash_egp,
+            fcy_amount=amount_usd, exchange_rate=cash_rate,
             description=f"{a.name_ar} — {amount_usd} USD",
         ),
         JournalEntryDetail(
             journal_entry_id=entry.journal_entry_id, line_no=2,
             account_id=counterpart.account_id, project_id=body.project_id,
-            debit_amount=Decimal("0") if cash_is_debit else amount_egp,
-            credit_amount=amount_egp if cash_is_debit else Decimal("0"),
+            debit_amount=Decimal("0") if cash_is_debit else spot_egp,
+            credit_amount=spot_egp if cash_is_debit else Decimal("0"),
+            fcy_amount=amount_usd, exchange_rate=body.exchange_rate,
             description=body.description or "الطرف المقابل لحركة الخزينة",
         ),
     ])
+    if fx_difference > 0:
+        db.add(JournalEntryDetail(
+            journal_entry_id=entry.journal_entry_id, line_no=3,
+            account_id=fx_account.account_id, project_id=body.project_id,
+            debit_amount=Decimal("0"), credit_amount=fx_difference,
+            description="أرباح فروق عملة محققة",
+        ))
+    elif fx_difference < 0:
+        db.add(JournalEntryDetail(
+            journal_entry_id=entry.journal_entry_id, line_no=3,
+            account_id=fx_account.account_id, project_id=body.project_id,
+            debit_amount=abs(fx_difference), credit_amount=Decimal("0"),
+            description="خسائر فروق عملة محققة",
+        ))
     t.journal_entry_id = entry.journal_entry_id
     write_audit(db, user.user_id, "Create", "JournalEntries", entry.journal_entry_id, None,
                 {"entry_no": entry.entry_no, "source": "TreasuryTransaction", "status": "Draft"})
     return entry.entry_no
-
 
 @router.post("/{screen_code}/transactions", status_code=201)
 def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
