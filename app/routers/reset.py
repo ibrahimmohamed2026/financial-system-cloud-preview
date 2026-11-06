@@ -1,4 +1,6 @@
 """Safe, preview-first system data reset. Never deletes protected system configuration."""
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select, update
@@ -11,6 +13,7 @@ from ..models import Base, User, JobProfile, Account, JournalEntry, ContractSett
 from ..security import verify_password
 
 router = APIRouter(prefix="/admin/reset", tags=["System Reset"])
+logger = logging.getLogger(__name__)
 
 # Operational documents and movements. Reverse metadata order is used for FK-safe deletion.
 OPERATIONAL_TABLES = {
@@ -135,6 +138,10 @@ def execute_reset(body: ResetRequest, user: User = Depends(_admin), db: Session 
         db.commit()
     except Exception as exc:
         db.rollback()
+        logger.exception(
+            "System reset failed; transaction rolled back. mode=%s user_id=%s backup=%s",
+            mode, user.user_id, backup_path.name,
+        )
         raise HTTPException(500, f"فشل التصفير وتم التراجع عن التغييرات. النسخة الاحتياطية: {backup_path.name}") from exc
     return {"ok": True, "mode": mode, "deleted": deleted,
             "opening_balances_zeroed": zeroed_accounts, "backup": backup_path.name,
