@@ -65,7 +65,7 @@ def resolve_rule_account(rule_code, name_ar, gl_account_id, cfg):
 
 def item_out(x):
     # Keep old contract lines readable; new lines expose the linked central item/account.
-    return {"item_id":x.item_id,"contract_id":x.contract_id,"item_no":x.item_no,"description":x.description,"unit":x.unit,"quantity":str(x.quantity),"unit_price":str(x.unit_price),"total":str(money(x.quantity*x.unit_price)),"catalog_item_id":getattr(x,"catalog_item_id",None),"account_id":getattr(x,"account_id",None),"project_id":getattr(x,"project_id",None)}
+    return {"item_id":x.item_id,"contract_id":x.contract_id,"item_no":x.item_no,"description":x.description,"unit":x.unit,"quantity":str(x.quantity),"unit_price":str(x.unit_price),"original_quantity":str(x.original_quantity) if getattr(x,"original_quantity",None) is not None else str(x.quantity),"original_unit_price":str(x.original_unit_price) if getattr(x,"original_unit_price",None) is not None else str(x.unit_price),"total":str(money(x.quantity*x.unit_price)),"catalog_item_id":getattr(x,"catalog_item_id",None),"account_id":getattr(x,"account_id",None),"project_id":getattr(x,"project_id",None)}
 def rule_out(x): return {"rule_id":x.rule_id,"contract_id":x.contract_id,"settlement_side":x.settlement_side,"code":x.code,"name_ar":x.name_ar,"calculation_type":x.calculation_type,"rate":str(x.rate),"base_type":x.base_type,"posting_side":x.posting_side,"cap_amount":str(x.cap_amount) if x.cap_amount is not None else None,"gl_account_id":x.gl_account_id,"is_active":x.is_active,"sort_order":x.sort_order}
 STANDARD_SETTLEMENT_DEDUCTIONS = [
     ("ADVANCE_PAYMENT", "دفعة مقدمة"), ("RETENTION", "تأمين محجوز"),
