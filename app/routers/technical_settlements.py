@@ -36,19 +36,39 @@ class EstimateIn(BaseModel):
     items: list[EstimateLine] = Field(min_length=1)
     notes: str | None = None
 
+class TechnicalReviewLine(BaseModel):
+    estimate_item_id: int = Field(gt=0)
+    approved_quantity: Decimal = Field(ge=0)
+    review_note: str | None = Field(default=None, max_length=2000)
+
+class TechnicalReviewIn(BaseModel):
+    items: list[TechnicalReviewLine] = Field(min_length=1)
+    notes: str | None = Field(default=None, max_length=2000)
+
+class TechnicalCorrectionLine(BaseModel):
+    estimate_item_id: int = Field(gt=0)
+    current_quantity: Decimal = Field(ge=0)
+
+class TechnicalCorrectionIn(BaseModel):
+    items: list[TechnicalCorrectionLine] = Field(min_length=1)
+    notes: str = Field(min_length=1, max_length=2000)
+
+class TechnicalReturnIn(BaseModel):
+    notes: str = Field(min_length=1, max_length=2000)
+
 def estimate_out(x, db):
     c = db.get(Contract, x.contract_id)
     lines = db.scalars(select(TechnicalSettlementEstimateItem).where(TechnicalSettlementEstimateItem.estimate_id == x.estimate_id)).all()
     return {"estimate_id":x.estimate_id,"contract_id":x.contract_id,"contract_no":c.contract_no if c else "",
         "contract_title":c.title if c else "", "contract_title_en":c.title_en if c else None,"settlement_side":x.settlement_side,"estimate_no":x.estimate_no,
         "estimate_date":x.estimate_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),
-        "status":x.status,"notes":x.notes,"financial_settlement_id":x.financial_settlement_id,
+        "status":x.status,"notes":x.notes,"created_by":x.created_by,"financial_settlement_id":x.financial_settlement_id,
         "items":[{"estimate_item_id":i.estimate_item_id,"contract_item_id":i.contract_item_id,
           "item_no":(db.get(ContractItem,i.contract_item_id).item_no if db.get(ContractItem,i.contract_item_id) else ""),
           "description":(db.get(ContractItem,i.contract_item_id).description if db.get(ContractItem,i.contract_item_id) else ""),
           "unit":(db.get(ContractItem,i.contract_item_id).unit if db.get(ContractItem,i.contract_item_id) else ""),
           "contract_quantity":str(db.get(ContractItem,i.contract_item_id).quantity if db.get(ContractItem,i.contract_item_id) else 0),"previous_quantity":str(i.previous_quantity),"current_quantity":str(i.current_quantity),
-          "total_quantity":str(i.previous_quantity+i.current_quantity),"progress_percent":str((i.previous_quantity+i.current_quantity)/Decimal(str(db.get(ContractItem,i.contract_item_id).quantity or 1))*Decimal("100")) if db.get(ContractItem,i.contract_item_id) and Decimal(str(db.get(ContractItem,i.contract_item_id).quantity or 0))>0 else "0","unit_price":str(i.unit_price),"amount":str(i.amount)} for i in lines]}
+          "total_quantity":str(i.previous_quantity+(i.approved_quantity if i.approved_quantity is not None else i.current_quantity)),"progress_percent":str((i.previous_quantity+(i.approved_quantity if i.approved_quantity is not None else i.current_quantity))/Decimal(str(db.get(ContractItem,i.contract_item_id).quantity or 1))*Decimal("100")) if db.get(ContractItem,i.contract_item_id) and Decimal(str(db.get(ContractItem,i.contract_item_id).quantity or 0))>0 else "0","unit_price":str(i.unit_price),"amount":str(i.amount),"approved_quantity":str(i.approved_quantity) if i.approved_quantity is not None else None,"review_note":i.review_note,"reviewed_by":i.reviewed_by,"reviewed_at":i.reviewed_at} for i in lines]}
 
 def next_estimate_no(db: Session, contract_id: int) -> str:
     """Return the first unused technical estimate number for a contract."""
@@ -85,7 +105,7 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
         item=db.scalar(select(ContractItem).where(ContractItem.item_id==req.contract_item_id,ContractItem.contract_id==c.contract_id))
         if not item: raise HTTPException(422,f"البند {req.contract_item_id} لا يتبع العقد")
         prev_ids=select(TechnicalSettlementEstimate.estimate_id).where(TechnicalSettlementEstimate.contract_id==c.contract_id,TechnicalSettlementEstimate.settlement_side==body.settlement_side,TechnicalSettlementEstimate.status=="TechnicallyApproved")
-        prev=db.scalar(select(func.coalesce(func.sum(TechnicalSettlementEstimateItem.current_quantity),0)).where(TechnicalSettlementEstimateItem.contract_item_id==item.item_id,TechnicalSettlementEstimateItem.estimate_id.in_(prev_ids))) or 0
+        prev=db.scalar(select(func.coalesce(func.sum(func.coalesce(TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)),0)).where(TechnicalSettlementEstimateItem.contract_item_id==item.item_id,TechnicalSettlementEstimateItem.estimate_id.in_(prev_ids))) or 0
         # Include posted/approved financial settlement quantities if the history predates this technical workflow.
         linked_financial_ids=select(TechnicalSettlementEstimate.financial_settlement_id).where(TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
         valid_ids=select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==c.contract_id,ContractSettlement.settlement_side==body.settlement_side,ContractSettlement.status.in_(("Approved","Posted")),ContractSettlement.settlement_id.not_in(linked_financial_ids))
@@ -104,11 +124,144 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     write_audit(db,user.user_id,"Create","TechnicalSettlementEstimates",x.estimate_id,new={"estimate_no":x.estimate_no,"work_value":str(total),"status":x.status})
     db.commit();db.refresh(x);return estimate_out(x,db)
 
+@router.post("/{estimate_id}/return")
+def return_estimate_for_correction(estimate_id: int, body: TechnicalReturnIn,
+        user: User = Depends(require_permission("ContractSettlements", "EngineeringApprove")),
+        db: Session = Depends(get_db)):
+    x = db.scalar(select(TechnicalSettlementEstimate).where(
+        TechnicalSettlementEstimate.estimate_id == estimate_id).with_for_update())
+    if not x:
+        raise HTTPException(404, "المستخلص الفني غير موجود")
+    if x.status != "UnderReview":
+        raise HTTPException(409, "لا يمكن إرجاع المستخلص إلا أثناء المراجعة الفنية")
+    if x.created_by == user.user_id:
+        raise HTTPException(403, "لا يجوز لمُعدّ المستخلص إرجاع مستخلصه لنفسه")
+    reason = body.notes.strip()
+    if not reason:
+        raise HTTPException(422, "يجب كتابة ملاحظات الاستكمال")
+    old_status = x.status
+    x.status = "ReturnedForCorrection"
+    x.notes = (x.notes or "") + f"\nإرجاع للاستكمال بواسطة {user.user_id}: {reason}"
+    write_audit(db, user.user_id, "ReturnForCorrection", "TechnicalSettlementEstimates", estimate_id,
+        old={"status": old_status}, new={"status": x.status, "reason": reason, "created_by": x.created_by})
+    db.commit()
+    db.refresh(x)
+    return {"estimate": estimate_out(x, db), "message": "تم إرجاع المستخلص للمهندس المُعد لاستكمال الملاحظات."}
+
+
+@router.post("/{estimate_id}/resubmit")
+def resubmit_corrected_estimate(estimate_id: int, body: TechnicalCorrectionIn,
+        user: User = Depends(require_permission("ContractSettlements", "Add")),
+        db: Session = Depends(get_db)):
+    x = db.scalar(select(TechnicalSettlementEstimate).where(
+        TechnicalSettlementEstimate.estimate_id == estimate_id).with_for_update())
+    if not x:
+        raise HTTPException(404, "المستخلص الفني غير موجود")
+    if x.status != "ReturnedForCorrection":
+        raise HTTPException(409, "المستخلص ليس مُعاداً للاستكمال")
+    if x.created_by != user.user_id:
+        raise HTTPException(403, "فقط المهندس الذي أنشأ المستخلص يمكنه استكماله وإعادة تقديمه")
+    lines = db.scalars(select(TechnicalSettlementEstimateItem).where(
+        TechnicalSettlementEstimateItem.estimate_id == estimate_id).with_for_update()).all()
+    requested = {row.estimate_item_id: row for row in body.items}
+    if len(requested) != len(body.items) or set(requested) != {line.estimate_item_id for line in lines}:
+        raise HTTPException(422, "يجب إرسال جميع بنود المستخلص مرة واحدة دون تكرار")
+    total = Decimal("0")
+    changes = []
+    for line in lines:
+        item = db.get(ContractItem, line.contract_item_id)
+        if not item:
+            raise HTTPException(409, "أحد بنود العقد لم يعد موجوداً")
+        quantity = requested[line.estimate_item_id].current_quantity
+        remaining = Decimal(str(item.quantity or 0)) - Decimal(str(line.previous_quantity or 0))
+        if quantity > remaining:
+            raise HTTPException(422, f"الكمية المعدلة للبند {item.item_no} تتجاوز المتبقي في العقد")
+        old_quantity = line.current_quantity
+        line.current_quantity = quantity
+        line.approved_quantity = None
+        line.review_note = None
+        line.reviewed_by = None
+        line.reviewed_at = None
+        line.amount = money(quantity * line.unit_price)
+        total += line.amount
+        changes.append({"estimate_item_id": line.estimate_item_id,
+            "old_quantity": str(old_quantity), "resubmitted_quantity": str(quantity)})
+    total = money(total)
+    if total <= 0:
+        raise HTTPException(422, "يجب أن يحتوي المستخلص على كمية موجبة واحدة على الأقل")
+    old_status = x.status
+    x.work_value = total
+    x.status = "UnderReview"
+    x.technical_reviewed_by = None
+    x.technical_reviewed_at = None
+    x.notes = (x.notes or "") + f"\nإعادة تقديم بواسطة المهندس المُعد: {body.notes.strip()}"
+    write_audit(db, user.user_id, "ResubmitAfterCorrection", "TechnicalSettlementEstimates", estimate_id,
+        old={"status": old_status}, new={"status": x.status, "work_value": str(total), "items": changes, "notes": body.notes.strip()})
+    db.commit()
+    db.refresh(x)
+    return {"estimate": estimate_out(x, db), "message": "تم استكمال المستخلص وإعادة إرساله للمراجعة الفنية."}
+
+
+@router.post("/{estimate_id}/review")
+def review_estimate(estimate_id: int, body: TechnicalReviewIn,
+                    user: User = Depends(require_permission("ContractSettlements", "EngineeringApprove")),
+                    db: Session = Depends(get_db)):
+    x = db.scalar(select(TechnicalSettlementEstimate).where(
+        TechnicalSettlementEstimate.estimate_id == estimate_id).with_for_update())
+    if not x:
+        raise HTTPException(404, "المستخلص الفني غير موجود")
+    if x.status != "UnderReview":
+        raise HTTPException(409, "المستخلص ليس في مرحلة المراجعة الفنية")
+    if x.created_by == user.user_id:
+        raise HTTPException(403, "لا يجوز لمُعدّ المستخلص مراجعته بنفسه")
+    lines = db.scalars(select(TechnicalSettlementEstimateItem).where(
+        TechnicalSettlementEstimateItem.estimate_id == estimate_id).with_for_update()).all()
+    requested = {row.estimate_item_id: row for row in body.items}
+    if len(requested) != len(body.items) or set(requested) != {line.estimate_item_id for line in lines}:
+        raise HTTPException(422, "يجب مراجعة جميع بنود المستخلص مرة واحدة دون تكرار")
+    approved_total = Decimal("0")
+    audit_lines = []
+    for line in lines:
+        decision = requested[line.estimate_item_id]
+        approved = decision.approved_quantity
+        if approved > line.current_quantity:
+            raise HTTPException(422, "الكمية المعتمدة لا يجوز أن تتجاوز الكمية المقدمة")
+        if approved < line.current_quantity and not (decision.review_note or "").strip():
+            raise HTTPException(422, "يجب كتابة سبب عند تخفيض أو رفض كمية أي بند")
+        item = db.get(ContractItem, line.contract_item_id)
+        if not item:
+            raise HTTPException(409, "أحد بنود العقد لم يعد موجوداً")
+        line.approved_quantity = approved
+        line.review_note = (decision.review_note or "").strip() or None
+        line.reviewed_by = user.user_id
+        line.reviewed_at = datetime.utcnow()
+        line.amount = money(approved * line.unit_price)
+        approved_total += line.amount
+        audit_lines.append({"estimate_item_id": line.estimate_item_id,
+            "submitted_quantity": str(line.current_quantity), "approved_quantity": str(approved),
+            "review_note": line.review_note})
+    approved_total = money(approved_total)
+    if approved_total <= 0:
+        raise HTTPException(422, "لا يمكن إحالة مستخلص دون أي كميات معتمدة")
+    x.work_value = approved_total
+    x.technical_reviewed_by = user.user_id
+    x.technical_reviewed_at = datetime.utcnow()
+    x.status = "TechnicalReviewed"
+    write_audit(db, user.user_id, "TechnicalReview", "TechnicalSettlementEstimates", estimate_id,
+        old={"status": "UnderReview"}, new={"status": x.status, "work_value": str(approved_total), "items": audit_lines, "notes": body.notes})
+    if body.notes and body.notes.strip():
+        x.notes = (x.notes or "") + f"\nملاحظات المراجعة الفنية: {body.notes.strip()}"
+    db.commit()
+    db.refresh(x)
+    return {"estimate": estimate_out(x, db), "message": "تم حفظ مراجعة البنود. المستخلص جاهز للاعتماد الفني النهائي."}
+
+
 @router.post("/{estimate_id}/approve")
 def approve_estimate(estimate_id:int,user:User=Depends(require_permission("ContractSettlements","Approve")),db:Session=Depends(get_db)):
     x=db.scalar(select(TechnicalSettlementEstimate).where(TechnicalSettlementEstimate.estimate_id==estimate_id).with_for_update())
     if not x: raise HTTPException(404,"المستخلص الفني غير موجود")
-    if x.status!="UnderReview": raise HTTPException(409,"المستخلص الفني ليس تحت المراجعة")
+    if x.status!="TechnicalReviewed": raise HTTPException(409,"يجب إتمام مراجعة البنود الفنية أولاً")
+    if x.technical_reviewed_by == user.user_id or x.created_by == user.user_id: raise HTTPException(403,"لا يجوز لمُعدّ المستخلص أو مراجع البنود اعتماده فنياً")
     c=db.get(Contract,x.contract_id)
     if not c or (c.status or "").lower()!="active": raise HTTPException(409,"العقد لم يعد نشطاً")
     lines=db.scalars(select(TechnicalSettlementEstimateItem).where(TechnicalSettlementEstimateItem.estimate_id==x.estimate_id)).all()
@@ -163,7 +316,10 @@ def approve_estimate(estimate_id:int,user:User=Depends(require_permission("Contr
     seq=(db.scalar(select(func.max(ContractSettlement.sequence_no)).where(ContractSettlement.contract_id==x.contract_id,ContractSettlement.settlement_side==x.settlement_side)) or 0)+1
     fin=ContractSettlement(contract_id=x.contract_id,settlement_side=x.settlement_side,sequence_no=seq,settlement_no=f"FIN-{x.estimate_id:06d}",settlement_date=x.estimate_date,counterparty_name=x.counterparty_name,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,net_amount=net,status="Draft",notes=f"تم إنشاؤه تلقائياً من المستخلص الفني {x.estimate_no}. {x.notes or ''}".strip(),created_by=user.user_id)
     db.add(fin);db.flush()
-    for line in lines: db.add(ContractSettlementItem(settlement_id=fin.settlement_id,contract_item_id=line.contract_item_id,quantity=line.current_quantity,unit_price=line.unit_price,amount=line.amount))
+    for line in lines:
+        approved_qty = line.approved_quantity if line.approved_quantity is not None else Decimal("0")
+        if approved_qty > 0:
+            db.add(ContractSettlementItem(settlement_id=fin.settlement_id,contract_item_id=line.contract_item_id,quantity=approved_qty,unit_price=line.unit_price,amount=money(approved_qty*line.unit_price)))
     x.status="TechnicallyApproved";x.reviewed_by=user.user_id;x.reviewed_at=datetime.utcnow();x.financial_settlement_id=fin.settlement_id
     write_audit(db,user.user_id,"Approve","TechnicalSettlementEstimates",x.estimate_id,new={"status":x.status,"financial_settlement_id":fin.settlement_id,"work_value":str(work)})
     db.commit();db.refresh(fin)

@@ -47,6 +47,7 @@ _S = [  # (section, code, title_en, title_ar, route)
     ("ACCOUNTING", "Contracts", "Contracts & Technical Office", "العقود والمكتب الفني", "/contracts"),
     ("ACCOUNTING", "ContractRequests", "Contract Requests", "طلبات التعاقد", "/contract-requests"),
     ("ACCOUNTING", "ContractSettlements", "Contract Settlements", "مستخلصات العملاء ومقاولي الباطن", "/settlements"),
+    ("ACCOUNTING", "SettlementManagerApproval", "Settlement Manager Approval", "اعتماد المستخلصات — المدير", "/settlements/manager-approval"),
     ("ACCOUNTING", "InventoryManagement", "Inventory Management", "إدارة المخزون", "/inventory"),
     ("ACCOUNTING", "PurchaseCycle", "Purchase Cycle", "دورة المشتريات", "/purchases"),
     ("ACCOUNTING", "Counterparties", "Counterparties", "المقاولون والموردون والعملاء", "/counterparties"),
@@ -56,7 +57,7 @@ SCREENS = [
      "code": code, "title_en": en, "title_ar": ar, "route": route, "sort_order": i}
     for i, (sec, code, en, ar, route) in enumerate(_S, start=1)
 ]
-assert len(SCREENS) == 27
+assert len(SCREENS) == 28
 
 
 def seed_screens(db: Session) -> None:
@@ -141,9 +142,23 @@ def sync_permissions(db: Session) -> None:
             for permission_id in stage_ids:
                 grant(role_id, permission_id)
 
+    # Give existing settlement viewers access to the dedicated manager approval screen.
+    manager_view = permission_ids.get(("SettlementManagerApproval", "View"))
+    settlement_view = permission_ids.get(("ContractSettlements", "View"))
+    if manager_view and settlement_view:
+        settlement_view_roles = set(db.scalars(select(RolePermission.role_id).where(
+            RolePermission.permission_id == settlement_view)))
+        manager_action = permission_ids.get(("ContractSettlements", "ManagerApprove"))
+        manager_roles = set(db.scalars(select(RolePermission.role_id).where(
+            RolePermission.permission_id == manager_action))) if manager_action else set()
+        manager_view_roles = set(db.scalars(select(RolePermission.role_id).where(
+            RolePermission.permission_id == manager_view)))
+        for role_id in (settlement_view_roles | manager_roles) - manager_view_roles:
+            grant(role_id, manager_view)
+
     # Preserve existing settlement approvers while introducing finance then manager approval.
     settlement_approve = permission_ids.get(("ContractSettlements", "Approve"))
-    settlement_stage_ids = [permission_ids.get(("ContractSettlements", action)) for action in ("FinancialApprove", "ManagerApprove")]
+    settlement_stage_ids = [permission_ids.get(("ContractSettlements", action)) for action in ("EngineeringApprove", "FinancialApprove", "ManagerApprove")]
     if settlement_approve and all(settlement_stage_ids):
         legacy_settlement_roles = set(db.scalars(select(RolePermission.role_id).where(RolePermission.permission_id == settlement_approve)))
         for role_id in legacy_settlement_roles:

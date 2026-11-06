@@ -26,7 +26,8 @@ const SCREENS = {
   "/reports/financial-control": L("./pages/financial_control.js?v=20261105-financial-control-1"),
   "/contracts": L("./pages/contracts.js?v=20261105-auto-document-numbers-1"),
   "/contract-requests": L("./pages/contract_requests.js?v=20261105-auto-document-numbers-1"),
-  "/settlements": L("./pages/settlements.js?v=20261105-settlements-bilingual-2"),
+  "/settlements": L("./pages/settlements.js?v=20261106-technical-review-1"),
+  "/settlements/manager-approval": L("./pages/settlements.js?v=20261106-technical-review-1"),
   "/inventory": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
   "/inventory/receipts": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
   "/inventory/items": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
@@ -160,6 +161,7 @@ function titleOf(path) {
   if (path === "/contracts") return tr("العقود والمكتب الفني", "Contracts & Technical Office");
   if (path === "/contract-requests") return tr("طلبات التعاقد", "Contract Requests");
   if (path === "/settlements") return tr("مستخلصات العملاء ومقاولي الباطن", "Customer & Subcontractor Statements");
+  if (path === "/settlements/manager-approval") return tr("اعتماد المستخلصات — المدير", "Settlement Manager Approval");
   if (path === "/inventory") return tr("إدارة المخزون", "Inventory Management");
   if (path === "/inventory/receipts") return tr("استلام التوريدات", "Goods Receipts");
   if (path === "/inventory/items") return tr("الأصناف", "Items");
