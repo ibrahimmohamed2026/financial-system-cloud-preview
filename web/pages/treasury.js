@@ -9,7 +9,7 @@ export async function render(main, { api, auth, route }) {
   const acc = info.account;
   const [projs, counterpartAccounts] = await Promise.all([
     api("/projects/lookup").catch(() => []),
-    acc.currency_code === "USD" ? api(base + "/counterpart-accounts").catch(() => []) : Promise.resolve([])
+    acc.currency_code === "USD" && can("Add") ? api(base + "/counterpart-accounts").catch(() => []) : Promise.resolve([])
   ]);
   main.innerHTML = `<h3 style="margin-top:0">${esc(localStorage.getItem("fs_lang")==="en"?(acc.name_en||acc.name_ar):acc.name_ar)} <small class="muted">${esc(acc.currency_code)} — ${esc(acc.gl_account)}</small> ${auth.can(SC,"Edit") || auth.can(SC,"Add") ? `<button class="btn sm" id="edit-gl-link">${tr("تصحيح ربط شجرة الحسابات","Fix chart of accounts link")}</button>` : ""}</h3>
     <div class="toolbar"><div class="w" style="width:150px"><label>${tr("من","From")}</label><input type="date" id="df"></div><div class="w" style="width:150px"><label>${tr("إلى","To")}</label><input type="date" id="dt"></div>
