@@ -112,7 +112,10 @@ def _contract(c):
 def _addendum(a):
     return {"addendum_id":a.addendum_id,"contract_id":a.contract_id,"addendum_no":a.addendum_no,
             "addendum_date":a.addendum_date,"description":a.description,"value_change":str(a.value_change),
-            "status":getattr(a,"status","Approved"),"approved_by":a.approved_by,"approved_at":a.approved_at}
+            "status":getattr(a,"status","Approved"),"approved_by":a.approved_by,"approved_at":a.approved_at,
+            "technical_reviewed_by":getattr(a,"technical_reviewed_by",None),
+            "technical_reviewed_at":getattr(a,"technical_reviewed_at",None),
+            "technical_review_notes":getattr(a,"technical_review_notes",None)}
 def _billing(b):
     return {"billing_id":b.billing_id,"contract_id":b.contract_id,"billing_no":b.billing_no,"billing_date":b.billing_date,
             "work_value":str(b.work_value),"retention_amount":str(b.retention_amount),"advance_deduction":str(b.advance_deduction),
@@ -367,7 +370,9 @@ def add_addendum_line(contract_id: int, addendum_id: int, body: AddendumLineIn,
         description=description, unit=unit, quantity_delta=body.quantity_delta, unit_price=body.unit_price,
         amount_change=(((body.unit_price - Decimal(str(target.unit_price))) * Decimal(str(target.quantity))
             + body.quantity_delta * body.unit_price) if target else
-            (body.quantity_delta * body.unit_price)).quantize(Decimal("0.01")))
+            (body.quantity_delta * body.unit_price)).quantize(Decimal("0.01")),
+        baseline_quantity=Decimal(str(target.quantity)) if target else None,
+        baseline_unit_price=Decimal(str(target.unit_price)) if target else None)
     db.add(line)
     write_audit(db, user.user_id, "AddBOQLine", "ContractAddendums", addendum_id,
         new={"target_item_id": line.target_item_id, "item_no": item_no, "quantity_delta": str(line.quantity_delta),
@@ -423,8 +428,12 @@ def review_addendum_technical(contract_id: int, addendum_id: int, body: Addendum
         a.status = "ReturnedForCorrection"
     else:
         a.status = "TechnicallyApproved"
+    a.technical_reviewed_by = user.user_id
+    a.technical_reviewed_at = datetime.utcnow()
+    a.technical_review_notes = (body.notes or "").strip() or None
     write_audit(db, user.user_id, "TechnicalReview" + body.decision, "ContractAddendums", addendum_id,
-        new={"status":a.status,"notes":(body.notes or "").strip()})
+        new={"status":a.status,"reviewed_by":user.user_id,"reviewed_at":a.technical_reviewed_at,
+             "notes":a.technical_review_notes})
     db.commit(); db.refresh(a)
     return _addendum(a)
 
@@ -452,6 +461,10 @@ def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(re
             item = db.scalar(select(ContractItem).where(ContractItem.item_id == line.target_item_id,
                 ContractItem.contract_id == contract_id).with_for_update())
             if not item: raise HTTPException(409, "البند الأصلي المرتبط بالملحق لم يعد موجودًا")
+            if line.baseline_quantity is not None and Decimal(str(item.quantity)) != Decimal(str(line.baseline_quantity)):
+                raise HTTPException(409, f"تغيرت كمية البند {item.item_no} بعد إعداد الملحق؛ احذف السطر وأعد إدخاله بالقيمة الحالية")
+            if line.baseline_unit_price is not None and Decimal(str(item.unit_price)) != Decimal(str(line.baseline_unit_price)):
+                raise HTTPException(409, f"تغير سعر البند {item.item_no} بعد إعداد الملحق؛ احذف السطر وأعد إدخاله بالسعر الحالي")
             next_quantity = Decimal(str(item.quantity)) + Decimal(str(line.quantity_delta))
             used_technical = db.scalar(select(func.coalesce(func.sum(func.coalesce(
                 TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)), 0))
