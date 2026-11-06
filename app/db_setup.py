@@ -36,7 +36,7 @@ SELECT u."UserId" AS "UserId", p."PermissionId" AS "PermissionId",
                     SELECT 1 FROM "JobProfilePermissions" jpp
                     JOIN "JobProfiles" jp ON jp."JobProfileId"=jpp."JobProfileId"
                     WHERE jpp."JobProfileId"=u."JobProfileId"
-                      AND jp."IsActive"=1
+                      AND jp."IsActive" IS TRUE
                       AND jpp."PermissionId"=p."PermissionId"
               ) THEN 1 ELSE 0 END
          -- Backward compatibility for users who have not yet been assigned a job profile.
