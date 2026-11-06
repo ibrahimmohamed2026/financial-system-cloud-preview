@@ -45,11 +45,13 @@ def test_job_profile_is_the_only_permission_source_for_assigned_users():
         assert _allowed(conn, 3, 1) == 1
 
 
-def test_admin_keeps_global_access_even_with_job_profile_and_overrides():
+def test_legacy_admin_role_does_not_bypass_job_profile_permissions():
     engine = _permission_db()
     with engine.connect() as conn:
+        # User 3 still has the legacy Admin role, but its assigned job profile
+        # remains the sole permission source.
         assert _allowed(conn, 3, 1) == 1
-        assert _allowed(conn, 3, 2) == 1
+        assert _allowed(conn, 3, 2) == 0
 
 
 def test_profile_permission_changes_apply_immediately_without_user_permission_copy():
@@ -67,6 +69,15 @@ def test_inactive_job_profile_grants_no_permissions():
     with engine.connect() as conn:
         assert _allowed(conn, 4, 1) == 0
         assert _allowed(conn, 4, 2) == 0
+
+
+def test_legacy_admin_role_without_permissions_does_not_grant_global_access():
+    engine = _permission_db()
+    with engine.begin() as conn:
+        conn.execute(text('INSERT INTO "Users" VALUES (7, NULL)'))
+        conn.execute(text('INSERT INTO "UserRoles" VALUES (7, 1)'))
+        assert _allowed(conn, 7, 1) == 0
+        assert _allowed(conn, 7, 2) == 0
 
 
 def test_legacy_users_keep_user_override_then_role_fallback():
