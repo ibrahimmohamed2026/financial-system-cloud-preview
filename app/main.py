@@ -13,7 +13,7 @@ from .config import settings
 from .client_ip import get_client_ip, request_ip
 from .database import engine, SessionLocal
 from .db_setup import ensure_schema
-from .bootstrap import seed_screens, sync_permissions, create_admin
+from .bootstrap import seed_screens, sync_permissions, seed_job_profiles, create_admin
 from .models import User
 from .routers import (accounts, admin, auth, audit_logs, backup, checks, dashboard, journal, projects, reconciliation, reports, contracts, contract_erp, contract_requests, contract_attachments, technical_settlements, inventory, counterparties,
                       treasury, trial_balance, data_exchange, pg_backup, financial_checks, financial_control)
@@ -26,6 +26,7 @@ async def lifespan(_: FastAPI):
     with SessionLocal() as db:
         seed_screens(db)
         sync_permissions(db)
+        seed_job_profiles(db)
         # Render preview: create the first administrator only when explicitly configured.
         bootstrap_username = os.getenv("ADEX_BOOTSTRAP_ADMIN_USERNAME", "").strip()
         bootstrap_password = os.getenv("ADEX_BOOTSTRAP_ADMIN_PASSWORD", "")

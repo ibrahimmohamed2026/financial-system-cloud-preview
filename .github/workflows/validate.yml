@@ -24,4 +24,5 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
           JWT_SECRET: "ci-only-test-secret-not-for-production-2026"
+          DATABASE_URL: "sqlite:///./ci-test.db"
         run: pytest -q
