@@ -53,11 +53,20 @@ def _admin(user: User = Depends(get_current_user), db: Session = Depends(get_db)
     return user
 
 def _tables(mode: str):
-    if mode not in {"operational", "full"}:
-        raise HTTPException(422, "مستوى التصفير غير صحيح")
-    names = set(OPERATIONAL_TABLES)
-    if mode == "full":
-        names |= FULL_EXTRA_TABLES
+    if mode != "full":
+        raise HTTPException(422, "المتاح حاليًا هو التصفير الشامل فقط")
+    names = OPERATIONAL_TABLES | FULL_EXTRA_TABLES
+    metadata_names = {t.name for t in Base.metadata.sorted_tables}
+    missing = names - metadata_names
+    protected_selected = names & PROTECTED_TABLES
+    if missing or protected_selected:
+        raise RuntimeError(
+            f"Reset table safety check failed; missing={sorted(missing)}, "
+            f"protected={sorted(protected_selected)}"
+        )
+    # Delete every registered operational/master-data table in FK-safe order.
+    # Preserve users, permissions, chart of accounts, company/year, projects,
+    # treasury definitions, exchange rates, cheque templates and audit history.
     return [t for t in reversed(Base.metadata.sorted_tables) if t.name in names]
 
 @router.get("/preview")
@@ -74,10 +83,11 @@ def preview(mode: str, _: User = Depends(_admin), db: Session = Depends(get_db))
             (Account.opening_debit != 0) | (Account.opening_credit != 0))) or 0)
     return {"mode": mode, "tables": result, "total_rows": sum(x["count"] for x in result),
             "accounts_opening_balances_to_zero": opening_count,
-            "protected": ["دليل الحسابات والتصنيفات", "الشركة والسنة المالية", "كل المستخدمين والصلاحيات والوظائف", "سجل المراجعة", "المشروعات", "ربط الخزائن بالحسابات", "قوالب الشيكات"]}
+            "trial_balance_expected_zero": True,
+            "protected": ["دليل الحسابات والتصنيفات", "الشركة والسنة المالية", "كل المستخدمين والصلاحيات والوظائف", "سجل المراجعة", "المشروعات", "تعريفات الخزائن والبنوك وربطها المحاسبي", "أسعار الصرف", "قوالب الشيكات"]}
 
 class ResetRequest(BaseModel):
-    mode: str = Field(pattern="^(operational|full)$")
+    mode: str = Field(pattern="^full$")
     confirm_text: str
     password: str = Field(min_length=1, max_length=72)
 
