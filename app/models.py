@@ -316,10 +316,28 @@ class CheckPrintTemplate(Base):
     text_value: Mapped[Optional[str]] = C("TextValue", Unicode(200), nullable=True)
 
 
+# ----------------------------- الوظائف -----------------------------
+class JobProfile(Base):
+    __tablename__ = "JobProfiles"
+    job_profile_id: Mapped[int] = C("JobProfileId", Integer, primary_key=True)
+    name_ar: Mapped[str] = C("NameAr", Unicode(150), unique=True)
+    name_en: Mapped[str] = C("NameEn", Unicode(150))
+    description: Mapped[Optional[str]] = C("Description", Unicode(500), nullable=True)
+    is_active: Mapped[bool] = C("IsActive", Boolean, default=True)
+
+
+class JobProfilePermission(Base):
+    __tablename__ = "JobProfilePermissions"
+    job_profile_id: Mapped[int] = C("JobProfileId", ForeignKey("JobProfiles.JobProfileId", ondelete="CASCADE"), primary_key=True)
+    permission_id: Mapped[int] = C("PermissionId", ForeignKey("Permissions.PermissionId", ondelete="CASCADE"), primary_key=True)
+
+
 # ----------------------------- 5) المستخدمون والصلاحيات -----------------------------
 class User(Base):
     __tablename__ = "Users"
     user_id: Mapped[int] = C("UserId", Integer, primary_key=True)
+    job_profile_id: Mapped[Optional[int]] = C("JobProfileId", ForeignKey("JobProfiles.JobProfileId"), nullable=True, index=True)
+    project_id: Mapped[Optional[int]] = C("ProjectId", ForeignKey("Projects.ProjectId"), nullable=True, index=True)
     username: Mapped[str] = C("Username", Unicode(50), unique=True)
     password_hash: Mapped[bytes] = C("PasswordHash", LargeBinary)
     full_name: Mapped[str] = C("FullName", Unicode(150))
