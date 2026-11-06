@@ -6,7 +6,7 @@
 import argparse
 import getpass
 
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -85,7 +85,7 @@ def seed_screens(db: Session) -> None:
 
 
 def sync_permissions(db: Session) -> None:
-    """بيعمل صلاحيات (كل الإجراءات) لكل شاشة مسجّلة، ويدّي دور Admin كلها."""
+    """ينشئ صلاحيات الشاشات، دون منح دور Admin القديم تجاوزًا عامًا للصلاحيات."""
     codes = db.scalars(select(Screen.screen_code)).all()
     existing = {(p.screen_code, p.action_code) for p in db.scalars(select(Permission))}
     for code in codes:
@@ -165,13 +165,13 @@ def sync_permissions(db: Session) -> None:
             for permission_id in settlement_stage_ids:
                 grant(role_id, permission_id)
 
+    # Keep the legacy role record for compatibility, but it has no global grants.
     admin = db.scalar(select(Role).where(Role.role_name == "Admin"))
     if admin is None:
         admin = Role(role_name="Admin")
         db.add(admin)
         db.flush()
-    for pid in db.scalars(select(Permission.permission_id)):
-        grant(admin.role_id, pid)
+    db.execute(delete(RolePermission).where(RolePermission.role_id == admin.role_id))
     db.commit()
 
 
@@ -206,6 +206,29 @@ def seed_job_profiles(db: Session) -> None:
                 pid = available.get((screen, action))
                 if pid is not None:
                     db.add(JobProfilePermission(job_profile_id=profile.job_profile_id, permission_id=pid))
+    # مسؤول النظام IT هو ملف الصلاحيات الإداري الوحيد، ويحتاج إدارة جميع شاشات النظام.
+    it_profile = db.scalar(select(JobProfile).where(JobProfile.name_ar == "مسؤول النظام IT"))
+    if it_profile is not None:
+        # This core security profile must remain available to prevent administrative lockout.
+        it_profile.is_active = True
+        existing_ids = set(db.scalars(select(JobProfilePermission.permission_id).where(
+            JobProfilePermission.job_profile_id == it_profile.job_profile_id)))
+        all_ids = set(db.scalars(select(Permission.permission_id)))
+        for permission_id in all_ids - existing_ids:
+            db.add(JobProfilePermission(job_profile_id=it_profile.job_profile_id, permission_id=permission_id))
+
+        # ترحيل الحسابات التي كانت تعتمد على Admin القديم إلى الوظيفة المعتمدة.
+        legacy_admin = db.scalar(select(Role).where(Role.role_name == "Admin"))
+        if legacy_admin is not None:
+            legacy_users = db.scalars(select(User).join(
+                UserRole, UserRole.user_id == User.user_id).where(
+                UserRole.role_id == legacy_admin.role_id)).all()
+            for legacy_user in legacy_users:
+                # The old Admin role represented system-wide administration; preserve that
+                # authority by migrating every such account to the dedicated IT profile.
+                legacy_user.job_profile_id = it_profile.job_profile_id
+                # Job profile assignment replaces all legacy role-based permissions.
+                db.execute(delete(UserRole).where(UserRole.user_id == legacy_user.user_id))
     db.commit()
 
 
@@ -232,9 +255,13 @@ def create_admin(db: Session, username: str, password: str, full_name: str = "Sy
         user = User(username=username, password_hash=hash_password(password), full_name=full_name)
         db.add(user)
         db.flush()
+    it_profile = db.scalar(select(JobProfile).where(JobProfile.name_ar == "مسؤول النظام IT"))
+    if it_profile is None:
+        raise RuntimeError("وظيفة مسؤول النظام IT غير مهيأة؛ شغّل seed_job_profiles أولاً")
+    user.job_profile_id = it_profile.job_profile_id
     admin = db.scalar(select(Role).where(Role.role_name == "Admin"))
-    if db.get(UserRole, (user.user_id, admin.role_id)) is None:
-        db.add(UserRole(user_id=user.user_id, role_id=admin.role_id))
+    if admin is not None:
+        db.execute(delete(UserRole).where(UserRole.user_id == user.user_id, UserRole.role_id == admin.role_id))
     db.commit()
     return user
 

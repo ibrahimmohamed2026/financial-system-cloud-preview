@@ -88,17 +88,32 @@ class RoleUpdate(BaseModel):
     permission_ids: list[int] | None = None
 
 
+def _is_it_admin(db: Session, user_id: int) -> bool:
+    return bool(db.scalar(select(User.user_id).join(JobProfile, JobProfile.job_profile_id == User.job_profile_id)
+        .where(User.user_id == user_id, User.is_active.is_(True), User.is_deleted.is_(False),
+               JobProfile.name_ar == "مسؤول النظام IT", JobProfile.is_active.is_(True))))
+
+
+def _active_it_admin_count(db: Session, excluding_user_id: int | None = None) -> int:
+    query = select(func.count(User.user_id)).join(
+        JobProfile, JobProfile.job_profile_id == User.job_profile_id).where(
+        JobProfile.name_ar == "مسؤول النظام IT", JobProfile.is_active.is_(True),
+        User.is_active.is_(True), User.is_deleted.is_(False))
+    if excluding_user_id is not None:
+        query = query.where(User.user_id != excluding_user_id)
+    return int(db.scalar(query) or 0)
+
+
 def admin_user(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
-    is_admin = db.scalar(select(UserRole.user_id).join(Role, Role.role_id == UserRole.role_id)
-                         .where(UserRole.user_id == user.user_id, Role.role_name == "Admin"))
-    if not is_admin:
-        raise HTTPException(403, "هذه الشاشة متاحة لمدير النظام فقط")
+    if not _is_it_admin(db, user.user_id):
+        raise HTTPException(403, "هذه الشاشة متاحة لوظيفة مسؤول النظام IT فقط")
     return user
+
 
 @router.get("/status")
 def status(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return {"is_admin": bool(db.scalar(select(UserRole.user_id).join(Role, Role.role_id == UserRole.role_id)
-            .where(UserRole.user_id == user.user_id, Role.role_name == "Admin")))}
+    allowed = _is_it_admin(db, user.user_id)
+    return {"is_admin": allowed, "is_it_admin": allowed}
 
 
 @router.get("/company")
@@ -178,6 +193,15 @@ def update_job_profile(profile_id: int, body: dict, actor: User = Depends(admin_
         raise HTTPException(422, "اسم الوظيفة غير صحيح")
     if db.scalar(select(JobProfile).where(JobProfile.name_ar == name_ar, JobProfile.job_profile_id != profile_id)):
         raise HTTPException(409, "اسم الوظيفة مستخدم بالفعل")
+    if p.name_ar == "مسؤول النظام IT":
+        all_permission_ids = set(db.scalars(select(Permission.permission_id)).all())
+        requested_permission_ids = body.get("permission_ids")
+        if name_ar != p.name_ar or body.get("is_active", True) is False:
+            raise HTTPException(400, "وظيفة مسؤول النظام IT أساسية ولا يمكن تغيير اسمها أو تعطيلها")
+        if requested_permission_ids is not None and (
+                not isinstance(requested_permission_ids, list)
+                or set(requested_permission_ids) != all_permission_ids):
+            raise HTTPException(400, "لا يمكن تقليل صلاحيات وظيفة مسؤول النظام IT")
     old = {"name_ar": p.name_ar, "name_en": p.name_en, "is_active": p.is_active,
            "permission_ids": sorted(db.scalars(select(JobProfilePermission.permission_id).where(
                JobProfilePermission.job_profile_id == profile_id)).all())}
@@ -231,6 +255,8 @@ def create_user(body: UserCreate, actor: User = Depends(admin_user), db: Session
     roles=db.scalars(select(Role).where(Role.role_id.in_(body.role_ids))).all() if body.role_ids else []
     if len(roles) != len(set(body.role_ids)):
         raise HTTPException(422, "يوجد دور غير صحيح")
+    if any(r.role_name == "Admin" for r in roles):
+        raise HTTPException(422, "دور Admin قديم؛ استخدم وظيفة مسؤول النظام IT")
     if body.job_profile_id is not None:
         profile = db.get(JobProfile, body.job_profile_id)
         if profile is None or not profile.is_active:
@@ -256,8 +282,8 @@ def update_user(user_id: int, body: UserUpdate, actor: User = Depends(admin_user
     if body.full_name is not None: u.full_name=body.full_name.strip()
     if body.is_active is not None:
         if u.is_active and not body.is_active:
-            if _active_admin_count(db, excluding_user_id=u.user_id) == 0 and _is_admin(db, u.user_id):
-                raise HTTPException(400,"لا يمكن تعطيل آخر مدير نظام نشط")
+            if _active_it_admin_count(db, excluding_user_id=u.user_id) == 0 and _is_it_admin(db, u.user_id):
+                raise HTTPException(400,"لا يمكن تعطيل آخر مسؤول نظام IT نشط")
             u.token_version += 1
         u.is_active=body.is_active
     if body.password: u.password_hash=hash_password(body.password); u.failed_login_count=0; u.locked_until=None
@@ -269,9 +295,13 @@ def update_user(user_id: int, body: UserUpdate, actor: User = Depends(admin_user
         # Job profile assignment does not require a project/site assignment.
         if body.role_ids:
             raise HTTPException(422, "لا يمكن الجمع بين الوظيفة وأدوار مستقلة")
+        was_it_admin = _is_it_admin(db, u.user_id)
+        if u.is_active and was_it_admin and profile.name_ar != "مسؤول النظام IT" and _active_it_admin_count(
+                db, excluding_user_id=u.user_id) == 0:
+            raise HTTPException(400, "لا يمكن تغيير وظيفة آخر مسؤول نظام IT نشط")
         u.job_profile_id = body.job_profile_id
-        admin_role_ids = select(Role.role_id).where(Role.role_name == "Admin")
-        db.execute(delete(UserRole).where(UserRole.user_id == u.user_id, UserRole.role_id.not_in(admin_role_ids)))
+        # الوظيفة هي مصدر الصلاحيات الوحيد؛ لا نحتفظ بأي أدوار قديمة بجانبها.
+        db.execute(delete(UserRole).where(UserRole.user_id == u.user_id))
     if body.project_id is not None:
         if db.get(Project, body.project_id) is None:
             raise HTTPException(422, "المشروع أو الموقع غير موجود")
@@ -281,28 +311,12 @@ def update_user(user_id: int, body: UserUpdate, actor: User = Depends(admin_user
             raise HTTPException(422, "لا يمكن الجمع بين الوظيفة وأدوار مستقلة")
         roles=db.scalars(select(Role).where(Role.role_id.in_(body.role_ids))).all() if body.role_ids else []
         if len(roles)!=len(set(body.role_ids)): raise HTTPException(422,"يوجد دور غير صحيح")
-        if u.user_id==actor.user_id and not any(r.role_name=="Admin" for r in roles): raise HTTPException(400,"لا يمكنك إزالة دور Admin من حسابك الحالي")
-        if u.is_active and _is_admin(db, u.user_id) and not any(r.role_name == "Admin" for r in roles) and _active_admin_count(
-                db, excluding_user_id=u.user_id) == 0:
-            raise HTTPException(400, "لا يمكن إزالة دور Admin من آخر مدير نظام نشط")
+        if any(r.role_name == "Admin" for r in roles):
+            raise HTTPException(422, "دور Admin قديم؛ استخدم وظيفة مسؤول النظام IT")
         db.execute(delete(UserRole).where(UserRole.user_id==u.user_id))
         for r in roles: db.add(UserRole(user_id=u.user_id,role_id=r.role_id))
     write_audit(db,actor.user_id,"Update","Users",u.user_id,new={"is_active":u.is_active})
     db.commit(); return {"ok":True}
-
-
-def _is_admin(db: Session, user_id: int) -> bool:
-    return bool(db.scalar(select(UserRole.user_id).join(Role, Role.role_id == UserRole.role_id)
-                          .where(UserRole.user_id == user_id, Role.role_name == "Admin")))
-
-
-def _active_admin_count(db: Session, excluding_user_id: int | None = None) -> int:
-    query = select(func.count(User.user_id)).join(UserRole, UserRole.user_id == User.user_id).join(
-        Role, Role.role_id == UserRole.role_id).where(Role.role_name == "Admin", User.is_active.is_(True),
-                                                     User.is_deleted.is_(False))
-    if excluding_user_id is not None:
-        query = query.where(User.user_id != excluding_user_id)
-    return int(db.scalar(query) or 0)
 
 
 class UserDeletionRequestCreate(BaseModel):
@@ -379,9 +393,9 @@ def decide_user_deletion(request_id: int, body: UserDeletionDecision,
         raise HTTPException(409, "المستخدم غير متاح للحذف")
     old = {"is_active": target.is_active, "is_deleted": target.is_deleted}
     if body.approve:
-        if _is_admin(db, target.user_id) and target.is_active and _active_admin_count(
+        if _is_it_admin(db, target.user_id) and target.is_active and _active_it_admin_count(
                 db, excluding_user_id=target.user_id) == 0:
-            raise HTTPException(400, "لا يمكن أرشفة آخر مدير نظام نشط")
+            raise HTTPException(400, "لا يمكن أرشفة آخر مسؤول نظام IT نشط")
         target.is_active = False
         target.is_deleted = True
         target.token_version += 1
@@ -411,9 +425,8 @@ def _image_type(data: bytes) -> str | None:
 def get_user_avatar(user_id: int, actor: User = Depends(get_current_user), db: Session = Depends(get_db)):
     target=db.get(User,user_id)
     if not target: raise HTTPException(404,"المستخدم غير موجود")
-    is_admin=db.scalar(select(UserRole.user_id).join(Role,Role.role_id==UserRole.role_id)
-                       .where(UserRole.user_id==actor.user_id,Role.role_name=="Admin"))
-    if actor.user_id != user_id and not is_admin: raise HTTPException(403,"لا يمكنك عرض صورة هذا المستخدم")
+    is_it_admin = _is_it_admin(db, actor.user_id)
+    if actor.user_id != user_id and not is_it_admin: raise HTTPException(403,"لا يمكنك عرض صورة هذا المستخدم")
     avatar=db.get(UserAvatar,user_id)
     if not avatar: raise HTTPException(404,"لا توجد صورة لهذا المستخدم")
     return Response(content=avatar.image_data,media_type=avatar.media_type,
@@ -453,7 +466,7 @@ def delete_user_avatar(user_id: int, actor: User = Depends(admin_user), db: Sess
 
 @router.get("/roles")
 def list_roles(_: User = Depends(admin_user), db: Session = Depends(get_db)):
-    roles=db.scalars(select(Role).order_by(Role.role_id)).all(); out=[]
+    roles=db.scalars(select(Role).where(Role.role_name != "Admin").order_by(Role.role_id)).all(); out=[]
     for r in roles:
         ids=db.scalars(select(RolePermission.permission_id).where(RolePermission.role_id==r.role_id)).all()
         out.append({"role_id":r.role_id,"role_name":r.role_name,"permission_ids":ids})

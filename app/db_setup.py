@@ -26,10 +26,8 @@ VIEW_SQL = f'''CREATE VIEW "{VIEW_NAME}" AS
 SELECT u."UserId" AS "UserId", p."PermissionId" AS "PermissionId",
        p."ScreenCode" AS "ScreenCode", p."ActionCode" AS "ActionCode",
        CASE
-         -- Admin is the only global bypass and cannot be restricted by per-user overrides.
-         WHEN EXISTS (SELECT 1 FROM "UserRoles" ur JOIN "Roles" r ON r."RoleId"=ur."RoleId"
-                      WHERE ur."UserId"=u."UserId" AND r."RoleName"='Admin') THEN 1
          -- An assigned job profile is the complete permission source for that user.
+         -- The legacy Admin role no longer bypasses the approved job-profile model.
          -- Per-user grants/denials and ordinary roles cannot expand or override it.
          WHEN u."JobProfileId" IS NOT NULL THEN
               CASE WHEN EXISTS (
