@@ -2,12 +2,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import get_current_user, write_audit
-from ..models import User, UserAvatar, Company, Role, UserRole, RolePermission, Permission, Screen, Section, UserPermission, JobProfile, JobProfilePermission, Project
+from ..models import User, UserAvatar, Company, Role, UserRole, RolePermission, Permission, Screen, Section, UserPermission, JobProfile, JobProfilePermission, Project, UserDeletionRequest
 from ..security import hash_password, validate_password
 
 router = APIRouter(prefix="/admin", tags=["Users & Roles"])
@@ -217,7 +217,7 @@ def list_users(_: User = Depends(admin_user), db: Session = Depends(get_db)):
     out=[]
     for u in users:
         roles=db.scalars(select(Role.role_name).join(UserRole, UserRole.role_id==Role.role_id).where(UserRole.user_id==u.user_id)).all()
-        out.append({"user_id":u.user_id,"username":u.username,"full_name":u.full_name,"is_active":u.is_active,
+        out.append({"user_id":u.user_id,"username":u.username,"full_name":u.full_name,"is_active":u.is_active,"is_deleted":u.is_deleted,
                     "avatar_updated_at":u.avatar_updated_at,
                     "failed_login_count":u.failed_login_count,"locked_until":u.locked_until,"roles":roles,
                     "role_ids":db.scalars(select(UserRole.role_id).where(UserRole.user_id==u.user_id)).all(),
@@ -251,10 +251,14 @@ def create_user(body: UserCreate, actor: User = Depends(admin_user), db: Session
 def update_user(user_id: int, body: UserUpdate, actor: User = Depends(admin_user), db: Session = Depends(get_db)):
     u=db.get(User,user_id)
     if not u: raise HTTPException(404,"المستخدم غير موجود")
+    if u.is_deleted: raise HTTPException(409,"هذا المستخدم مؤرشف ولا يمكن تعديله")
     if u.user_id == actor.user_id and body.is_active is False: raise HTTPException(400,"لا يمكنك تعطيل حسابك الحالي")
     if body.full_name is not None: u.full_name=body.full_name.strip()
     if body.is_active is not None:
-        if u.is_active and not body.is_active: u.token_version += 1
+        if u.is_active and not body.is_active:
+            if _active_admin_count(db, excluding_user_id=u.user_id) == 0 and _is_admin(db, u.user_id):
+                raise HTTPException(400,"لا يمكن تعطيل آخر مدير نظام نشط")
+            u.token_version += 1
         u.is_active=body.is_active
     if body.password: u.password_hash=hash_password(body.password); u.failed_login_count=0; u.locked_until=None
     if body.password: u.token_version += 1
@@ -278,10 +282,122 @@ def update_user(user_id: int, body: UserUpdate, actor: User = Depends(admin_user
         roles=db.scalars(select(Role).where(Role.role_id.in_(body.role_ids))).all() if body.role_ids else []
         if len(roles)!=len(set(body.role_ids)): raise HTTPException(422,"يوجد دور غير صحيح")
         if u.user_id==actor.user_id and not any(r.role_name=="Admin" for r in roles): raise HTTPException(400,"لا يمكنك إزالة دور Admin من حسابك الحالي")
+        if u.is_active and _is_admin(db, u.user_id) and not any(r.role_name == "Admin" for r in roles) and _active_admin_count(
+                db, excluding_user_id=u.user_id) == 0:
+            raise HTTPException(400, "لا يمكن إزالة دور Admin من آخر مدير نظام نشط")
         db.execute(delete(UserRole).where(UserRole.user_id==u.user_id))
         for r in roles: db.add(UserRole(user_id=u.user_id,role_id=r.role_id))
     write_audit(db,actor.user_id,"Update","Users",u.user_id,new={"is_active":u.is_active})
     db.commit(); return {"ok":True}
+
+
+def _is_admin(db: Session, user_id: int) -> bool:
+    return bool(db.scalar(select(UserRole.user_id).join(Role, Role.role_id == UserRole.role_id)
+                          .where(UserRole.user_id == user_id, Role.role_name == "Admin")))
+
+
+def _active_admin_count(db: Session, excluding_user_id: int | None = None) -> int:
+    query = select(func.count(User.user_id)).join(UserRole, UserRole.user_id == User.user_id).join(
+        Role, Role.role_id == UserRole.role_id).where(Role.role_name == "Admin", User.is_active.is_(True),
+                                                     User.is_deleted.is_(False))
+    if excluding_user_id is not None:
+        query = query.where(User.user_id != excluding_user_id)
+    return int(db.scalar(query) or 0)
+
+
+class UserDeletionRequestCreate(BaseModel):
+    reason: str = Field(min_length=5, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 5:
+            raise ValueError("سبب طلب الحذف يجب ألا يقل عن 5 أحرف")
+        return value
+
+
+class UserDeletionDecision(BaseModel):
+    approve: bool
+    note: str | None = Field(default=None, max_length=500)
+
+
+@router.get("/user-deletion-requests")
+def list_user_deletion_requests(actor: User = Depends(admin_user), db: Session = Depends(get_db)):
+    # Use explicit aliases because both target and requester reference Users.
+    from sqlalchemy.orm import aliased
+    target = aliased(User)
+    requester = aliased(User)
+    rows = db.execute(select(UserDeletionRequest, target, requester)
+        .join(target, target.user_id == UserDeletionRequest.user_id)
+        .join(requester, requester.user_id == UserDeletionRequest.requested_by)
+        .where(UserDeletionRequest.status == "Pending")
+        .order_by(UserDeletionRequest.requested_at)).all()
+    return [{"request_id": req.request_id, "user_id": target.user_id, "username": target.username,
+             "full_name": target.full_name, "requested_by": requester.full_name,
+             "requested_by_user_id": requester.user_id, "reason": req.reason,
+             "requested_at": req.requested_at, "can_decide": req.requested_by != actor.user_id}
+            for req, target, requester in rows]
+
+
+@router.post("/users/{user_id}/deletion-requests", status_code=201)
+def request_user_deletion(user_id: int, body: UserDeletionRequestCreate,
+                          actor: User = Depends(admin_user), db: Session = Depends(get_db)):
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(404, "المستخدم غير موجود")
+    if target.user_id == actor.user_id:
+        raise HTTPException(400, "لا يمكنك طلب حذف حسابك الحالي")
+    if target.is_deleted:
+        raise HTTPException(409, "المستخدم مؤرشف بالفعل")
+    pending = db.scalar(select(UserDeletionRequest.request_id).where(
+        UserDeletionRequest.user_id == user_id, UserDeletionRequest.status == "Pending"))
+    if pending:
+        raise HTTPException(409, "يوجد طلب حذف معلق لهذا المستخدم")
+    req = UserDeletionRequest(user_id=user_id, requested_by=actor.user_id,
+                              reason=body.reason.strip(), status="Pending")
+    db.add(req); db.flush()
+    write_audit(db, actor.user_id, "RequestDelete", "Users", user_id,
+                new={"request_id": req.request_id, "reason": req.reason})
+    db.commit()
+    return {"request_id": req.request_id, "status": req.status}
+
+
+@router.post("/user-deletion-requests/{request_id}/decision")
+def decide_user_deletion(request_id: int, body: UserDeletionDecision,
+                         actor: User = Depends(admin_user), db: Session = Depends(get_db)):
+    req = db.scalar(select(UserDeletionRequest).where(
+        UserDeletionRequest.request_id == request_id).with_for_update())
+    if req is None:
+        raise HTTPException(404, "طلب الحذف غير موجود")
+    if req.status != "Pending":
+        raise HTTPException(409, "تم اتخاذ قرار في هذا الطلب بالفعل")
+    if req.requested_by == actor.user_id:
+        raise HTTPException(403, "يجب أن يعتمد الطلب مسؤول آخر غير مقدمه")
+    target = db.scalar(select(User).where(User.user_id == req.user_id).with_for_update())
+    if target is None or target.is_deleted:
+        raise HTTPException(409, "المستخدم غير متاح للحذف")
+    old = {"is_active": target.is_active, "is_deleted": target.is_deleted}
+    if body.approve:
+        if _is_admin(db, target.user_id) and target.is_active and _active_admin_count(
+                db, excluding_user_id=target.user_id) == 0:
+            raise HTTPException(400, "لا يمكن أرشفة آخر مدير نظام نشط")
+        target.is_active = False
+        target.is_deleted = True
+        target.token_version += 1
+        req.status = "Approved"
+        action = "ApproveDelete"
+    else:
+        req.status = "Rejected"
+        action = "RejectDelete"
+    req.decided_by = actor.user_id
+    req.decision_note = (body.note or "").strip() or None
+    req.decided_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    write_audit(db, actor.user_id, action, "Users", target.user_id, old,
+                {"is_active": target.is_active, "is_deleted": target.is_deleted,
+                 "request_id": req.request_id, "decision_note": req.decision_note})
+    db.commit()
+    return {"ok": True, "status": req.status}
 
 
 def _image_type(data: bytes) -> str | None:
