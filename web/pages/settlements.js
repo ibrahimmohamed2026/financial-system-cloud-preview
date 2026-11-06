@@ -81,7 +81,25 @@ const printDoc=async(kind,x)=>{const w=openPrintWindow();if(!w){toast(tr('تعذ
  $('#tech-rows').querySelectorAll('[data-print-tech]').forEach(b=>b.onclick=safe(async()=>printDoc('tech',technical.find(x=>String(x.estimate_id)===b.dataset.printTech))));
  $('#fin-rows').querySelectorAll('[data-act-fin]').forEach(b=>b.onclick=()=>safe(()=>{const x=financial.find(v=>String(v.settlement_id)===b.dataset.actFin);return showActivity(api,{settlement_id:x.settlement_id},`مستخلص مالي ${x.settlement_no}`)})());
  $('#fin-rows').querySelectorAll('[data-print-fin]').forEach(b=>b.onclick=safe(async()=>printDoc('fin',financial.find(x=>String(x.settlement_id)===b.dataset.printFin))));
- $('#fin-rows').querySelectorAll('[data-fin-approve]').forEach(b=>b.onclick=()=>safe(async()=>{await api(`/api/contracts-erp/settlements/${b.dataset.finApprove}/financial-approve`,{method:'POST'});toast(tr('تمت المراجعة المالية وإحالة المستخلص لاعتماد المدير','Financial review completed; statement sent for manager approval'));await load();})());
+ $('#fin-rows').querySelectorAll('[data-fin-approve]').forEach(b=>b.onclick=()=>safe(async()=>{
+   const x=financial.find(v=>String(v.settlement_id)===b.dataset.finApprove);if(!x)return;
+   const detail=await api('/api/contracts-erp/settlements/'+x.settlement_id+'/items'),lines=detail.items||[];
+   const dlg=document.createElement('dialog');dlg.className='st-dialog';
+   const checks=[['quantities_verified','مطابقة الكميات مع المستخلص الفني ومحاضر القياس'],['unit_prices_verified','مطابقة أسعار الوحدات مع العقد والملاحق المعتمدة'],['work_value_verified','مطابقة إجمالي قيمة الأعمال مع مجموع البنود'],['deductions_verified','مراجعة كل خصم وقيمته وحدوده واتفاقه بالعقد'],['vat_verified','مراجعة ضريبة القيمة المضافة'],['net_amount_verified','مطابقة صافي المستحق بعد الخصومات والضريبة'],['ledger_accounts_verified','التحقق من الحسابات المحاسبية للخصومات'],['prior_settlements_verified','مراجعة المستخلصات السابقة والتراكمي والمتبقي'],['supporting_documents_checked','فحص المستندات والمرفقات المؤيدة']];
+   const lineHtml=lines.map(i=>'<tr><td>'+esc(i.item_no)+' — '+esc(i.description)+'</td><td class="num">'+money(i.quantity)+'</td><td class="num">'+money(i.unit_price)+'</td><td class="num">'+money(i.amount)+'</td><td><input type="checkbox" data-fin-line="'+i.settlement_item_id+'"></td><td><input type="text" maxlength="2000" data-fin-note="'+i.settlement_item_id+'" placeholder="ملاحظة (اختياري)"></td></tr>').join('');
+   const checkHtml=checks.map(v=>'<label style="display:block;margin:8px 0"><input type="checkbox" data-fin-check="'+v[0]+'"> '+v[1]+'</label>').join('');
+   dlg.innerHTML='<form method="dialog"><h3>مراجعة مالية فعلية — '+esc(x.settlement_no)+'</h3><p>لن ينتقل المستخلص للمدير إلا بعد فحص جميع البنود وتأكيد عناصر المراجعة. المراجع المالي يجب أن يكون مختلفاً عن مُعدّ المستخلص.</p><h4>بنود المستخلص</h4><div class="tbl-wrap"><table><thead><tr><th>البند</th><th>الكمية</th><th>سعر الوحدة</th><th>القيمة</th><th>تم الفحص</th><th>ملاحظة</th></tr></thead><tbody>'+(lineHtml||'<tr><td colspan="6">لا توجد بنود تفصيلية؛ راجع المستندات والقيم الإجمالية.</td></tr>')+'</tbody></table></div><h4>قائمة التحقق الإلزامية</h4><div>'+checkHtml+'</div><label>ملاحظات المراجع المالي<textarea name="review_notes" rows="3" maxlength="4000"></textarea></label><div class="err" data-error></div><div class="actions"><button class="btn primary" value="save">حفظ المراجعة وإحالة للمدير</button><button class="btn" value="cancel" formnovalidate>إلغاء</button></div></form>';
+   document.body.appendChild(dlg);const form=dlg.querySelector('form');
+   form.onsubmit=async ev=>{if(ev.submitter?.value!=='save')return;ev.preventDefault();
+     const itemReviews=[...dlg.querySelectorAll('[data-fin-line]')].map(input=>({settlement_item_id:Number(input.dataset.finLine),verified:input.checked,review_note:dlg.querySelector('[data-fin-note="'+input.dataset.finLine+'"]')?.value||null}));
+     const reviewChecks=Object.fromEntries([...dlg.querySelectorAll('[data-fin-check]')].map(input=>[input.dataset.finCheck,input.checked]));
+     if(itemReviews.some(i=>!i.verified)||Object.values(reviewChecks).some(v=>!v)){form.querySelector('[data-error]').textContent='يجب تأكيد فحص كل بند وجميع عناصر قائمة المراجعة.';return;}
+     try{await api('/api/contracts-erp/settlements/'+x.settlement_id+'/financial-approve',{method:'POST',json:{checks:reviewChecks,items:itemReviews,notes:form.review_notes.value||null}});
+       toast('تم حفظ المراجعة المالية التفصيلية وإحالة المستخلص لاعتماد المدير.');dlg.close();await load();
+     }catch(e){form.querySelector('[data-error]').textContent=e.detail?.message||e.message||'تعذر حفظ المراجعة';}
+   };
+   dlg.addEventListener('close',()=>dlg.remove());dlg.showModal();
+ }));
  $('#fin-rows').querySelectorAll('[data-manager-approve]').forEach(b=>b.onclick=()=>safe(async()=>{await api(`/api/contracts-erp/settlements/${b.dataset.managerApprove}/manager-approve`,{method:'POST'});toast(tr('تم اعتماد المدير؛ أصبح المستخلص جاهزًا للترحيل المحاسبي','Manager approval completed; statement is ready for accounting posting'));await load();})());
  $('#fin-rows').querySelectorAll('[data-post]').forEach(b=>b.onclick=()=>safe(async()=>{const r=await api(`/api/contracts-erp/settlements/${b.dataset.post}/post`,{method:'POST'});toast(`تم الترحيل للقيد ${r.entry_no}`);await load();})());
  };
