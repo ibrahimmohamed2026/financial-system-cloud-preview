@@ -200,6 +200,7 @@ def ensure_schema(engine: Engine) -> None:
         with engine.begin() as conn:
             conn.execute(text('UPDATE "Users" SET "TokenVersion"=0 WHERE "TokenVersion" IS NULL'))
             conn.execute(text("UPDATE \"Users\" SET \"PreferredLanguage\"='ar' WHERE \"PreferredLanguage\" IS NULL OR \"PreferredLanguage\" NOT IN ('ar', 'en')"))
+            conn.execute(text('UPDATE "Users" SET "IsDeleted"=FALSE WHERE "IsDeleted" IS NULL'))
     for table_name, column_name, sql_type in (
         ("Contracts", "RequestId", "INTEGER NULL"),
         ("ContractItems", "CatalogItemId", "INTEGER NULL"),
