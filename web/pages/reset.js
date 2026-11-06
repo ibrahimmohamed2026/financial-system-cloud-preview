@@ -23,11 +23,18 @@ export async function render(main, { api }) {
       <div id="confirmbox" hidden style="margin-top:16px;border-top:1px solid var(--line);padding-top:16px">
         <h4>${tr("التأكيد النهائي","Final confirmation")}</h4>
         <p class="muted">${tr("سيتم إنشاء نسخة احتياطية كاملة تلقائيًا أولاً. إذا فشلت النسخة فلن يتم حذف أي بيانات.","A complete backup is created first. If backup creation fails, no data is deleted.")}</p>
-        <div class="formgrid">
-          <label>${tr("كلمة مرور المدير","Administrator password")}<input id="resetpassword" type="password" autocomplete="current-password"></label>
-          <label>${tr("اكتب RESET للتأكيد","Type RESET to confirm")}<input id="resetphrase" dir="ltr" autocomplete="off"></label>
+        <div class="formgrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;align-items:end">
+          <div style="display:grid;gap:8px;min-width:0">
+            <label for="resetpassword" style="display:block;font-weight:600">${tr("كلمة مرور المدير","Administrator password")}</label>
+            <input id="resetpassword" name="resetpassword" type="password" autocomplete="current-password" placeholder="${tr("أدخل كلمة المرور","Enter password")}" style="display:block;width:100%;box-sizing:border-box">
+          </div>
+          <div style="display:grid;gap:8px;min-width:0">
+            <label for="resetphrase" style="display:block;font-weight:600">${tr("تأكيد التنفيذ","Execution confirmation")}</label>
+            <input id="resetphrase" name="resetphrase" type="text" dir="ltr" autocomplete="off" spellcheck="false" placeholder="RESET" aria-label="Type RESET exactly" style="display:block;width:100%;box-sizing:border-box">
+            <small class="muted">${tr("اكتب RESET بالحروف الإنجليزية الكبيرة","Type RESET in uppercase English letters")}</small>
+          </div>
         </div>
-        <button class="btn danger" id="execute">${tr("تنفيذ إعادة الضبط الآن","Execute reset now")}</button>
+        <button class="btn danger" id="execute" type="button" style="margin-top:16px">${tr("تنفيذ إعادة الضبط الآن","Execute reset now")}</button>
       </div>
       <div id="reseterr" class="err" style="margin-top:12px"></div>
     </div>
