@@ -33,7 +33,7 @@ docker run --rm \
   --env-file "$APP_DIR/.env" \
   -e BACKUP_FILE="/backups/$(basename "$BACKUP_FILE")" \
   -v "$BACKUP_DIR:/backups" \
-  postgres:17-alpine \
+  postgres:18-alpine \
   sh -ec 'test -n "$DATABASE_URL"; pg_dump "$DATABASE_URL" --format=custom --no-owner --no-acl -f "$BACKUP_FILE"; pg_restore --list "$BACKUP_FILE" >/dev/null'
 chmod 600 "$BACKUP_FILE"
 test -s "$BACKUP_FILE"
