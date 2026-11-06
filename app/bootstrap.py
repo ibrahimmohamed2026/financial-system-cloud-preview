@@ -268,6 +268,7 @@ def create_admin(db: Session, username: str, password: str, full_name: str = "Sy
 
 if __name__ == "__main__":
     from .database import SessionLocal
+    from .security import validate_password
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--username", default="admin")
@@ -285,6 +286,7 @@ if __name__ == "__main__":
     with SessionLocal() as session:
         seed_screens(session)
         sync_permissions(session)
+        seed_job_profiles(session)
         create_admin(session, args.username, pwd, args.full_name)
         if args.year:
             ensure_fiscal_year(session, args.year, args.company)
