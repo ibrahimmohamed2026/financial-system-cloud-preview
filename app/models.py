@@ -195,6 +195,8 @@ class TreasuryTransaction(Base):
     transaction_date: Mapped[date] = C("TransactionDate", Date)
     inflow: Mapped[Decimal] = C("Inflow", Numeric(18, 2), default=Decimal("0"))
     outflow: Mapped[Decimal] = C("Outflow", Numeric(18, 2), default=Decimal("0"))
+    exchange_rate: Mapped[Optional[Decimal]] = C("ExchangeRate", Numeric(18, 6), nullable=True)
+    counterpart_account_id: Mapped[Optional[int]] = C("CounterpartAccountId", ForeignKey("ChartOfAccounts.AccountId"), nullable=True)
     description: Mapped[Optional[str]] = C("Description", Unicode(500), nullable=True)
     voucher_no: Mapped[Optional[str]] = C("VoucherNo", Unicode(50), nullable=True)
     status: Mapped[Optional[str]] = C("Status", Unicode(30), nullable=True)
