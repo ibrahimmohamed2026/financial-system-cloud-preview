@@ -457,6 +457,7 @@ class Contract(Base):
     start_date: Mapped[Optional[date]] = C("StartDate", Date, nullable=True)
     end_date: Mapped[Optional[date]] = C("EndDate", Date, nullable=True)
     original_value: Mapped[Decimal] = C("OriginalValue", Numeric(18, 2), default=Decimal("0"))
+    agreed_statement_count: Mapped[Optional[int]] = C("AgreedStatementCount", Integer, nullable=True)
     status: Mapped[str] = C("Status", Unicode(30), default="Active")
     notes: Mapped[Optional[str]] = C("Notes", UnicodeText, nullable=True)
     created_by: Mapped[Optional[int]] = C("CreatedBy", ForeignKey("Users.UserId"), nullable=True)
