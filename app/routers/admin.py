@@ -302,8 +302,8 @@ def update_user(user_id: int, body: UserUpdate, actor: User = Depends(admin_user
         u.job_profile_id = body.job_profile_id
         # الوظيفة هي مصدر الصلاحيات الوحيد؛ لا نحتفظ بأي أدوار قديمة بجانبها.
         db.execute(delete(UserRole).where(UserRole.user_id == u.user_id))
-    if body.project_id is not None:
-        if db.get(Project, body.project_id) is None:
+    if "project_id" in body.model_fields_set:
+        if body.project_id is not None and db.get(Project, body.project_id) is None:
             raise HTTPException(422, "المشروع أو الموقع غير موجود")
         u.project_id = body.project_id
     if body.role_ids is not None:
