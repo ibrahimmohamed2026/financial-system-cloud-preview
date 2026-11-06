@@ -282,6 +282,9 @@ def update_user(user_id: int, body: UserUpdate, actor: User = Depends(admin_user
         roles=db.scalars(select(Role).where(Role.role_id.in_(body.role_ids))).all() if body.role_ids else []
         if len(roles)!=len(set(body.role_ids)): raise HTTPException(422,"يوجد دور غير صحيح")
         if u.user_id==actor.user_id and not any(r.role_name=="Admin" for r in roles): raise HTTPException(400,"لا يمكنك إزالة دور Admin من حسابك الحالي")
+        if u.is_active and _is_admin(db, u.user_id) and not any(r.role_name == "Admin" for r in roles) and _active_admin_count(
+                db, excluding_user_id=u.user_id) == 0:
+            raise HTTPException(400, "لا يمكن إزالة دور Admin من آخر مدير نظام نشط")
         db.execute(delete(UserRole).where(UserRole.user_id==u.user_id))
         for r in roles: db.add(UserRole(user_id=u.user_id,role_id=r.role_id))
     write_audit(db,actor.user_id,"Update","Users",u.user_id,new={"is_active":u.is_active})
@@ -304,6 +307,14 @@ def _active_admin_count(db: Session, excluding_user_id: int | None = None) -> in
 
 class UserDeletionRequestCreate(BaseModel):
     reason: str = Field(min_length=5, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 5:
+            raise ValueError("سبب طلب الحذف يجب ألا يقل عن 5 أحرف")
+        return value
 
 
 class UserDeletionDecision(BaseModel):
@@ -379,7 +390,7 @@ def decide_user_deletion(request_id: int, body: UserDeletionDecision,
     else:
         req.status = "Rejected"
         action = "RejectDelete"
-    req.approved_by = actor.user_id
+    req.decided_by = actor.user_id
     req.decision_note = (body.note or "").strip() or None
     req.decided_at = datetime.now(timezone.utc).replace(tzinfo=None)
     write_audit(db, actor.user_id, action, "Users", target.user_id, old,
