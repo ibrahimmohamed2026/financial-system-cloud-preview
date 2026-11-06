@@ -148,9 +148,12 @@ def sync_permissions(db: Session) -> None:
     if manager_view and settlement_view:
         settlement_view_roles = set(db.scalars(select(RolePermission.role_id).where(
             RolePermission.permission_id == settlement_view)))
+        manager_action = permission_ids.get(("ContractSettlements", "ManagerApprove"))
+        manager_roles = set(db.scalars(select(RolePermission.role_id).where(
+            RolePermission.permission_id == manager_action))) if manager_action else set()
         manager_view_roles = set(db.scalars(select(RolePermission.role_id).where(
             RolePermission.permission_id == manager_view)))
-        for role_id in settlement_view_roles - manager_view_roles:
+        for role_id in (settlement_view_roles | manager_roles) - manager_view_roles:
             grant(role_id, manager_view)
 
     # Preserve existing settlement approvers while introducing finance then manager approval.
