@@ -72,7 +72,7 @@ def seed_screens(db: Session) -> None:
         if existing_screen is None:
             db.add(Screen(section_id=section.section_id, screen_code=item["code"], title_en=item["title_en"],
                           title_ar=item["title_ar"], route=item["route"], sort_order=item["sort_order"]))
-        elif item["code"] in ("ContractRequests", "ContractSettlements", "PurchaseCycle", "FinancialChecks", "AnalyticsReports", "Counterparties"):
+        elif item["code"] in ("CashUsd", "ContractRequests", "ContractSettlements", "PurchaseCycle", "FinancialChecks", "AnalyticsReports", "Counterparties"):
             # Keep legacy database screen routes synchronized with the implemented frontend routes.
             existing_screen.route = item["route"]
             existing_screen.title_ar = item["title_ar"]
