@@ -106,6 +106,8 @@ def _out(db: Session, e: JournalEntry, with_lines: bool = False, lang: str = "ar
         out["lines"] = [{"line_no": d.line_no, "account_id": d.account_id, "account_code": code,
                          "account_name": (name_en if lang == "en" and name_en else name), "project_id": d.project_id, "project_name": (project_en if lang == "en" and project_en else pname),
                          "debit_amount": money(d.debit_amount), "credit_amount": money(d.credit_amount),
+                         "fcy_amount": money(d.fcy_amount) if d.fcy_amount is not None else None,
+                         "exchange_rate": str(d.exchange_rate) if d.exchange_rate is not None else None,
                          "description": d.description} for d, code, name, name_en, pname, project_en in rows]
     return out
 
