@@ -132,7 +132,8 @@ def create_account(screen_code: str, body: AccountIn,
     values = body.model_dump()
     values["currency_code"] = expected_currency
     if expected_type == "Cash":
-        values["bank_account_number"] = None\n    a = TreasuryAccount(**values, screen_code=screen_code)
+        values["bank_account_number"] = None
+    a = TreasuryAccount(**values, screen_code=screen_code)
     db.add(a)
     db.flush()
     write_audit(db, user.user_id, "Create", "TreasuryAccounts", a.treasury_account_id, None, body.model_dump())
