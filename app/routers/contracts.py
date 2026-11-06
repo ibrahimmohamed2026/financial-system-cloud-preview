@@ -340,6 +340,11 @@ def add_addendum_line(contract_id: int, addendum_id: int, body: AddendumLineIn,
                     ContractSettlementItem.contract_item_id == target.item_id)) or 0
             if Decimal(str(target.quantity)) + body.quantity_delta < Decimal(str(used_technical)) + Decimal(str(used_financial)):
                 raise HTTPException(409, "التخفيض سيجعل كمية العقد أقل من الكميات التي سبق اعتمادها في المستخلصات")
+        duplicate = db.scalar(select(ContractAddendumLine.addendum_line_id).where(
+            ContractAddendumLine.addendum_id == addendum_id,
+            ContractAddendumLine.target_item_id == target.item_id).limit(1))
+        if duplicate:
+            raise HTTPException(409, "لا يمكن تكرار تعديل نفس بند العقد داخل الملحق؛ اجمع التغيير في سطر واحد")
         catalog_item_id = target.catalog_item_id
         account_id = target.account_id
         project_id = body.project_id if body.project_id is not None else target.project_id
@@ -360,7 +365,9 @@ def add_addendum_line(contract_id: int, addendum_id: int, body: AddendumLineIn,
     line = ContractAddendumLine(addendum_id=addendum_id, target_item_id=target.item_id if target else None,
         catalog_item_id=catalog_item_id, account_id=account_id, project_id=project_id, item_no=item_no,
         description=description, unit=unit, quantity_delta=body.quantity_delta, unit_price=body.unit_price,
-        amount_change=(body.quantity_delta * body.unit_price).quantize(Decimal("0.01")))
+        amount_change=(((body.unit_price - Decimal(str(target.unit_price))) * Decimal(str(target.quantity))
+            + body.quantity_delta * body.unit_price) if target else
+            (body.quantity_delta * body.unit_price)).quantize(Decimal("0.01")))
     db.add(line)
     write_audit(db, user.user_id, "AddBOQLine", "ContractAddendums", addendum_id,
         new={"target_item_id": line.target_item_id, "item_no": item_no, "quantity_delta": str(line.quantity_delta),
@@ -419,6 +426,19 @@ def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(re
                 ContractItem.contract_id == contract_id).with_for_update())
             if not item: raise HTTPException(409, "البند الأصلي المرتبط بالملحق لم يعد موجودًا")
             next_quantity = Decimal(str(item.quantity)) + Decimal(str(line.quantity_delta))
+            used_technical = db.scalar(select(func.coalesce(func.sum(func.coalesce(
+                TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)), 0))
+                .join(TechnicalSettlementEstimate, TechnicalSettlementEstimate.estimate_id == TechnicalSettlementEstimateItem.estimate_id)
+                .where(TechnicalSettlementEstimate.contract_id == contract_id,
+                    TechnicalSettlementEstimate.status == "TechnicallyApproved",
+                    TechnicalSettlementEstimateItem.contract_item_id == item.item_id)) or 0
+            used_financial = db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity), 0))
+                .join(ContractSettlement, ContractSettlement.settlement_id == ContractSettlementItem.settlement_id)
+                .where(ContractSettlement.contract_id == contract_id,
+                    ContractSettlement.status.in_(("Approved", "Posted", "PendingFinalApproval")),
+                    ContractSettlementItem.contract_item_id == item.item_id)) or 0
+            if next_quantity < Decimal(str(used_technical)) + Decimal(str(used_financial)):
+                raise HTTPException(409, f"التعديل يجعل كمية البند {item.item_no} أقل من الكميات المعتمدة في المستخلصات")
             if next_quantity < 0: raise HTTPException(409, f"التعديل يجعل كمية البند {item.item_no} سالبة")
             item.quantity = next_quantity
             item.unit_price = line.unit_price
