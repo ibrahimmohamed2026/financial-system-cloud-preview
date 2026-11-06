@@ -217,7 +217,7 @@ function navHtml(path) {
   if (auth.can("AnalyticsReports", "View") && !used.has("/reports/financial-control")) {
     h += renderGroup(tr("التقارير والرقابة", "Reports & Control"), "chart", [{ route: "/reports/financial-control", title_ar: "لوحة الرقابة المالية", title_en: "Financial Control" }]);
   }
-  if (IS_ADMIN) h += `<div class="nav-sep"></div>` + renderGroup(tr("إدارة النظام", "System Administration"), "users", ADMIN_ITEMS.map(a => ({ ...a, title_ar: a.title, title_en: a.title_en })));
+  if (IS_ADMIN) h += `<div class="nav-sep"></div>` + renderGroup(tr("إدارة النظام", "System Administration"), "users", ADMIN_ITEMS.filter(a => a.route !== "/admin/reset").map(a => ({ ...a, title_ar: a.title, title_en: a.title_en })));\n  // Keep the reset entry discoverable; the reset API still enforces IT system-admin authorization.\n  h += renderGroup(tr("إدارة النظام", "System Administration"), "users", [{ route: "/admin/reset", title_ar: "إعادة ضبط البيانات", title_en: "Reset System Data" }]);
   return h;
 }
 
