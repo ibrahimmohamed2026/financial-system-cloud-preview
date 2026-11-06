@@ -591,14 +591,14 @@ def manager_settlement_decision(settlement_id: int, body: ManagerSettlementDecis
         raise HTTPException(403, "يجب أن يكون قرار المدير من مستخدم مختلف عن المراجع المالي")
     if body.decision in ("return", "reject") and not (body.notes or "").strip():
         raise HTTPException(422, "يجب كتابة سبب الإرجاع أو الرفض")
+    # Route final approval through the hardened legacy manager gate so contract,
+    # reserved quantity, and amended contract value validations cannot be bypassed.
+    if body.decision == "approve":
+        return manager_approve_settlement(settlement_id, user, db)
+
     old = {"status": x.status, "financial_approved_by": x.financial_approved_by,
            "manager_approved_by": x.manager_approved_by, "manager_approved_at": x.manager_approved_at}
-    if body.decision == "approve":
-        x.manager_approved_by = user.user_id
-        x.manager_approved_at = datetime.utcnow()
-        x.status = "Approved"
-        action = "ManagerApprove"
-    elif body.decision == "return":
+    if body.decision == "return":
         # Re-open only the accounting review stage; no journal can exist at this point.
         x.status = "PendingApproval"
         x.financial_approved_by = None
