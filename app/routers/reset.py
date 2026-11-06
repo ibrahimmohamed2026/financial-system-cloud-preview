@@ -67,7 +67,7 @@ def preview(mode: str, _: User = Depends(_admin), db: Session = Depends(get_db))
             (Account.opening_debit != 0) | (Account.opening_credit != 0))) or 0)
     return {"mode": mode, "tables": result, "total_rows": sum(x["count"] for x in result),
             "accounts_opening_balances_to_zero": opening_count,
-            "protected": ["دليل الحسابات والتصنيفات", "الشركة والسنة المالية", "المستخدمون والصلاحيات", "سجل المراجعة", "المشروعات", "ربط الخزائن بالحسابات", "قوالب الشيكات"]}
+            "protected": ["دليل الحسابات والتصنيفات", "الشركة والسنة المالية", "كل المستخدمين والصلاحيات والوظائف", "سجل المراجعة", "المشروعات", "ربط الخزائن بالحسابات", "قوالب الشيكات"]}
 
 class ResetRequest(BaseModel):
     mode: str = Field(pattern="^(operational|full)$")
