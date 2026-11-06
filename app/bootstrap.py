@@ -158,7 +158,7 @@ def sync_permissions(db: Session) -> None:
 
     # Preserve existing settlement approvers while introducing finance then manager approval.
     settlement_approve = permission_ids.get(("ContractSettlements", "Approve"))
-    settlement_stage_ids = [permission_ids.get(("ContractSettlements", action)) for action in ("FinancialApprove", "ManagerApprove")]
+    settlement_stage_ids = [permission_ids.get(("ContractSettlements", action)) for action in ("EngineeringApprove", "FinancialApprove", "ManagerApprove")]
     if settlement_approve and all(settlement_stage_ids):
         legacy_settlement_roles = set(db.scalars(select(RolePermission.role_id).where(RolePermission.permission_id == settlement_approve)))
         for role_id in legacy_settlement_roles:
