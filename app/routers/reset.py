@@ -52,9 +52,10 @@ def _admin(user: User = Depends(get_current_user), db: Session = Depends(get_db)
         raise HTTPException(403, "إعادة ضبط البيانات متاحة لوظيفة مسؤول النظام IT فقط")
     return user
 
-def _tables(mode: str):
-    if mode != "full":
-        raise HTTPException(422, "المتاح حاليًا هو التصفير الشامل فقط")
+def _tables(mode: str = "full"):
+    # Compatibility: older cached screens may still send "operational".
+    # This installation now has one agreed reset operation: complete reset.
+    mode = "full"
     names = OPERATIONAL_TABLES | FULL_EXTRA_TABLES
     metadata_names = {t.name for t in Base.metadata.sorted_tables}
     missing = names - metadata_names
@@ -70,7 +71,9 @@ def _tables(mode: str):
     return [t for t in reversed(Base.metadata.sorted_tables) if t.name in names]
 
 @router.get("/preview")
-def preview(mode: str, _: User = Depends(_admin), db: Session = Depends(get_db)):
+def preview(mode: str = "full", _: User = Depends(_admin), db: Session = Depends(get_db)):
+    # Ignore legacy mode values from stale browser caches; always preview full reset.
+    mode = "full"
     tables = _tables(mode)
     result = []
     for table in tables:
@@ -87,19 +90,21 @@ def preview(mode: str, _: User = Depends(_admin), db: Session = Depends(get_db))
             "protected": ["دليل الحسابات والتصنيفات", "الشركة والسنة المالية", "كل المستخدمين والصلاحيات والوظائف", "سجل المراجعة", "المشروعات", "تعريفات الخزائن والبنوك وربطها المحاسبي", "أسعار الصرف", "قوالب الشيكات"]}
 
 class ResetRequest(BaseModel):
-    mode: str = Field(pattern="^full$")
+    mode: str = Field(default="full")
     confirm_text: str
     password: str = Field(min_length=1, max_length=72)
 
 @router.post("/execute")
 def execute_reset(body: ResetRequest, user: User = Depends(_admin), db: Session = Depends(get_db)):
+    # Compatibility with an older cached client: always execute the approved full mode.
+    mode = "full"
     if body.confirm_text != "RESET":
         raise HTTPException(400, "اكتب RESET للتأكيد النهائي")
     current = db.get(User, user.user_id)
     if not current or not verify_password(body.password, current.password_hash):
         raise HTTPException(403, "كلمة مرور المدير غير صحيحة")
 
-    tables = _tables(body.mode)
+    tables = _tables(mode)
     # A complete logical backup (database + application files) must succeed first.
     try:
         backup_path = backup_service.create_backup("pre_restore")
@@ -116,21 +121,21 @@ def execute_reset(body: ResetRequest, user: User = Depends(_admin), db: Session 
             result = db.execute(delete(table))
             deleted[table.name] = int(result.rowcount or 0)
         zeroed_accounts = 0
-        if body.mode == "full":
+        if mode == "full":
             rows = db.execute(
                 Account.__table__.update()
                 .where((Account.opening_debit != 0) | (Account.opening_credit != 0))
                 .values(opening_debit=0, opening_credit=0)
             )
             zeroed_accounts = int(rows.rowcount or 0)
-        write_audit(db, user.user_id, "SystemReset", "System", body.mode,
-                    new={"mode": body.mode, "deleted": deleted,
+        write_audit(db, user.user_id, "SystemReset", "System", mode,
+                    new={"mode": mode, "deleted": deleted,
                          "opening_balances_zeroed": zeroed_accounts,
                          "backup": backup_path.name})
         db.commit()
     except Exception as exc:
         db.rollback()
         raise HTTPException(500, f"فشل التصفير وتم التراجع عن التغييرات. النسخة الاحتياطية: {backup_path.name}") from exc
-    return {"ok": True, "mode": body.mode, "deleted": deleted,
+    return {"ok": True, "mode": mode, "deleted": deleted,
             "opening_balances_zeroed": zeroed_accounts, "backup": backup_path.name,
             "message": "تمت إعادة ضبط البيانات بنجاح"}
