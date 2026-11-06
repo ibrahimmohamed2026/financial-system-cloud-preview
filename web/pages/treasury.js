@@ -26,12 +26,23 @@ export async function render(main, { api, auth, route }) {
   };
   const form = async t => {
     const initialDirection = t ? (+t.inflow > 0 ? "inflow" : "outflow") : "inflow";
-    const initialCounterparts = acc.currency_code === "USD"
-      ? await api(base + "/counterpart-accounts?direction=" + initialDirection).catch(() => []) : [];
+    const initialType = t?.transaction_type || "";
+    const initialCounterparts = acc.currency_code === "USD" && initialType
+      ? await api(base + "/counterpart-accounts?direction=" + initialDirection + "&transaction_type=" + encodeURIComponent(initialType)).catch(() => []) : [];
     return formDialog({
-    title: t ? tr("تعديل حركة","Edit transaction") : tr("حركة جديدة","New transaction"), values: t ? { ...t, inflow: +t.inflow || "", outflow: +t.outflow || "", project_id: t.project_id ?? "" } : { transaction_date: today() },
+    title: t ? tr("تعديل حركة","Edit transaction") : tr("حركة جديدة","New transaction"), values: t ? { ...t, inflow: +t.inflow || "", outflow: +t.outflow || "", project_id: t.project_id ?? "", transaction_type: t.transaction_type || "" } : { transaction_date: today(), transaction_type: "" },
     fields: [{ name: "transaction_date", label: tr("التاريخ","Date"), type: "date", required: true },
       ...(acc.currency_code === "USD" ? [
+        { name: "transaction_type", label: tr("نوع الحركة","Transaction type"), type: "select", options: [
+          ["funding", "تمويل من المساهمين أو الأطراف ذات العلاقة"],
+          ["customer_collection", "تحصيل مستحقات من عميل"],
+          ["customer_advance", "تحصيل دفعة مقدمة من عميل"],
+          ["supplier_payment", "سداد مورد أو مقاول"],
+          ["supplier_advance", "دفعة مقدمة لمورد أو مقاول"],
+          ["expense_payment", "سداد مصروفات"],
+          ["asset_purchase", "شراء أصل أو مخزون أو أعمال تحت التنفيذ"],
+          ["cash_transfer", "تحويل بين حسابات نقدية"]
+        ], required: true, full: true },
         { name: "exchange_rate", label: tr("سعر الدولار مقابل الجنيه","USD exchange rate to EGP"), type: "number", step: "0.000001", min: "0.000001", required: true },
         { name: "counterpart_account_id", label: tr("حساب الطرف المقابل","Counterpart account"), type: "select", searchable: true, options: initialCounterparts.map(a => [String(a.account_id), a.label]), required: true, full: true }
       ] : []),
@@ -43,34 +54,54 @@ export async function render(main, { api, auth, route }) {
         transaction_date: v.transaction_date, inflow: v.inflow || "0", outflow: v.outflow || "0", description: v.description || null, voucher_no: v.voucher_no || null,
         status: v.status || null, recipient_name: v.recipient_name || null, project_id: v.project_id ? +v.project_id : null,
         exchange_rate: acc.currency_code === "USD" ? v.exchange_rate : null,
-        counterpart_account_id: acc.currency_code === "USD" ? Number(v.counterpart_account_id) : null } });
+        counterpart_account_id: acc.currency_code === "USD" ? Number(v.counterpart_account_id) : null,
+        transaction_type: acc.currency_code === "USD" ? v.transaction_type : null } });
       toast(acc.currency_code === "USD" ? `${tr("تم الحفظ وإنشاء القيد كمسودة","Saved; draft journal created")}: ${saved.journal_entry_no || "—"}` : tr("تم الحفظ","Saved")); await load();
     },
     onOpen: (dlg, formEl) => {
       if (acc.currency_code !== "USD") return;
       const directionSelect = formEl.elements.namedItem("counterpart_account_id");
+      const typeSelect = formEl.elements.namedItem("transaction_type");
+      const inflow = formEl.elements.namedItem("inflow"), outflow = formEl.elements.namedItem("outflow");
+      const typeDirections = { funding: "inflow", customer_collection: "inflow", customer_advance: "inflow",
+        supplier_payment: "outflow", supplier_advance: "outflow", expense_payment: "outflow",
+        asset_purchase: "outflow", cash_transfer: "either" };
+      const currentDirection = () => +inflow.value > 0 ? "inflow" : "outflow";
       const refreshCounterparts = async direction => {
-        const selected = directionSelect.value;
+        const selected = directionSelect.value, transactionType = typeSelect.value;
         directionSelect.disabled = true;
         try {
-          const options = await api(base + "/counterpart-accounts?direction=" + direction);
+          if (!transactionType || (typeDirections[transactionType] !== direction && typeDirections[transactionType] !== "either")) {
+            directionSelect.innerHTML = '<option value="">—</option>';
+            return;
+          }
+          const options = await api(base + "/counterpart-accounts?direction=" + direction + "&transaction_type=" + encodeURIComponent(transactionType));
           directionSelect.innerHTML = '<option value="">—</option>' + options.map(a =>
             `<option value="${String(a.account_id)}">${esc(a.label)}</option>`).join("");
           if (options.some(a => String(a.account_id) === selected)) directionSelect.value = selected;
+        } catch (e) {
+          directionSelect.innerHTML = '<option value="">—</option>';
+          throw e;
         } finally { directionSelect.disabled = false; }
       };
-      const inflow = formEl.elements.namedItem("inflow"), outflow = formEl.elements.namedItem("outflow");
-      inflow.addEventListener("input", () => { if (+inflow.value > 0) refreshCounterparts("inflow"); });
-      outflow.addEventListener("input", () => { if (+outflow.value > 0) refreshCounterparts("outflow"); });
+      typeSelect.addEventListener("change", () => refreshCounterparts(currentDirection()).catch(e => toast(errText(e))));
+      inflow.addEventListener("input", () => { if (+inflow.value > 0) refreshCounterparts("inflow").catch(e => toast(errText(e))); });
+      outflow.addEventListener("input", () => { if (+outflow.value > 0) refreshCounterparts("outflow").catch(e => toast(errText(e))); });
       const sideHint = document.createElement("small");
       sideHint.className = "muted";
       sideHint.textContent = (+inflow.value > 0 || (!+outflow.value && !+inflow.value))
         ? "الوارد: حساب الطرف المقابل يظهر في الجانب الدائن من القيد."
         : "المنصرف: حساب الطرف المقابل يظهر في الجانب المدين من القيد.";
       directionSelect.parentElement.appendChild(sideHint);
-      const updateHint = () => { sideHint.textContent = +inflow.value > 0
-        ? "الوارد: حساب الطرف المقابل يظهر في الجانب الدائن من القيد."
-        : "المنصرف: حساب الطرف المقابل يظهر في الجانب المدين من القيد."; };
+      const updateHint = () => {
+        const d = currentDirection(), type = typeSelect.value;
+        const compatible = type && (typeDirections[type] === d || typeDirections[type] === "either");
+        sideHint.textContent = !type ? "اختَر نوع الحركة أولًا لعرض الحسابات المناسبة."
+          : !compatible ? "نوع الحركة لا يتوافق مع اتجاه الوارد أو المنصرف؛ غيّر نوع الحركة."
+          : d === "inflow" ? "الوارد: حساب الطرف المقابل يظهر في الجانب الدائن من القيد."
+          : "المنصرف: حساب الطرف المقابل يظهر في الجانب المدين من القيد.";
+      };
+      typeSelect.addEventListener("change", updateHint);
       inflow.addEventListener("input", updateHint); outflow.addEventListener("input", updateHint);
     } });
   };
