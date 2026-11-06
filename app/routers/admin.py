@@ -255,6 +255,8 @@ def create_user(body: UserCreate, actor: User = Depends(admin_user), db: Session
     roles=db.scalars(select(Role).where(Role.role_id.in_(body.role_ids))).all() if body.role_ids else []
     if len(roles) != len(set(body.role_ids)):
         raise HTTPException(422, "يوجد دور غير صحيح")
+    if any(r.role_name == "Admin" for r in roles):
+        raise HTTPException(422, "دور Admin قديم؛ استخدم وظيفة مسؤول النظام IT")
     if body.job_profile_id is not None:
         profile = db.get(JobProfile, body.job_profile_id)
         if profile is None or not profile.is_active:
@@ -309,6 +311,8 @@ def update_user(user_id: int, body: UserUpdate, actor: User = Depends(admin_user
             raise HTTPException(422, "لا يمكن الجمع بين الوظيفة وأدوار مستقلة")
         roles=db.scalars(select(Role).where(Role.role_id.in_(body.role_ids))).all() if body.role_ids else []
         if len(roles)!=len(set(body.role_ids)): raise HTTPException(422,"يوجد دور غير صحيح")
+        if any(r.role_name == "Admin" for r in roles):
+            raise HTTPException(422, "دور Admin قديم؛ استخدم وظيفة مسؤول النظام IT")
         db.execute(delete(UserRole).where(UserRole.user_id==u.user_id))
         for r in roles: db.add(UserRole(user_id=u.user_id,role_id=r.role_id))
     write_audit(db,actor.user_id,"Update","Users",u.user_id,new={"is_active":u.is_active})
@@ -462,7 +466,7 @@ def delete_user_avatar(user_id: int, actor: User = Depends(admin_user), db: Sess
 
 @router.get("/roles")
 def list_roles(_: User = Depends(admin_user), db: Session = Depends(get_db)):
-    roles=db.scalars(select(Role).order_by(Role.role_id)).all(); out=[]
+    roles=db.scalars(select(Role).where(Role.role_name != "Admin").order_by(Role.role_id)).all(); out=[]
     for r in roles:
         ids=db.scalars(select(RolePermission.permission_id).where(RolePermission.role_id==r.role_id)).all()
         out.append({"role_id":r.role_id,"role_name":r.role_name,"permission_ids":ids})
