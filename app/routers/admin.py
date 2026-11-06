@@ -284,10 +284,11 @@ def update_user(user_id: int, body: UserUpdate, actor: User = Depends(admin_user
         # Job profile assignment does not require a project/site assignment.
         if body.role_ids:
             raise HTTPException(422, "لا يمكن الجمع بين الوظيفة وأدوار مستقلة")
-        u.job_profile_id = body.job_profile_id
-        if u.is_active and _is_it_admin(db, u.user_id) and profile.name_ar != "مسؤول النظام IT" and _active_it_admin_count(
+        was_it_admin = _is_it_admin(db, u.user_id)
+        if u.is_active and was_it_admin and profile.name_ar != "مسؤول النظام IT" and _active_it_admin_count(
                 db, excluding_user_id=u.user_id) == 0:
             raise HTTPException(400, "لا يمكن تغيير وظيفة آخر مسؤول نظام IT نشط")
+        u.job_profile_id = body.job_profile_id
         # الوظيفة هي مصدر الصلاحيات الوحيد؛ لا نحتفظ بأي أدوار قديمة بجانبها.
         db.execute(delete(UserRole).where(UserRole.user_id == u.user_id))
     if body.project_id is not None:
