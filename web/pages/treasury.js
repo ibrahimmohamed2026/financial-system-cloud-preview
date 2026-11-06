@@ -1,6 +1,7 @@
 import { esc, money, toast, safe, formDialog, today, errText } from "../ui.js";
 import { translate as tr } from "../i18n.js";
 const CODE = { "cib-egp": "BankCibEgp", "cash-usd": "CashUsd", "cash-egp": "CashEgp", "cairo-egp": "BankCairoEgp", "hdb-usd": "BankHdbUsd", "hdb-egp": "BankHdbEgp", "cib-usd": "BankCibUsd" };
+const USD_TX_LABELS = { funding: "تمويل", customer_collection: "تحصيل عميل", customer_advance: "دفعة مقدمة من عميل", direct_income: "إيراد مباشر", supplier_payment: "سداد مورد/مقاول", supplier_advance: "دفعة مقدمة لمورد", expense_payment: "مصروفات", asset_purchase: "شراء أصل/مخزون", cash_transfer: "تحويل نقدي" };
 
 export async function render(main, { api, auth, route }) {
   const SC = CODE[route.split("/").pop()], can = a => auth.can(SC, a), base = "/treasury/" + SC;
@@ -12,7 +13,7 @@ export async function render(main, { api, auth, route }) {
     <div class="toolbar"><div class="w" style="width:150px"><label>${tr("من","From")}</label><input type="date" id="df"></div><div class="w" style="width:150px"><label>${tr("إلى","To")}</label><input type="date" id="dt"></div>
     <div class="grow"><label>${tr("بحث","Search")}</label><input id="q"></div>${can("Add") ? `<button class="btn primary" id="add">+ ${tr("حركة","Transaction")}</button>` : ""}</div>
     <div id="sum" class="muted" style="margin-bottom:8px"></div>
-    <div class="tbl-wrap"><table><thead><tr><th>${tr("التاريخ","Date")}</th><th>${tr("وارد","Inflow")}</th><th>${tr("منصرف","Outflow")}</th><th>${tr("الرصيد","Balance")}</th><th>${tr("البيان","Description")}</th>${acc.currency_code === "USD" ? `<th>${tr("سعر الصرف","Exchange rate")}</th>` : ""}<th>${tr("رقم الإذن","Voucher No.")}</th><th>${tr("الحالة","Status")}</th><th>${tr("المستلم","Recipient")}</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
+    <div class="tbl-wrap"><table><thead><tr><th>${tr("التاريخ","Date")}</th><th>${tr("وارد","Inflow")}</th><th>${tr("منصرف","Outflow")}</th><th>${tr("الرصيد","Balance")}</th><th>${tr("البيان","Description")}</th>${acc.currency_code === "USD" ? `<th>${tr("نوع الحركة","Transaction type")}</th><th>${tr("سعر الصرف","Exchange rate")}</th>` : ""}<th>${tr("رقم الإذن","Voucher No.")}</th><th>${tr("الحالة","Status")}</th><th>${tr("المستلم","Recipient")}</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
   const $ = s => main.querySelector(s); let items = [];
   $("#edit-gl-link")?.addEventListener("click", safe(() => setup(info, true)));
   const load = async () => {
@@ -20,7 +21,7 @@ export async function render(main, { api, auth, route }) {
     const r = await api(base + "/transactions?" + p); items = r.items;
     $("#sum").innerHTML = `${tr("رصيد أول الفترة:","Opening balance:")} <b>${money(r.opening_balance) === "-" ? "0.00" : money(r.opening_balance)}</b> — ${tr("وارد:","Inflow:")} <b>${money(r.total_inflow)}</b> — ${tr("منصرف:","Outflow:")} <b>${money(r.total_outflow)}</b> — ${tr("الرصيد الحالي:","Current balance:")} <b>${money(r.closing_balance) === "-" ? "0.00" : money(r.closing_balance)}</b>${r.total > 500 ? ` — (${tr("معروض أول 500 حركة","First 500 transactions shown")})` : ""}`;
     $("#rows").innerHTML = items.map(t => `<tr><td>${t.transaction_date}</td><td class="num">${money(t.inflow)}</td><td class="num">${money(t.outflow)}</td><td class="num">${money(t.balance) === "-" ? "0.00" : money(t.balance)}</td>
-      <td>${esc(t.description)}</td>${acc.currency_code === "USD" ? `<td class="num">${t.exchange_rate ? Number(t.exchange_rate).toFixed(6) : "—"}</td>` : ""}<td>${esc(t.voucher_no)}</td><td>${esc(t.status)}</td><td>${esc(t.recipient_name)}</td>
+      <td>${esc(t.description)}</td>${acc.currency_code === "USD" ? `<td>${esc(USD_TX_LABELS[t.transaction_type] || "—")}</td><td class="num">${t.exchange_rate ? Number(t.exchange_rate).toFixed(6) : "—"}</td>` : ""}<td>${esc(t.voucher_no)}</td><td>${esc(t.status)}</td><td>${esc(t.recipient_name)}</td>
       <td>${t.locked ? `<span class="tag">${tr("مرتبط بقيد","Linked to journal entry")}</span>` : `${can("Edit") ? `<button class="btn sm" data-e="${t.transaction_id}">${tr("تعديل","Edit")}</button> ` : ""}${can("Delete") ? `<button class="btn sm danger" data-d="${t.transaction_id}">${tr("حذف","Delete")}</button>` : ""}`}</td></tr>`).join("")
       || `<tr><td colspan="${acc.currency_code === "USD" ? 10 : 9}" class="muted">${tr("لا توجد حركات","No transactions")}</td></tr>`;
   };
@@ -37,6 +38,7 @@ export async function render(main, { api, auth, route }) {
           ["funding", "تمويل من المساهمين أو الأطراف ذات العلاقة"],
           ["customer_collection", "تحصيل مستحقات من عميل"],
           ["customer_advance", "تحصيل دفعة مقدمة من عميل"],
+          ["direct_income", "تحصيل إيراد مباشر"],
           ["supplier_payment", "سداد مورد أو مقاول"],
           ["supplier_advance", "دفعة مقدمة لمورد أو مقاول"],
           ["expense_payment", "سداد مصروفات"],
@@ -63,7 +65,7 @@ export async function render(main, { api, auth, route }) {
       const directionSelect = formEl.elements.namedItem("counterpart_account_id");
       const typeSelect = formEl.elements.namedItem("transaction_type");
       const inflow = formEl.elements.namedItem("inflow"), outflow = formEl.elements.namedItem("outflow");
-      const typeDirections = { funding: "inflow", customer_collection: "inflow", customer_advance: "inflow",
+      const typeDirections = { funding: "inflow", customer_collection: "inflow", customer_advance: "inflow", direct_income: "inflow",
         supplier_payment: "outflow", supplier_advance: "outflow", expense_payment: "outflow",
         asset_purchase: "outflow", cash_transfer: "either" };
       const currentDirection = () => +outflow.value > 0 ? "outflow" : "inflow";
@@ -103,6 +105,7 @@ export async function render(main, { api, auth, route }) {
       };
       typeSelect.addEventListener("change", updateHint);
       inflow.addEventListener("input", updateHint); outflow.addEventListener("input", updateHint);
+      updateHint();
     } });
   };
   for (const id of ["#df", "#dt"]) $(id).onchange = safe(load);
