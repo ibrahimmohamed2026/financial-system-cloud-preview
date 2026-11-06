@@ -114,6 +114,8 @@ def gl_list(screen_code: str, q: str | None = None, _: User = Depends(require_dy
     parent_ids = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
     stmt = select(Account).where(Account.is_active == True, Account.classification_id.in_(cash_bank_classes),
                                  Account.account_id.not_in(parent_ids))
+    if screen_code == "CashUsd":
+        stmt = stmt.where(Account.account_name_ar == "نقدية بالدولار")
     if q and q.strip():
         stmt = stmt.where(or_(Account.account_code.ilike(f"%{q.strip()}%"), Account.account_name_ar.ilike(f"%{q.strip()}%")))
     return [{"account_id": a.account_id, "label": f"{a.account_code} — {a.account_name_ar}"}
@@ -125,7 +127,9 @@ def create_account(screen_code: str, body: AccountIn,
                    user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))), db: Session = Depends(get_db)):
     if db.scalar(select(TreasuryAccount).where(TreasuryAccount.screen_code == screen_code)):
         raise HTTPException(409, "الشاشة دي مربوطة بحساب قبل كده")
-    _validate_cash_bank_gl(db, body.gl_account_id)
+    gl = _validate_cash_bank_gl(db, body.gl_account_id)
+    if screen_code == "CashUsd" and gl.account_name_ar.strip() != "نقدية بالدولار":
+        raise HTTPException(400, "خزينة الدولار يجب ربطها بحساب «نقدية بالدولار» في شجرة الحسابات")
     expected_type, expected_currency = BANK_SCREENS[screen_code]
     if body.account_type != expected_type or body.currency_code.upper() != expected_currency:
         raise HTTPException(400, "نوع الحساب أو العملة لا يطابقان الشاشة المحددة")
@@ -146,6 +150,8 @@ def update_account_gl(screen_code: str, body: GLAccountLinkIn,
                       user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))), db: Session = Depends(get_db)):
     a = _bound(db, screen_code)
     gl = _validate_cash_bank_gl(db, body.gl_account_id)
+    if screen_code == "CashUsd" and gl.account_name_ar.strip() != "نقدية بالدولار":
+        raise HTTPException(400, "خزينة الدولار يجب ربطها بحساب «نقدية بالدولار» في شجرة الحسابات")
     old = {"gl_account_id": a.gl_account_id}
     a.gl_account_id = gl.account_id
     write_audit(db, user.user_id, "Update", "TreasuryAccounts", a.treasury_account_id,
