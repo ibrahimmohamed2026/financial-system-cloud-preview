@@ -150,6 +150,8 @@ def list_contracts(q: str | None = None, skip: int = Query(0, ge=0), limit: int 
 
 @router.post("", status_code=201)
 def create_contract(body: ContractIn, user: User = Depends(require_permission("Contracts", "Add")), db: Session = Depends(get_db)):
+    if body.agreed_statement_count is None or body.agreed_statement_count < 1:
+        raise HTTPException(422, "يجب تحديد عدد المستخلصات المتفق عليها من 1 إلى 500")
     prepared_items = []
     for line in body.items:
         catalog = db.get(ItemCatalog, line.catalog_item_id)
