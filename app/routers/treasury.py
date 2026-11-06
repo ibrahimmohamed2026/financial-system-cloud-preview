@@ -216,67 +216,66 @@ def _check_project(db: Session, pid: int | None):
         raise HTTPException(400, "مركز التكلفة غير موجود")
 
 
+def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
+                        body: TxIn, user: User) -> str:
+    if body.exchange_rate is None or body.counterpart_account_id is None:
+        raise HTTPException(422, "حركة الدولار تتطلب سعر الصرف وحساب الطرف المقابل")
+    if body.counterpart_account_id == a.gl_account_id:
+        raise HTTPException(422, "حساب الطرف المقابل لازم يختلف عن حساب خزينة الدولار")
+    counterpart = db.get(Account, body.counterpart_account_id)
+    if counterpart is None or not counterpart.is_active:
+        raise HTTPException(400, "حساب الطرف المقابل غير موجود أو غير نشط")
+    parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
+    if counterpart.account_id in parents:
+        raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
+    from .journal import _fy_for, _next_no
+    fy = _fy_for(db, body.transaction_date)
+    amount_usd = body.inflow if body.inflow > 0 else body.outflow
+    amount_egp = (amount_usd * body.exchange_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if amount_egp <= 0:
+        raise HTTPException(422, "القيمة المقابلة بالجنيه لازم تكون أكبر من صفر")
+    entry = JournalEntry(
+        entry_no=_next_no(db, fy), entry_date=body.transaction_date,
+        company_id=fy.company_id, fiscal_year_id=fy.fiscal_year_id,
+        description=body.description or f"حركة خزينة {a.name_ar}",
+        status="Draft", created_by=user.user_id,
+    )
+    db.add(entry)
+    db.flush()
+    cash_is_debit = body.inflow > 0
+    db.add_all([
+        JournalEntryDetail(
+            journal_entry_id=entry.journal_entry_id, line_no=1,
+            account_id=a.gl_account_id, project_id=body.project_id,
+            debit_amount=amount_egp if cash_is_debit else Decimal("0"),
+            credit_amount=Decimal("0") if cash_is_debit else amount_egp,
+            fcy_amount=amount_usd, exchange_rate=body.exchange_rate,
+            description=f"{a.name_ar} — {amount_usd} USD",
+        ),
+        JournalEntryDetail(
+            journal_entry_id=entry.journal_entry_id, line_no=2,
+            account_id=counterpart.account_id, project_id=body.project_id,
+            debit_amount=Decimal("0") if cash_is_debit else amount_egp,
+            credit_amount=amount_egp if cash_is_debit else Decimal("0"),
+            description=body.description or "الطرف المقابل لحركة الخزينة",
+        ),
+    ])
+    t.journal_entry_id = entry.journal_entry_id
+    write_audit(db, user.user_id, "Create", "JournalEntries", entry.journal_entry_id, None,
+                {"entry_no": entry.entry_no, "source": "TreasuryTransaction", "status": "Draft"})
+    return entry.entry_no
+
+
 @router.post("/{screen_code}/transactions", status_code=201)
 def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
            db: Session = Depends(get_db)):
     a = _bound(db, screen_code)
     _check_project(db, body.project_id)
     values = body.model_dump()
-    journal_no = None
-    if a.currency_code == "USD":
-        if body.exchange_rate is None or body.counterpart_account_id is None:
-            raise HTTPException(422, "حركة الدولار تتطلب سعر الصرف وحساب الطرف المقابل")
-        if body.counterpart_account_id == a.gl_account_id:
-            raise HTTPException(422, "حساب الطرف المقابل لازم يختلف عن حساب خزينة الدولار")
-        counterpart = db.get(Account, body.counterpart_account_id)
-        if counterpart is None or not counterpart.is_active:
-            raise HTTPException(400, "حساب الطرف المقابل غير موجود أو غير نشط")
-        parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
-        if counterpart.account_id in parents:
-            raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
-        from .journal import _fy_for, _next_no
-        fy = _fy_for(db, body.transaction_date)
-        amount_usd = body.inflow if body.inflow > 0 else body.outflow
-        amount_egp = (amount_usd * body.exchange_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        if amount_egp <= 0:
-            raise HTTPException(422, "القيمة المقابلة بالجنيه لازم تكون أكبر من صفر")
-        t = TreasuryTransaction(treasury_account_id=a.treasury_account_id, **values)
-        db.add(t)
-        db.flush()
-        entry = JournalEntry(
-            entry_no=_next_no(db, fy), entry_date=body.transaction_date,
-            company_id=fy.company_id, fiscal_year_id=fy.fiscal_year_id,
-            description=body.description or f"حركة خزينة {a.name_ar}",
-            status="Draft", created_by=user.user_id,
-        )
-        db.add(entry)
-        db.flush()
-        cash_is_debit = body.inflow > 0
-        db.add_all([
-            JournalEntryDetail(
-                journal_entry_id=entry.journal_entry_id, line_no=1,
-                account_id=a.gl_account_id, project_id=body.project_id,
-                debit_amount=amount_egp if cash_is_debit else Decimal("0"),
-                credit_amount=Decimal("0") if cash_is_debit else amount_egp,
-                fcy_amount=amount_usd, exchange_rate=body.exchange_rate,
-                description=f"{a.name_ar} — {amount_usd} USD",
-            ),
-            JournalEntryDetail(
-                journal_entry_id=entry.journal_entry_id, line_no=2,
-                account_id=counterpart.account_id, project_id=body.project_id,
-                debit_amount=Decimal("0") if cash_is_debit else amount_egp,
-                credit_amount=amount_egp if cash_is_debit else Decimal("0"),
-                description=body.description or "الطرف المقابل لحركة الخزينة",
-            ),
-        ])
-        t.journal_entry_id = entry.journal_entry_id
-        journal_no = entry.entry_no
-        write_audit(db, user.user_id, "Create", "JournalEntries", entry.journal_entry_id, None,
-                    {"entry_no": entry.entry_no, "source": "TreasuryTransaction", "status": "Draft"})
-    else:
-        t = TreasuryTransaction(treasury_account_id=a.treasury_account_id, **values)
-        db.add(t)
-        db.flush()
+    t = TreasuryTransaction(treasury_account_id=a.treasury_account_id, **values)
+    db.add(t)
+    db.flush()
+    journal_no = _create_usd_journal(db, a, t, body, user) if a.currency_code == "USD" else None
     write_audit(db, user.user_id, "Create", "TreasuryTransactions", t.transaction_id, None, body.model_dump())
     db.commit()
     return {"transaction_id": t.transaction_id, "journal_entry_id": t.journal_entry_id,
@@ -301,9 +300,10 @@ def edit_tx(screen_code: str, tid: int, body: TxIn,
     old = {"inflow": str(t.inflow), "outflow": str(t.outflow), "description": t.description}
     for k, v in body.model_dump().items():
         setattr(t, k, v)
+    journal_no = _create_usd_journal(db, _bound(db, screen_code), t, body, user) if _bound(db, screen_code).currency_code == "USD" else None
     write_audit(db, user.user_id, "Update", "TreasuryTransactions", tid, old, body.model_dump())
     db.commit()
-    return {"transaction_id": tid}
+    return {"transaction_id": tid, "journal_entry_no": journal_no, "journal_status": "Draft" if journal_no else None}
 
 
 @router.delete("/{screen_code}/transactions/{tid}", status_code=204)
