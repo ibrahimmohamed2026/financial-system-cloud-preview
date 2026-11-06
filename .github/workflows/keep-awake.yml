@@ -1,0 +1,22 @@
+name: Keep ADEX ERP Awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keep-awake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping ADEX ERP
+        env:
+          TARGET_URL: https://financial-system-cloud-preview.onrender.com/
+        run: |
+          echo "Checking ADEX ERP..."
+          curl --fail --silent --show-error --location --max-time 30 "$TARGET_URL" --output /dev/null
+          echo "ADEX ERP responded successfully."
