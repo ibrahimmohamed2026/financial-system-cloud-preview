@@ -75,7 +75,7 @@ export async function render(main, { api }) {
       $("#confirmbox").hidden = false;
     } catch(e) { $("#reseterr").textContent = errText(e); }
     finally { busy(false); }
-  };
+  }));
   $("#execute").onclick = async () => {
     if (!previewMode) { $("#reseterr").textContent = tr("اختر تصفير البيانات أو ضبط المصنع وأعد المعاينة قبل التنفيذ.","Choose a reset action and preview it before execution."); return; }
     if ($("#resetphrase").value !== "RESET") { $("#reseterr").textContent = tr("اكتب RESET كما هو.","Type RESET exactly."); return; }
