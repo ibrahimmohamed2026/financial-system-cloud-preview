@@ -19,7 +19,7 @@ def _permission_db():
         conn.execute(text('INSERT INTO "JobProfiles" VALUES (10, 1), (11, 0)'))
         conn.execute(text('INSERT INTO "Users" VALUES (1, 10), (2, 10), (3, 10), (4, 11), (5, NULL), (6, NULL)'))
         conn.execute(text('INSERT INTO "JobProfilePermissions" VALUES (10, 1)'))
-        conn.execute(text('INSERT INTO "UserPermissions" VALUES (1, 2, 1), (2, 1, 0), (5, 1, 1), (6, 1, 0)'))
+        conn.execute(text('INSERT INTO "UserPermissions" VALUES (1, 2, 1), (2, 1, 0), (5, 1, 1), (5, 2, 0), (6, 1, 0)'))
         conn.execute(text('INSERT INTO "UserRoles" VALUES (1, 2), (2, 2), (3, 2), (4, 2), (5, 2), (6, 2), (3, 1)'))
         conn.execute(text('INSERT INTO "RolePermissions" VALUES (2, 2)'))
         conn.execute(text(VIEW_SQL))
