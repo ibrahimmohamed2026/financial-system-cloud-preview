@@ -25,13 +25,19 @@ VIEW_NAME = "vw_EffectivePermissions"
 VIEW_SQL = f'''CREATE VIEW "{VIEW_NAME}" AS
 SELECT u."UserId" AS "UserId", p."PermissionId" AS "PermissionId",
        p."ScreenCode" AS "ScreenCode", p."ActionCode" AS "ActionCode",
-       CASE WHEN up."IsAllowed" IS NOT NULL THEN (CASE WHEN up."IsAllowed" THEN 1 ELSE 0 END)
-            WHEN rp."PermissionId" IS NOT NULL THEN 1 ELSE 0 END AS "IsAllowed"
+       CASE
+         WHEN up."IsAllowed" IS NOT NULL THEN CASE WHEN up."IsAllowed" THEN 1 ELSE 0 END
+         WHEN EXISTS (SELECT 1 FROM "UserRoles" ur JOIN "Roles" r ON r."RoleId"=ur."RoleId"
+                      WHERE ur."UserId"=u."UserId" AND r."RoleName"='Admin') THEN 1
+         WHEN u."JobProfileId" IS NOT NULL THEN
+              CASE WHEN EXISTS (SELECT 1 FROM "JobProfilePermissions" jpp
+                                WHERE jpp."JobProfileId"=u."JobProfileId"
+                                  AND jpp."PermissionId"=p."PermissionId") THEN 1 ELSE 0 END
+         WHEN EXISTS (SELECT 1 FROM "UserRoles" ur JOIN "RolePermissions" rp ON rp."RoleId"=ur."RoleId"
+                      WHERE ur."UserId"=u."UserId" AND rp."PermissionId"=p."PermissionId") THEN 1
+         ELSE 0 END AS "IsAllowed"
 FROM "Users" u CROSS JOIN "Permissions" p
-LEFT JOIN "UserRoles" ur ON ur."UserId" = u."UserId"
-LEFT JOIN "RolePermissions" rp ON rp."RoleId" = ur."RoleId" AND rp."PermissionId" = p."PermissionId"
-LEFT JOIN "UserPermissions" up ON up."UserId" = u."UserId" AND up."PermissionId" = p."PermissionId"'''
-
+LEFT JOIN "UserPermissions" up ON up."UserId"=u."UserId" AND up."PermissionId"=p."PermissionId"'''
 CHECK_VOUCHER_INDEX_SQL = ('CREATE UNIQUE INDEX IF NOT EXISTS "UX_TreasuryTransactions_CheckVoucher" '
                            'ON "TreasuryTransactions" ("VoucherNo") WHERE "VoucherNo" LIKE \'CHK-%\'')
 
