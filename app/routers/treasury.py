@@ -20,6 +20,28 @@ router = APIRouter(prefix="/treasury", tags=["Treasury"])
 D0 = Decimal("0")
 Amt = Field(default=D0, ge=0, max_digits=18, decimal_places=2)
 
+# Transaction type determines the only valid counterpart classifications.
+USD_TRANSACTION_TYPES = {
+    "funding": {"label": "تمويل من المساهمين أو الأطراف ذات العلاقة", "direction": "inflow",
+                "classifications": ("مستحق الى اطراف ذات علاقة", "راس المال المصدر و المدفوع")},
+    "customer_collection": {"label": "تحصيل مستحقات من عميل", "direction": "inflow",
+                "classifications": ("عملاء وأوراق قبض", "مدينون و ارصدة مدينة اخرى", "مدينون و ارصدة مدينة أخرى")},
+    "customer_advance": {"label": "تحصيل دفعة مقدمة من عميل", "direction": "inflow",
+                "classifications": ("عملاء دفعات مقدمه",)},
+    "direct_income": {"label": "تحصيل إيراد مباشر", "direction": "inflow",
+                "classifications": ("مبيعات / إيرادات", "فوائد دائنة")},
+    "supplier_payment": {"label": "سداد مورد أو مقاول", "direction": "outflow",
+                "classifications": ("موردون و اوراق دفع", "دائنون و ارصدة دائنة اخرى", "دائنون و ارصدة دائنة أخرى")},
+    "supplier_advance": {"label": "دفعة مقدمة لمورد أو مقاول", "direction": "outflow",
+                "classifications": ("دفعات مقدمه موردون و مقاولون",)},
+    "expense_payment": {"label": "سداد مصروفات", "direction": "outflow",
+                "classifications": ("مصروفات عمومية و ادارية", "مصروفات عمومية و إدارية", "تكلفة المبيعات", "فوائد التاجير التمويلى")},
+    "asset_purchase": {"label": "شراء أصل أو مخزون أو أعمال تحت التنفيذ", "direction": "outflow",
+                "classifications": ("اصول ثابتة بالصافي", "اصول غير ملموسه", "مخزون", "اعمال تحت التنفيذ")},
+    "cash_transfer": {"label": "تحويل بين حسابات نقدية", "direction": "either",
+                "classifications": ("نقدية بالصندوق و البنوك",)},
+}
+
 
 class AccountIn(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -45,6 +67,7 @@ class TxIn(BaseModel):
     project_id: int | None = None
     exchange_rate: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=6)
     counterpart_account_id: int | None = Field(default=None, gt=0)
+    transaction_type: str | None = Field(default=None, max_length=40)
 
     @model_validator(mode="after")
     def _one(self):
@@ -126,36 +149,29 @@ def gl_list(screen_code: str, q: str | None = None, _: User = Depends(require_dy
 
 @router.get("/{screen_code}/counterpart-accounts")
 def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="^(inflow|outflow)$"),
+                         transaction_type: str = Query(..., min_length=1, max_length=40),
                          _: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
                          db: Session = Depends(get_db)):
-    """Return active leaf accounts with the correct counterpart posting side for this movement."""
+    """Return only accounts allowed for the selected transaction type and direction."""
     treasury = _bound(db, screen_code)
+    config = USD_TRANSACTION_TYPES.get(transaction_type)
+    if config is None or config["direction"] not in (direction, "either"):
+        raise HTTPException(400, "نوع الحركة لا يتوافق مع اتجاه الوارد أو المنصرف")
     parents = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
     rows = db.execute(
         select(Account, AccountClassification)
         .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
-        .where(
-            Account.is_active == True,
-            Account.account_id != treasury.gl_account_id,
-            Account.account_id.not_in(parents),
-            Account.account_code.not_in(("32102001", "47101001")),
-        )
-        .order_by(AccountClassification.statement_type, AccountClassification.name_ar, Account.account_code)
-        .limit(1000)
+        .where(Account.is_active == True, Account.account_id != treasury.gl_account_id,
+               Account.account_id.not_in(parents),
+               Account.account_code.not_in(("32102001", "47101001")),
+               AccountClassification.name_ar.in_(config["classifications"]))
+        .order_by(Account.account_code).limit(500)
     ).all()
-    # An inflow credits the counterpart; an outflow debits it. Both balance-sheet
-    # and income-statement leaf accounts may be valid on either side depending on
-    # the underlying transaction, so do not incorrectly filter by normal balance.
     posting_side = "credit" if direction == "inflow" else "debit"
     side_ar = "دائن" if direction == "inflow" else "مدين"
-    return [{
-        "account_id": a.account_id,
-        "label": f"{cl.name_ar} — {a.account_code} — {a.account_name_ar} ({side_ar})",
-        "classification": cl.name_ar,
-        "statement_type": cl.statement_type,
-        "normal_balance": a.normal_balance,
-        "posting_side": posting_side,
-    } for a, cl in rows]
+    return [{"account_id": a.account_id, "label": f"{a.account_code} — {a.account_name_ar} ({side_ar})",
+             "classification": cl.name_ar, "statement_type": cl.statement_type,
+             "normal_balance": a.normal_balance, "posting_side": posting_side} for a, cl in rows]
 
 
 @router.post("/{screen_code}/account", status_code=201)
@@ -225,6 +241,7 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
                     "inflow": money(t.inflow), "outflow": money(t.outflow), "balance": money(run),
                     "description": t.description, "voucher_no": t.voucher_no, "status": t.status,
                     "recipient_name": t.recipient_name, "project_id": t.project_id,
+                    "transaction_type": t.transaction_type,
                     "exchange_rate": str(t.exchange_rate) if t.exchange_rate is not None else None,
                     "counterpart_account_id": t.counterpart_account_id,
                     "journal_entry_id": t.journal_entry_id,
@@ -252,10 +269,14 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
     if counterpart.account_id in parents:
         raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
-    if body.inflow > 0:
-        counterpart_posting_side = "credit"
-    else:
-        counterpart_posting_side = "debit"
+    config = USD_TRANSACTION_TYPES.get(body.transaction_type or "")
+    direction = "inflow" if body.inflow > 0 else "outflow"
+    if config is None or config["direction"] not in (direction, "either"):
+        raise HTTPException(422, "اختَر نوع حركة صحيحًا ومتوافقًا مع الوارد أو المنصرف")
+    counterpart_class = db.get(AccountClassification, counterpart.classification_id)
+    if counterpart_class is None or counterpart_class.name_ar not in config["classifications"]:
+        raise HTTPException(400, "الحساب المختار لا يتبع التصنيف المسموح لنوع الحركة")
+    counterpart_posting_side = "credit" if direction == "inflow" else "debit"
     if counterpart_posting_side not in ("credit", "debit"):
         raise HTTPException(400, "اتجاه حركة الخزينة غير صحيح")
 
