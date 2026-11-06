@@ -543,6 +543,8 @@ class ContractItem(Base):
     unit: Mapped[str] = C("Unit", Unicode(30), default="وحدة")
     quantity: Mapped[Decimal] = C("Quantity", Numeric(18, 4), default=Decimal("0"))
     unit_price: Mapped[Decimal] = C("UnitPrice", Numeric(18, 4), default=Decimal("0"))
+    original_quantity: Mapped[Optional[Decimal]] = C("OriginalQuantity", Numeric(18, 4), nullable=True)
+    original_unit_price: Mapped[Optional[Decimal]] = C("OriginalUnitPrice", Numeric(18, 4), nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
 
 class ContractDeductionRule(Base):
