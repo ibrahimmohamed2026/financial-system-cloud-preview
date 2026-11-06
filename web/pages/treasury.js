@@ -64,13 +64,19 @@ export async function render(main, { api, auth, route }) {
     main.innerHTML = `<div class="sec"><h3>${tr("تجهيز الحساب","Account setup")}</h3><div style="padding:16px"><p class="muted">${tr("الشاشة دي لسه مش مربوطة بحساب خزينة/بنك. عند التسجيل تُحفظ البيانات في قاعدة بيانات النظام على الخادم، وتُربط بحساب فرعي نشط من شجرة الحسابات؛ لا تُحفظ كبيانات محلية في المتصفح.","This screen is not yet linked to a treasury/bank account. Registration saves data to the server database and links it to an active leaf account in the chart of accounts; data is not stored locally in the browser.")}</p>${can("Add") ? `<button class="btn primary" id="go">${tr("تسجيل الحساب","Register account")}</button>` : `<p>${tr("اطلب من المسؤول تسجيل الحساب.","Ask an administrator to register the account.")}</p>`}</div></div>`;
     main.querySelector("#go")?.addEventListener("click", safe(async () => {
       const gl = await api(base + "/gl-accounts"); const byLabel = Object.fromEntries(gl.map(g => [g.label, g.account_id]));
-      const dlg = formDialog({ title: tr("تسجيل حساب الخزينة/البنك","Register treasury/bank account"), values: { account_type: info.default_type, currency_code: info.default_currency },
+      const isUsdCash = SC === "CashUsd";
+      const dlg = formDialog({ title: tr("تسجيل حساب الخزينة/البنك","Register treasury/bank account"),
+        values: { name_ar: isUsdCash ? "خزينة الدولار" : "", account_type: info.default_type, currency_code: info.default_currency },
         fields: [{ name: "name_ar", label: tr("الاسم","Name"), required: true, full: true },
-          { name: "account_type", label: tr("النوع","Type"), type: "select", options: [["Bank", tr("بنك","Bank")], ["Cash", tr("خزينة","Cash")]] }, { name: "currency_code", label: tr("العملة","Currency"), required: true },
-          { name: "bank_account_number", label: tr("رقم الحساب البنكي","Bank account number") }, { name: "gl", label: tr("حساب الأستاذ (نقدية بالصندوق والبنوك)","Ledger account (cash on hand and at banks)"), type: "select", searchable: true,
+          ...(isUsdCash ? [] : [
+            { name: "account_type", label: tr("النوع","Type"), type: "select", options: [["Bank", tr("بنك","Bank")], ["Cash", tr("خزينة","Cash")]] },
+            { name: "currency_code", label: tr("العملة","Currency"), required: true },
+            { name: "bank_account_number", label: tr("رقم الحساب البنكي","Bank account number") }
+          ]),
+          { name: "gl", label: tr("حساب الأستاذ (نقدية بالصندوق والبنوك)","Ledger account (cash on hand and at banks)"), type: "select", searchable: true,
             options: gl.map(g => [String(g.account_id), g.label]), required: true, full: true }],
         onSubmit: async v => { const id = Number(v.gl) || byLabel[v.gl]; if (!id) throw new Error(tr("اختار حساب الأستاذ من القايمة","Select a ledger account from the list"));
-          await api(base + "/account", { method: "POST", json: { name_ar: v.name_ar, account_type: v.account_type, currency_code: v.currency_code.toUpperCase(), bank_account_number: v.bank_account_number || null, gl_account_id: id } });
+          await api(base + "/account", { method: "POST", json: { name_ar: v.name_ar, account_type: isUsdCash ? "Cash" : v.account_type, currency_code: isUsdCash ? "USD" : v.currency_code.toUpperCase(), bank_account_number: isUsdCash ? null : (v.bank_account_number || null), gl_account_id: id } });
           toast(tr("تم التسجيل","Registered")); main.innerHTML = ""; await render(main, { api, auth, route }); } });
     }));
   }
