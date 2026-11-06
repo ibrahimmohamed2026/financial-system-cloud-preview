@@ -35,6 +35,10 @@ export async function render(main, { api }) {
   const $ = s => main.querySelector(s);
   let previewMode = null;
   const busy = v => main.querySelectorAll("button,input").forEach(x => x.disabled = v);
+  main.querySelectorAll(".reset-preview").forEach(button => button.addEventListener("click", async () => {
+    const m = button.dataset.mode;
+    previewMode = null; $("#previewbox").innerHTML = "";
+    busy(true); $("#reseterr").textContent = ""; $("#confirmbox").hidden = true;
       const d = await api("/admin/reset/preview?mode=" + encodeURIComponent(m));
       previewMode = m;
       const labels = {
