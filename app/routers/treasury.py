@@ -129,7 +129,7 @@ def create_account(screen_code: str, body: AccountIn,
     expected_type, expected_currency = BANK_SCREENS[screen_code]
     if body.account_type != expected_type or body.currency_code.upper() != expected_currency:
         raise HTTPException(400, "نوع الحساب أو العملة لا يطابقان الشاشة المحددة")
-    a = TreasuryAccount(**body.model_dump(), screen_code=screen_code)
+    values = body.model_dump()\n    values["currency_code"] = expected_currency\n    if expected_type == "Cash":\n        values["bank_account_number"] = None\n    a = TreasuryAccount(**values, screen_code=screen_code)
     db.add(a)
     db.flush()
     write_audit(db, user.user_id, "Create", "TreasuryAccounts", a.treasury_account_id, None, body.model_dump())
