@@ -330,6 +330,8 @@ def add_addendum_line(contract_id: int, addendum_id: int, body: AddendumLineIn,
         target = db.scalar(select(ContractItem).where(ContractItem.item_id == body.target_item_id,
             ContractItem.contract_id == contract_id).with_for_update())
         if not target: raise HTTPException(422, "البند المستهدف لا يتبع هذا العقد")
+        if body.description.strip() != target.description or body.unit.strip() != target.unit:
+            raise HTTPException(422, "تعديل بند قائم يغيّر الكمية والسعر فقط؛ لا تغيّر الوصف أو الوحدة حفاظًا على تاريخ القياس")
         if body.quantity_delta < 0:
             used_technical = db.scalar(select(func.coalesce(func.sum(func.coalesce(
                 TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)), 0))
