@@ -510,6 +510,8 @@ def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(re
     approved_change_value = db.scalar(select(func.coalesce(func.sum(ContractChangeOrder.value_change), 0)).where(
         ContractChangeOrder.contract_id == contract_id, ContractChangeOrder.status == "Approved")) or 0
     revised_contract_value = Decimal(str(contract.original_value)) + Decimal(str(approved_addenda_value)) + Decimal(str(approved_change_value)) + Decimal(str(a.value_change))
+    if revised_contract_value < 0:
+        raise HTTPException(409, "لا يمكن أن تصبح القيمة المعدلة للعقد سالبة")
     linked_financial_ids = select(TechnicalSettlementEstimate.financial_settlement_id).where(
         TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
     for side in ("Customer", "Subcontractor"):
