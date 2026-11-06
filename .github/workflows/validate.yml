@@ -1,0 +1,27 @@
+name: Validate application
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: ['**']
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Compile application
+        run: python -m compileall -q app
+      - name: Run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          JWT_SECRET: "ci-only-test-secret-not-for-production-2026"
+        run: pytest -q

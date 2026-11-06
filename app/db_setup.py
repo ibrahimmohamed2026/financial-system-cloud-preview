@@ -178,7 +178,7 @@ def ensure_schema(engine: Engine) -> None:
     # to create their indexes. This is additive and leaves every existing row intact.
     existing_tables = set(inspect(engine).get_table_names())
     for table_name in ("Users", "Companies", "Counterparties", "ChartOfAccounts", "AccountClassifications", "ContractRequests", "Contracts", "ContractSettlements", "JournalEntries",
-                       "TechnicalSettlementEstimates", "TechnicalSettlementEstimateItems", "TreasuryTransactions", "PurchaseOrders", "SupplierInvoices", "Checks",
+                       "ContractItems", "ContractAddendums", "TechnicalSettlementEstimates", "TechnicalSettlementEstimateItems", "TreasuryTransactions", "PurchaseOrders", "SupplierInvoices", "Checks",
                        "CheckPrintTemplates", "FinancialChecks"):
         if table_name in existing_tables:
             _add_model_columns(engine, table_name)
@@ -200,6 +200,13 @@ def ensure_schema(engine: Engine) -> None:
                 with engine.begin() as conn:
                     conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {sql_type}'))
     Base.metadata.create_all(engine)
+    # Capture the pre-addendum BOQ baseline exactly once; never overwrite it on later revisions.
+    if "ContractItems" in inspect(engine).get_table_names():
+        with engine.begin() as conn:
+            item_columns = {col["name"] for col in inspect(conn).get_columns("ContractItems")}
+            if {"OriginalQuantity", "OriginalUnitPrice", "Quantity", "UnitPrice"}.issubset(item_columns):
+                conn.execute(text('UPDATE "ContractItems" SET "OriginalQuantity"="Quantity" WHERE "OriginalQuantity" IS NULL'))
+                conn.execute(text('UPDATE "ContractItems" SET "OriginalUnitPrice"="UnitPrice" WHERE "OriginalUnitPrice" IS NULL'))
     # Safely migrate the old Lux/Dumas tags only when one project has that exact
     # Arabic or English name. Ambiguous or unmatched records remain unassigned.
     table_names = set(inspect(engine).get_table_names())
@@ -261,7 +268,40 @@ def ensure_schema(engine: Engine) -> None:
     if "Contracts" in table_names and "RequestId" not in contract_columns:
         with engine.begin() as conn:
             conn.execute(text('ALTER TABLE "Contracts" ADD COLUMN "RequestId" INTEGER NULL'))
-    # Preserve historical addenda as approved; newly created addenda start Pending.
+    # Additive columns required by the complete addendum workflow. create_all() does not
+    # alter existing tables, so upgrade each legacy table explicitly and idempotently.
+    schema_additions = {
+        "ContractItems": {
+            "OriginalQuantity": "NUMERIC(18,4) NULL",
+            "OriginalUnitPrice": "NUMERIC(18,4) NULL",
+        },
+        "ContractAddendums": {
+            "TechnicalReviewedBy": "INTEGER NULL",
+            "TechnicalReviewedAt": "TIMESTAMP NULL",
+            "TechnicalReviewNotes": "TEXT NULL",
+        },
+        "ContractAddendumLines": {
+            "BaselineQuantity": "NUMERIC(18,4) NULL",
+            "BaselineUnitPrice": "NUMERIC(18,4) NULL",
+        },
+    }
+    current_tables = set(inspect(engine).get_table_names())
+    for table_name, additions in schema_additions.items():
+        if table_name not in current_tables:
+            continue
+        current_columns = {col["name"] for col in inspect(engine).get_columns(table_name)}
+        missing = [(column_name, sql_type) for column_name, sql_type in additions.items()
+                   if column_name not in current_columns]
+        if missing:
+            with engine.begin() as conn:
+                for column_name, sql_type in missing:
+                    conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {sql_type}'))
+    # Backfill signed BOQ baselines only after missing columns have been added.
+    if "ContractItems" in current_tables:
+        with engine.begin() as conn:
+            conn.execute(text('UPDATE "ContractItems" SET "OriginalQuantity"="Quantity" WHERE "OriginalQuantity" IS NULL'))
+            conn.execute(text('UPDATE "ContractItems" SET "OriginalUnitPrice"="UnitPrice" WHERE "OriginalUnitPrice" IS NULL'))
+    # Preserve legacy addenda as approved; the current workflow creates new addenda as Draft.
     if "ContractAddendums" in table_names:
         addendum_columns = {col["name"] for col in inspect(engine).get_columns("ContractAddendums")}
         with engine.begin() as conn:

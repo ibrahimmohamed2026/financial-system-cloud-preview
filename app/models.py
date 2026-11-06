@@ -474,7 +474,34 @@ class ContractAddendum(Base):
     status: Mapped[str] = C("Status", Unicode(20), default="Approved")
     approved_by: Mapped[Optional[int]] = C("ApprovedBy", ForeignKey("Users.UserId"), nullable=True)
     approved_at: Mapped[Optional[datetime]] = C("ApprovedAt", DateTime, nullable=True)
+    technical_reviewed_by: Mapped[Optional[int]] = C("TechnicalReviewedBy", ForeignKey("Users.UserId"), nullable=True)
+    technical_reviewed_at: Mapped[Optional[datetime]] = C("TechnicalReviewedAt", DateTime, nullable=True)
+    technical_review_notes: Mapped[Optional[str]] = C("TechnicalReviewNotes", UnicodeText, nullable=True)
     created_by: Mapped[Optional[int]] = C("CreatedBy", ForeignKey("Users.UserId"), nullable=True)
+    created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
+
+
+class ContractAddendumLine(Base):
+    __tablename__ = "ContractAddendumLines"
+    __table_args__ = (
+        CheckConstraint('"QuantityDelta" <> 0', name="CK_ContractAddendumLines_NonZeroDelta"),
+        CheckConstraint('"UnitPrice" >= 0', name="CK_ContractAddendumLines_NonNegativePrice"),
+    )
+    addendum_line_id: Mapped[int] = C("AddendumLineId", Integer, primary_key=True)
+    addendum_id: Mapped[int] = C("AddendumId", ForeignKey("ContractAddendums.AddendumId", ondelete="CASCADE"), index=True)
+    target_item_id: Mapped[Optional[int]] = C("TargetItemId", ForeignKey("ContractItems.ItemId"), nullable=True, index=True)
+    effective_item_id: Mapped[Optional[int]] = C("EffectiveItemId", ForeignKey("ContractItems.ItemId"), nullable=True, index=True)
+    catalog_item_id: Mapped[Optional[int]] = C("CatalogItemId", ForeignKey("ItemCatalog.CatalogItemId"), nullable=True)
+    account_id: Mapped[Optional[int]] = C("AccountId", ForeignKey("ChartOfAccounts.AccountId"), nullable=True)
+    project_id: Mapped[Optional[int]] = C("ProjectId", ForeignKey("Projects.ProjectId"), nullable=True)
+    item_no: Mapped[str] = C("ItemNo", Unicode(50))
+    description: Mapped[str] = C("Description", Unicode(500))
+    unit: Mapped[str] = C("Unit", Unicode(30), default="وحدة")
+    quantity_delta: Mapped[Decimal] = C("QuantityDelta", Numeric(18, 4))
+    unit_price: Mapped[Decimal] = C("UnitPrice", Numeric(18, 4))
+    amount_change: Mapped[Decimal] = C("AmountChange", Numeric(18, 2), default=Decimal("0"))
+    baseline_quantity: Mapped[Optional[Decimal]] = C("BaselineQuantity", Numeric(18, 4), nullable=True)
+    baseline_unit_price: Mapped[Optional[Decimal]] = C("BaselineUnitPrice", Numeric(18, 4), nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
 
 
@@ -521,6 +548,8 @@ class ContractItem(Base):
     unit: Mapped[str] = C("Unit", Unicode(30), default="وحدة")
     quantity: Mapped[Decimal] = C("Quantity", Numeric(18, 4), default=Decimal("0"))
     unit_price: Mapped[Decimal] = C("UnitPrice", Numeric(18, 4), default=Decimal("0"))
+    original_quantity: Mapped[Optional[Decimal]] = C("OriginalQuantity", Numeric(18, 4), nullable=True)
+    original_unit_price: Mapped[Optional[Decimal]] = C("OriginalUnitPrice", Numeric(18, 4), nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
 
 class ContractDeductionRule(Base):

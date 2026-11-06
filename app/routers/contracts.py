@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import require_permission, write_audit, get_current_user, has_permission
-from ..models import (Contract, ContractAddendum, ContractItem, ItemCatalog, ProgressBilling, User, ContractSettlement,
+from ..models import (Contract, ContractAddendum, ContractAddendumLine, ContractItem, ItemCatalog, ProgressBilling, User, ContractSettlement,
                       ContractDeductionRule, ContractAccountingConfig, ContractChangeOrder, ContractAttachment,
                       TechnicalSettlementEstimate, ContractSettlementItem, TechnicalSettlementEstimateItem)
 from ..contract_deletion import delete_settlement_tree, require_admin
@@ -18,6 +18,18 @@ from .contract_erp import leaf_account_or_422
 
 router = APIRouter(prefix="/api/contracts", tags=["Contracts & Technical Office"])
 D0 = Decimal("0.00")
+
+def _addendum_line_amount_change(target_quantity, target_unit_price, quantity_delta, new_unit_price):
+    """Calculate the signed change in BOQ value for an addendum line."""
+    quantity_delta = Decimal(str(quantity_delta))
+    new_unit_price = Decimal(str(new_unit_price))
+    if target_quantity is None:
+        amount = quantity_delta * new_unit_price
+    else:
+        amount = ((new_unit_price - Decimal(str(target_unit_price))) * Decimal(str(target_quantity))
+                  + quantity_delta * new_unit_price)
+    return amount.quantize(Decimal("0.01"))
+
 
 class ContractCreateItem(BaseModel):
     catalog_item_id: int = Field(gt=0)
@@ -70,6 +82,26 @@ class AddendumIn(BaseModel):
     description: str = Field(min_length=1, max_length=500)
     value_change: Decimal = D0
 
+class AddendumLineIn(BaseModel):
+    target_item_id: int | None = Field(default=None, gt=0)
+    catalog_item_id: int | None = Field(default=None, gt=0)
+    item_no: str | None = Field(default=None, max_length=50)
+    description: str = Field(min_length=1, max_length=500)
+    unit: str = Field(default="وحدة", max_length=30)
+    quantity_delta: Decimal
+    unit_price: Decimal = Field(ge=0)
+    project_id: int | None = None
+
+    @model_validator(mode="after")
+    def nonzero_delta(self):
+        if self.quantity_delta == 0:
+            raise ValueError("يجب أن تكون كمية التعديل أكبر أو أقل من صفر")
+        return self
+
+class AddendumTechnicalDecision(BaseModel):
+    decision: Literal["Approve", "Return"]
+    notes: str | None = Field(default=None, max_length=2000)
+
 class BillingIn(BaseModel):
     billing_no: str | None = Field(default=None, max_length=50)
     billing_date: date
@@ -92,7 +124,10 @@ def _contract(c):
 def _addendum(a):
     return {"addendum_id":a.addendum_id,"contract_id":a.contract_id,"addendum_no":a.addendum_no,
             "addendum_date":a.addendum_date,"description":a.description,"value_change":str(a.value_change),
-            "status":getattr(a,"status","Approved"),"approved_by":a.approved_by,"approved_at":a.approved_at}
+            "status":getattr(a,"status","Approved"),"approved_by":a.approved_by,"approved_at":a.approved_at,
+            "technical_reviewed_by":getattr(a,"technical_reviewed_by",None),
+            "technical_reviewed_at":getattr(a,"technical_reviewed_at",None),
+            "technical_review_notes":getattr(a,"technical_review_notes",None)}
 def _billing(b):
     return {"billing_id":b.billing_id,"contract_id":b.contract_id,"billing_no":b.billing_no,"billing_date":b.billing_date,
             "work_value":str(b.work_value),"retention_amount":str(b.retention_amount),"advance_deduction":str(b.advance_deduction),
@@ -144,7 +179,8 @@ def create_contract(body: ContractIn, user: User = Depends(require_permission("C
             account_id=account.account_id, project_id=line.project_id or c.project_id,
             item_no=str(number), description=(line.description or "").strip() or catalog.name,
             unit=(line.unit or catalog.unit or "وحدة").strip(), quantity=line.quantity,
-            unit_price=line.unit_price)
+            unit_price=line.unit_price, original_quantity=line.quantity,
+            original_unit_price=line.unit_price)
         db.add(item); db.flush()
         write_audit(db,user.user_id,"Create","ContractItems",item.item_id,new={
             "contract_id":c.contract_id,"item_no":item.item_no,"catalog_item_id":item.catalog_item_id,
@@ -269,7 +305,16 @@ def contract_detail(contract_id: int, _: User = Depends(require_permission("Cont
     add = db.scalars(select(ContractAddendum).where(ContractAddendum.contract_id==contract_id).order_by(ContractAddendum.addendum_date.desc())).all()
     bills = db.scalars(select(ProgressBilling).where(ProgressBilling.contract_id==contract_id).order_by(ProgressBilling.billing_date.desc())).all()
     approved_addenda = [x for x in add if (getattr(x,"status","Approved") or "Approved") == "Approved"]
-    return {"contract":_contract(c),"addendums":[_addendum(x) for x in add],"billings":[_billing(x) for x in bills],
+    addendum_rows = []
+    for x in add:
+        row = _addendum(x)
+        row["lines"] = [{"addendum_line_id":ln.addendum_line_id,"target_item_id":ln.target_item_id,
+            "effective_item_id":ln.effective_item_id,"item_no":ln.item_no,"description":ln.description,
+            "unit":ln.unit,"quantity_delta":str(ln.quantity_delta),"unit_price":str(ln.unit_price),
+            "amount_change":str(ln.amount_change)} for ln in db.scalars(select(ContractAddendumLine).where(
+                ContractAddendumLine.addendum_id == x.addendum_id).order_by(ContractAddendumLine.addendum_line_id)).all()]
+        addendum_rows.append(row)
+    return {"contract":_contract(c),"addendums":addendum_rows,"billings":[_billing(x) for x in bills],
             "amended_value":str(c.original_value + sum((x.value_change for x in approved_addenda),D0)),
             "billed_value":str(sum((x.work_value for x in bills if x.status.lower() not in ("cancelled","canceled")),D0))}
 
@@ -278,22 +323,251 @@ def create_addendum(contract_id: int, body: AddendumIn, user: User = Depends(req
     c=db.get(Contract,contract_id)
     if not c: raise HTTPException(404,"العقد غير موجود")
     values=body.model_dump(exclude={"addendum_no"})
-    a=ContractAddendum(contract_id=contract_id,addendum_no=f"AD-PENDING-{uuid4().hex}",**values,status="Pending",created_by=user.user_id)
+    a=ContractAddendum(contract_id=contract_id,addendum_no=f"AD-PENDING-{uuid4().hex}",**values,status="Draft",created_by=user.user_id)
     db.add(a); db.flush(); a.addendum_no=f"AD-{body.addendum_date.year}-{a.addendum_id:06d}"
     write_audit(db,user.user_id,"Create","ContractAddendums",a.addendum_id,new=_addendum(a)); db.commit(); db.refresh(a)
     return _addendum(a)
 
+@router.post("/{contract_id}/addendums/{addendum_id}/lines", status_code=201)
+def add_addendum_line(contract_id: int, addendum_id: int, body: AddendumLineIn,
+        user: User = Depends(require_permission("Contracts", "Add")), db: Session = Depends(get_db)):
+    a = db.scalar(select(ContractAddendum).where(ContractAddendum.addendum_id == addendum_id,
+        ContractAddendum.contract_id == contract_id).with_for_update())
+    if not a: raise HTTPException(404, "ملحق العقد غير موجود")
+    if a.status not in ("Draft", "ReturnedForCorrection"):
+        raise HTTPException(409, "لا يمكن تعديل بنود الملحق بعد إرساله للمراجعة")
+    target = None
+    catalog = None
+    if body.target_item_id:
+        target = db.scalar(select(ContractItem).where(ContractItem.item_id == body.target_item_id,
+            ContractItem.contract_id == contract_id).with_for_update())
+        if not target: raise HTTPException(422, "البند المستهدف لا يتبع هذا العقد")
+        if body.description.strip() != target.description or body.unit.strip() != target.unit:
+            raise HTTPException(422, "تعديل بند قائم يغيّر الكمية والسعر فقط؛ لا تغيّر الوصف أو الوحدة حفاظًا على تاريخ القياس")
+        if body.quantity_delta < 0:
+            used_technical = db.scalar(select(func.coalesce(func.sum(func.coalesce(
+                TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)), 0))
+                .join(TechnicalSettlementEstimate, TechnicalSettlementEstimate.estimate_id == TechnicalSettlementEstimateItem.estimate_id)
+                .where(TechnicalSettlementEstimate.contract_id == contract_id,
+                    TechnicalSettlementEstimate.status == "TechnicallyApproved",
+                    TechnicalSettlementEstimateItem.contract_item_id == target.item_id)) or 0
+            used_financial = db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity), 0))
+                .join(ContractSettlement, ContractSettlement.settlement_id == ContractSettlementItem.settlement_id)
+                .where(ContractSettlement.contract_id == contract_id,
+                    ContractSettlement.status.in_(("Approved", "Posted", "PendingFinalApproval")),
+                    ContractSettlement.settlement_id.not_in(select(TechnicalSettlementEstimate.financial_settlement_id).where(
+                        TechnicalSettlementEstimate.financial_settlement_id.is_not(None))),
+                    ContractSettlementItem.contract_item_id == target.item_id)) or 0
+            if Decimal(str(target.quantity)) + body.quantity_delta < Decimal(str(used_technical)) + Decimal(str(used_financial)):
+                raise HTTPException(409, "التخفيض سيجعل كمية العقد أقل من الكميات التي سبق اعتمادها في المستخلصات")
+        duplicate = db.scalar(select(ContractAddendumLine.addendum_line_id).where(
+            ContractAddendumLine.addendum_id == addendum_id,
+            ContractAddendumLine.target_item_id == target.item_id).limit(1))
+        if duplicate:
+            raise HTTPException(409, "لا يمكن تكرار تعديل نفس بند العقد داخل الملحق؛ اجمع التغيير في سطر واحد")
+        catalog_item_id = target.catalog_item_id
+        account_id = target.account_id
+        project_id = body.project_id if body.project_id is not None else target.project_id
+        item_no = target.item_no
+        description = body.description.strip() or target.description
+        unit = body.unit or target.unit
+    else:
+        if body.quantity_delta < 0:
+            raise HTTPException(422, "البند الجديد يجب أن تكون كميته موجبة")
+        catalog = db.get(ItemCatalog, body.catalog_item_id) if body.catalog_item_id else None
+        if not catalog or not catalog.is_active:
+            raise HTTPException(422, "اختر بندًا مركزيًا نشطًا للبند الجديد")
+        account = leaf_account_or_422(db, catalog.account_id, "حساب البند: ")
+        catalog_item_id, account_id = catalog.catalog_item_id, account.account_id
+        project_id = body.project_id if body.project_id is not None else db.get(Contract, contract_id).project_id
+        item_no = (body.item_no or "").strip()
+        if not item_no:
+            suffix = 1
+            while True:
+                candidate = f"AD{addendum_id}-{suffix}"
+                exists_on_contract = db.scalar(select(ContractItem.item_id).where(
+                    ContractItem.contract_id == contract_id, ContractItem.item_no == candidate).limit(1))
+                exists_in_addendum = db.scalar(select(ContractAddendumLine.addendum_line_id).where(
+                    ContractAddendumLine.addendum_id == addendum_id, ContractAddendumLine.item_no == candidate).limit(1))
+                if not exists_on_contract and not exists_in_addendum:
+                    item_no = candidate
+                    break
+                suffix += 1
+        else:
+            duplicate_no = db.scalar(select(ContractItem.item_id).where(
+                ContractItem.contract_id == contract_id, ContractItem.item_no == item_no).limit(1))
+            duplicate_line_no = db.scalar(select(ContractAddendumLine.addendum_line_id).where(
+                ContractAddendumLine.addendum_id == addendum_id, ContractAddendumLine.item_no == item_no).limit(1))
+            if duplicate_no or duplicate_line_no:
+                raise HTTPException(409, "رقم البند مستخدم بالفعل داخل العقد أو الملحق")
+        description, unit = body.description.strip(), body.unit or catalog.unit
+    line = ContractAddendumLine(addendum_id=addendum_id, target_item_id=target.item_id if target else None,
+        catalog_item_id=catalog_item_id, account_id=account_id, project_id=project_id, item_no=item_no,
+        description=description, unit=unit, quantity_delta=body.quantity_delta, unit_price=body.unit_price,
+        amount_change=_addendum_line_amount_change(
+            Decimal(str(target.quantity)) if target else None,
+            Decimal(str(target.unit_price)) if target else None,
+            body.quantity_delta, body.unit_price),
+        baseline_quantity=Decimal(str(target.quantity)) if target else None,
+        baseline_unit_price=Decimal(str(target.unit_price)) if target else None)
+    db.add(line)
+    write_audit(db, user.user_id, "AddBOQLine", "ContractAddendums", addendum_id,
+        new={"target_item_id": line.target_item_id, "item_no": item_no, "quantity_delta": str(line.quantity_delta),
+             "unit_price": str(line.unit_price), "amount_change": str(line.amount_change)})
+    db.commit(); db.refresh(line)
+    return {"addendum_line_id":line.addendum_line_id,"target_item_id":line.target_item_id,"item_no":line.item_no,
+        "description":line.description,"unit":line.unit,"quantity_delta":str(line.quantity_delta),
+        "unit_price":str(line.unit_price),"amount_change":str(line.amount_change)}
+
+@router.delete("/{contract_id}/addendums/{addendum_id}/lines/{line_id}", status_code=204)
+def delete_addendum_line(contract_id: int, addendum_id: int, line_id: int,
+        user: User = Depends(require_permission("Contracts", "Add")), db: Session = Depends(get_db)):
+    a = db.scalar(select(ContractAddendum).where(ContractAddendum.addendum_id == addendum_id,
+        ContractAddendum.contract_id == contract_id).with_for_update())
+    if not a: raise HTTPException(404, "ملحق العقد غير موجود")
+    if a.status not in ("Draft", "ReturnedForCorrection"):
+        raise HTTPException(409, "لا يمكن حذف بند بعد إرسال الملحق للمراجعة")
+    line = db.scalar(select(ContractAddendumLine).where(
+        ContractAddendumLine.addendum_line_id == line_id,
+        ContractAddendumLine.addendum_id == addendum_id).with_for_update())
+    if not line: raise HTTPException(404, "بند الملحق غير موجود")
+    write_audit(db, user.user_id, "DeleteBOQLine", "ContractAddendums", addendum_id,
+        old={"line_id":line.addendum_line_id,"item_no":line.item_no,"quantity_delta":str(line.quantity_delta),
+             "unit_price":str(line.unit_price)}, new=None)
+    db.delete(line)
+    db.commit()
+
+
+@router.post("/{contract_id}/addendums/{addendum_id}/submit")
+def submit_addendum(contract_id: int, addendum_id: int, user: User = Depends(require_permission("Contracts", "Add")), db: Session = Depends(get_db)):
+    a = db.scalar(select(ContractAddendum).where(ContractAddendum.addendum_id == addendum_id,
+        ContractAddendum.contract_id == contract_id).with_for_update())
+    if not a: raise HTTPException(404, "ملحق العقد غير موجود")
+    if a.status not in ("Draft", "ReturnedForCorrection"): raise HTTPException(409, "حالة الملحق لا تسمح بالإرسال")
+    lines = db.scalars(select(ContractAddendumLine).where(ContractAddendumLine.addendum_id == addendum_id)).all()
+    if not lines: raise HTTPException(422, "أضف بندًا واحدًا على الأقل قبل إرسال الملحق")
+    a.status = "UnderTechnicalReview"
+    write_audit(db, user.user_id, "SubmitForTechnicalReview", "ContractAddendums", addendum_id,
+        new={"status":a.status,"line_count":len(lines)})
+    db.commit(); db.refresh(a)
+    return _addendum(a)
+
+@router.post("/{contract_id}/addendums/{addendum_id}/technical-review")
+def review_addendum_technical(contract_id: int, addendum_id: int, body: AddendumTechnicalDecision,
+        user: User = Depends(require_permission("Contracts", "EngineeringApprove")), db: Session = Depends(get_db)):
+    a = db.scalar(select(ContractAddendum).where(ContractAddendum.addendum_id == addendum_id,
+        ContractAddendum.contract_id == contract_id).with_for_update())
+    if not a: raise HTTPException(404, "ملحق العقد غير موجود")
+    if a.status != "UnderTechnicalReview": raise HTTPException(409, "الملحق ليس بانتظار المراجعة الفنية")
+    if a.created_by == user.user_id: raise HTTPException(403, "لا يجوز لمُعدّ الملحق مراجعته فنيًا بنفسه")
+    if body.decision == "Return":
+        if not (body.notes or "").strip(): raise HTTPException(422, "اكتب ملاحظات الإرجاع")
+        a.status = "ReturnedForCorrection"
+    else:
+        a.status = "TechnicallyApproved"
+    a.technical_reviewed_by = user.user_id
+    a.technical_reviewed_at = datetime.utcnow()
+    a.technical_review_notes = (body.notes or "").strip() or None
+    write_audit(db, user.user_id, "TechnicalReview" + body.decision, "ContractAddendums", addendum_id,
+        new={"status":a.status,"reviewed_by":user.user_id,"reviewed_at":a.technical_reviewed_at,
+             "notes":a.technical_review_notes})
+    db.commit(); db.refresh(a)
+    return _addendum(a)
+
 @router.post("/{contract_id}/addendums/{addendum_id}/approve")
 def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(require_permission("Contracts", "Approve")), db: Session = Depends(get_db)):
-    a = db.scalar(select(ContractAddendum).where(ContractAddendum.addendum_id == addendum_id, ContractAddendum.contract_id == contract_id).with_for_update())
-    if not a:
-        raise HTTPException(404, "ملحق العقد غير موجود")
-    if (getattr(a, "status", "Approved") or "Approved") != "Pending":
-        raise HTTPException(409, "ملحق العقد ليس في انتظار الاعتماد")
+    # Serialize all addendum approvals for this contract so concurrent approvals
+    # cannot calculate against the same stale contract value / BOQ snapshot.
+    contract = db.scalar(select(Contract).where(Contract.contract_id == contract_id).with_for_update())
+    if not contract: raise HTTPException(404, "العقد غير موجود")
+    a = db.scalar(select(ContractAddendum).where(ContractAddendum.addendum_id == addendum_id,
+        ContractAddendum.contract_id == contract_id).with_for_update())
+    if not a: raise HTTPException(404, "ملحق العقد غير موجود")
+    lines = db.scalars(select(ContractAddendumLine).where(
+        ContractAddendumLine.addendum_id == addendum_id).with_for_update()).all()
+    # Compatibility: pre-workflow addenda created by the previous release had no BOQ lines.
+    if a.status == "Pending" and not lines:
+        a.status = "Approved"
+        a.approved_by = user.user_id
+        a.approved_at = datetime.utcnow()
+        write_audit(db, user.user_id, "ApproveLegacyAddendum", "ContractAddendums", a.addendum_id, new=_addendum(a))
+        db.commit(); db.refresh(a)
+        return _addendum(a)
+    if a.status != "TechnicallyApproved":
+        raise HTTPException(409, "يجب إتمام المراجعة الفنية قبل الاعتماد الإداري والمالي")
+    if not lines: raise HTTPException(409, "لا توجد بنود معتمدة في الملحق")
+    applied = []
+    for line in lines:
+        if line.target_item_id:
+            item = db.scalar(select(ContractItem).where(ContractItem.item_id == line.target_item_id,
+                ContractItem.contract_id == contract_id).with_for_update())
+            if not item: raise HTTPException(409, "البند الأصلي المرتبط بالملحق لم يعد موجودًا")
+            if line.baseline_quantity is not None and Decimal(str(item.quantity)) != Decimal(str(line.baseline_quantity)):
+                raise HTTPException(409, f"تغيرت كمية البند {item.item_no} بعد إعداد الملحق؛ احذف السطر وأعد إدخاله بالقيمة الحالية")
+            if line.baseline_unit_price is not None and Decimal(str(item.unit_price)) != Decimal(str(line.baseline_unit_price)):
+                raise HTTPException(409, f"تغير سعر البند {item.item_no} بعد إعداد الملحق؛ احذف السطر وأعد إدخاله بالسعر الحالي")
+            next_quantity = Decimal(str(item.quantity)) + Decimal(str(line.quantity_delta))
+            used_technical = db.scalar(select(func.coalesce(func.sum(func.coalesce(
+                TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)), 0))
+                .join(TechnicalSettlementEstimate, TechnicalSettlementEstimate.estimate_id == TechnicalSettlementEstimateItem.estimate_id)
+                .where(TechnicalSettlementEstimate.contract_id == contract_id,
+                    TechnicalSettlementEstimate.status == "TechnicallyApproved",
+                    TechnicalSettlementEstimateItem.contract_item_id == item.item_id)) or 0
+            used_financial = db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity), 0))
+                .join(ContractSettlement, ContractSettlement.settlement_id == ContractSettlementItem.settlement_id)
+                .where(ContractSettlement.contract_id == contract_id,
+                    ContractSettlement.status.in_(("Approved", "Posted", "PendingFinalApproval")),
+                    ContractSettlement.settlement_id.not_in(select(TechnicalSettlementEstimate.financial_settlement_id).where(
+                        TechnicalSettlementEstimate.financial_settlement_id.is_not(None))),
+                    ContractSettlementItem.contract_item_id == item.item_id)) or 0
+            if next_quantity < Decimal(str(used_technical)) + Decimal(str(used_financial)):
+                raise HTTPException(409, f"التعديل يجعل كمية البند {item.item_no} أقل من الكميات المعتمدة في المستخلصات")
+            if next_quantity < 0: raise HTTPException(409, f"التعديل يجعل كمية البند {item.item_no} سالبة")
+            if item.original_quantity is None: item.original_quantity = item.quantity
+            if item.original_unit_price is None: item.original_unit_price = item.unit_price
+            item.quantity = next_quantity
+            item.unit_price = line.unit_price
+            line.effective_item_id = item.item_id
+            applied.append({"item_id":item.item_id,"quantity_before":str(next_quantity-line.quantity_delta),
+                "quantity_after":str(next_quantity),"unit_price_after":str(item.unit_price)})
+        else:
+            item = ContractItem(contract_id=contract_id, catalog_item_id=line.catalog_item_id,
+                account_id=line.account_id, project_id=line.project_id, item_no=line.item_no,
+                description=line.description, unit=line.unit, quantity=line.quantity_delta,
+                unit_price=line.unit_price, original_quantity=line.quantity_delta,
+                original_unit_price=line.unit_price)
+            db.add(item); db.flush(); line.effective_item_id = item.item_id
+            applied.append({"item_id":item.item_id,"item_no":item.item_no,"quantity":str(item.quantity)})
+    a.value_change = sum((Decimal(str(x.amount_change)) for x in lines), D0)
+    approved_addenda_value = db.scalar(select(func.coalesce(func.sum(ContractAddendum.value_change), 0)).where(
+        ContractAddendum.contract_id == contract_id, ContractAddendum.status == "Approved",
+        ContractAddendum.addendum_id != addendum_id)) or 0
+    approved_change_value = db.scalar(select(func.coalesce(func.sum(ContractChangeOrder.value_change), 0)).where(
+        ContractChangeOrder.contract_id == contract_id, ContractChangeOrder.status == "Approved")) or 0
+    revised_contract_value = Decimal(str(contract.original_value)) + Decimal(str(approved_addenda_value)) + Decimal(str(approved_change_value)) + Decimal(str(a.value_change))
+    if revised_contract_value < 0:
+        raise HTTPException(409, "لا يمكن أن تصبح القيمة المعدلة للعقد سالبة")
+    linked_financial_ids = select(TechnicalSettlementEstimate.financial_settlement_id).where(
+        TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
+    for side in ("Customer", "Subcontractor"):
+        financial_work = db.scalar(select(func.coalesce(func.sum(ContractSettlement.work_value), 0)).where(
+            ContractSettlement.contract_id == contract_id, ContractSettlement.settlement_side == side,
+            ContractSettlement.status.in_(("Approved", "Posted", "PendingFinalApproval")),
+            ContractSettlement.settlement_id.not_in(linked_financial_ids))) or 0
+        technical_work = db.scalar(select(func.coalesce(func.sum(TechnicalSettlementEstimate.work_value), 0)).where(
+            TechnicalSettlementEstimate.contract_id == contract_id, TechnicalSettlementEstimate.settlement_side == side,
+            TechnicalSettlementEstimate.status == "TechnicallyApproved")) or 0
+        legacy_work = db.scalar(select(func.coalesce(func.sum(ProgressBilling.work_value), 0)).where(
+            ProgressBilling.contract_id == contract_id,
+            func.lower(ProgressBilling.status).in_(("approved", "paid", "posted")))) or 0
+        certified_work = Decimal(str(financial_work)) + Decimal(str(technical_work)) + Decimal(str(legacy_work))
+        if revised_contract_value < certified_work:
+            raise HTTPException(409, f"لا يمكن اعتماد الملحق لأن قيمة العقد بعد التعديل ({revised_contract_value}) أقل من الأعمال المعتمدة سابقًا ({certified_work}) لنوع المستخلص {side}")
     a.status = "Approved"
     a.approved_by = user.user_id
     a.approved_at = datetime.utcnow()
-    write_audit(db, user.user_id, "Approve", "ContractAddendums", a.addendum_id, new=_addendum(a))
+    write_audit(db, user.user_id, "ApproveAndApplyBOQ", "ContractAddendums", a.addendum_id,
+        new={"status":a.status,"value_change":str(a.value_change),"applied_lines":applied})
     db.commit(); db.refresh(a)
     return _addendum(a)
 
