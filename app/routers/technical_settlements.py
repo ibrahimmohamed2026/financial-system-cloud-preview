@@ -53,6 +53,9 @@ class TechnicalCorrectionIn(BaseModel):
     items: list[TechnicalCorrectionLine] = Field(min_length=1)
     notes: str = Field(min_length=1, max_length=2000)
 
+class TechnicalReturnIn(BaseModel):
+    notes: str = Field(min_length=1, max_length=2000)
+
 def estimate_out(x, db):
     c = db.get(Contract, x.contract_id)
     lines = db.scalars(select(TechnicalSettlementEstimateItem).where(TechnicalSettlementEstimateItem.estimate_id == x.estimate_id)).all()
@@ -122,7 +125,7 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     db.commit();db.refresh(x);return estimate_out(x,db)
 
 @router.post("/{estimate_id}/return")
-def return_estimate_for_correction(estimate_id: int, body: TechnicalCorrectionIn,
+def return_estimate_for_correction(estimate_id: int, body: TechnicalReturnIn,
         user: User = Depends(require_permission("ContractSettlements", "EngineeringApprove")),
         db: Session = Depends(get_db)):
     x = db.scalar(select(TechnicalSettlementEstimate).where(
