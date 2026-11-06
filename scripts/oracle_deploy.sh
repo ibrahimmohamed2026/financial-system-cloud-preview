@@ -43,7 +43,7 @@ OLD_IMAGE_ID="$(docker inspect --format '{{.Image}}' "$CONTAINER_NAME")"
 docker image tag "$OLD_IMAGE_ID" "$ROLLBACK_IMAGE"
 
 echo "Pulling latest main branch as opc..."
-sudo -u opc env GIT_SSH_COMMAND="ssh -i /home/opc/.ssh/adex_github -o IdentitiesOnly=yes" \
+sudo -u opc env HOME=/home/opc GIT_SSH_COMMAND="ssh -i /home/opc/.ssh/adex_github -o IdentitiesOnly=yes -o UserKnownHostsFile=/home/opc/.ssh/known_hosts" \
   git -C "$APP_DIR" pull --ff-only origin main
 
 echo "Building new ARM64 image..."
