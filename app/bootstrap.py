@@ -209,6 +209,8 @@ def seed_job_profiles(db: Session) -> None:
     # مسؤول النظام IT هو ملف الصلاحيات الإداري الوحيد، ويحتاج إدارة جميع شاشات النظام.
     it_profile = db.scalar(select(JobProfile).where(JobProfile.name_ar == "مسؤول النظام IT"))
     if it_profile is not None:
+        # This core security profile must remain available to prevent administrative lockout.
+        it_profile.is_active = True
         existing_ids = set(db.scalars(select(JobProfilePermission.permission_id).where(
             JobProfilePermission.job_profile_id == it_profile.job_profile_id)))
         all_ids = set(db.scalars(select(Permission.permission_id)))
