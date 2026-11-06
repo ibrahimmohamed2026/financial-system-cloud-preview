@@ -141,7 +141,7 @@ def return_estimate_for_correction(estimate_id: int, body: TechnicalReturnIn,
         raise HTTPException(422, "يجب كتابة ملاحظات الاستكمال")
     old_status = x.status
     x.status = "ReturnedForCorrection"
-    x.notes = (x.notes or "") + f"\\nإرجاع للاستكمال بواسطة {user.user_id}: {reason}"
+    x.notes = (x.notes or "") + f"\nإرجاع للاستكمال بواسطة {user.user_id}: {reason}"
     write_audit(db, user.user_id, "ReturnForCorrection", "TechnicalSettlementEstimates", estimate_id,
         old={"status": old_status}, new={"status": x.status, "reason": reason, "created_by": x.created_by})
     db.commit()
@@ -194,7 +194,7 @@ def resubmit_corrected_estimate(estimate_id: int, body: TechnicalCorrectionIn,
     x.status = "UnderReview"
     x.technical_reviewed_by = None
     x.technical_reviewed_at = None
-    x.notes = (x.notes or "") + f"\\nإعادة تقديم بواسطة المهندس المُعد: {body.notes.strip()}"
+    x.notes = (x.notes or "") + f"\nإعادة تقديم بواسطة المهندس المُعد: {body.notes.strip()}"
     write_audit(db, user.user_id, "ResubmitAfterCorrection", "TechnicalSettlementEstimates", estimate_id,
         old={"status": old_status}, new={"status": x.status, "work_value": str(total), "items": changes, "notes": body.notes.strip()})
     db.commit()
