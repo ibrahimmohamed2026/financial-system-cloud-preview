@@ -7,8 +7,8 @@ export async function render(main, { api }) {
     <div class="panel" style="padding:16px">
       <div class="tag no">${tr("إجراء حساس — لا يتم الحذف قبل المعاينة والتأكيد","Sensitive action — nothing is deleted before preview and confirmation")}</div>
       <p>${tr("اختر مستوى إعادة الضبط. ستظهر لك الجداول وعدد السجلات المتأثرة قبل أي تنفيذ.","Choose a reset level. A table-by-table count is shown before anything is executed.")}</p>
-      <label style="display:block;margin:12px 0"><input type="radio" name="resetmode" value="operational" checked> <b>${tr("تصفير البيانات التشغيلية","Operational data reset")}</b><br><small class="muted">${tr("يحذف القيود والحركات والمستندات التشغيلية، ويحتفظ بدليل الحسابات والأطراف والأصناف والخزائن والمستخدمين والإعدادات.","Deletes accounting entries, movements and operational documents while keeping the chart of accounts, parties, items, treasuries, users and configuration.")}</small></label>
-      <label style="display:block;margin:12px 0"><input type="radio" name="resetmode" value="full"> <b>${tr("إعادة ضبط كاملة","Full reset")}</b><br><small class="muted">${tr("يحذف البيانات التشغيلية والبيانات الأساسية التشغيلية مثل الأطراف والأصناف والخزائن، ويصفّر الأرصدة الافتتاحية للحسابات. يحتفظ بالشركة والمستخدمين والصلاحيات ودليل الحسابات والمشروعات والسنة المالية.","Deletes operational records and operational master data such as parties, items and treasuries, and zeros chart opening balances. Keeps company, users, permissions, chart of accounts, projects and fiscal years.")}</small></label>
+      <label style="display:block;margin:12px 0"><input type="radio" name="resetmode" value="operational" checked> <b>${tr("تصفير البيانات التشغيلية","Operational data reset")}</b><br><small class="muted">${tr("يحذف القيود والحركات والمستندات التشغيلية، ويحتفظ بدليل الحسابات والأطراف والأصناف والخزائن وربطها المحاسبي والمستخدمين والإعدادات.","Deletes accounting entries, movements and operational documents while keeping the chart of accounts, parties, items, treasuries, users and configuration.")}</small></label>
+      <label style="display:block;margin:12px 0"><input type="radio" name="resetmode" value="full"> <b>${tr("إعادة ضبط كاملة","Full reset")}</b><br><small class="muted">${tr("يحذف البيانات التشغيلية والبيانات الأساسية التشغيلية مثل الأطراف والأصناف والخزائن، ويصفّر الأرصدة الافتتاحية للحسابات. يحتفظ بالشركة والمستخدمين والصلاحيات ودليل الحسابات وربط الخزائن بالحسابات وقوالب الشيكات والمشروعات والسنة المالية.","Deletes operational records and operational master data such as parties, items and treasuries, and zeros chart opening balances. Keeps company, users, permissions, chart of accounts, projects and fiscal years.")}</small></label>
       <button class="btn primary" id="preview">${tr("معاينة البيانات التي ستُحذف","Preview affected data")}</button>
       <div id="previewbox" style="margin-top:16px"></div>
       <div id="confirmbox" hidden style="margin-top:16px;border-top:1px solid var(--line);padding-top:16px">
@@ -58,8 +58,7 @@ export async function render(main, { api }) {
         TechnicalSettlementEstimateItems:"بنود التقديرات الفنية",
         CounterpartyAliases:"الأسماء البديلة للأطراف", Counterparties:"العملاء والموردون والمقاولون",
         Beneficiaries:"المستفيدون", InventoryWarehouses:"المخازن", InventoryItems:"أصناف المخزون",
-        TreasuryAccounts:"تعريفات الخزائن والبنوك", ItemCatalog:"دليل الأصناف",
-        CheckPrintTemplates:"قوالب طباعة الشيكات"
+        TreasuryAccounts:"تعريفات الخزائن والبنوك", ItemCatalog:"دليل الأصناف"
       };
       $("#previewbox").innerHTML = `<h4>${tr("ملخص المعاينة","Preview summary")}</h4>
         <p><b>${tr("عدد السجلات التي ستُحذف:","Rows to delete:")} ${d.total_rows.toLocaleString()}</b></p>
