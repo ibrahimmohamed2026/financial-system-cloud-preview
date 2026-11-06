@@ -17,9 +17,20 @@ jobs:
   deploy:
     name: Deploy to Oracle ARM64
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     environment: oracle-production
     steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate Python source
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile application
+        run: |
+          python -m compileall -q app
+
       - name: Validate deployment secrets
         env:
           ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
@@ -38,9 +49,9 @@ jobs:
           ORACLE_KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
         run: |
           install -m 700 -d "$HOME/.ssh"
-          printf '%s\n' "$ORACLE_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\\n' "$ORACLE_SSH_KEY" > "$HOME/.ssh/id_ed25519"
           chmod 600 "$HOME/.ssh/id_ed25519"
-          printf '%s\n' "$ORACLE_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          printf '%s\\n' "$ORACLE_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
 
       - name: Deploy and verify Oracle application
@@ -48,9 +59,9 @@ jobs:
           ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
           ORACLE_USER: ${{ secrets.ORACLE_USER }}
         run: |
-          ssh -i "$HOME/.ssh/id_ed25519" \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o BatchMode=yes \
-            "$ORACLE_USER@$ORACLE_HOST" \
+          ssh -i "$HOME/.ssh/id_ed25519" \\
+            -o IdentitiesOnly=yes \\
+            -o StrictHostKeyChecking=yes \\
+            -o BatchMode=yes \\
+            "$ORACLE_USER@$ORACLE_HOST" \\
             'sudo -n /usr/local/sbin/adex-deploy'
