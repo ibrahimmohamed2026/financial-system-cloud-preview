@@ -126,7 +126,7 @@ def execute_reset(body: ResetRequest, user: User = Depends(_admin), db: Session 
         zeroed_accounts = 0
         if mode == "full":
             rows = db.execute(
-                Account.__table__.update()
+                update(Account)
                 .where((Account.opening_debit != 0) | (Account.opening_credit != 0))
                 .values(opening_debit=0, opening_credit=0)
             )
