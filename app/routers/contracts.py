@@ -167,7 +167,8 @@ def create_contract(body: ContractIn, user: User = Depends(require_permission("C
             account_id=account.account_id, project_id=line.project_id or c.project_id,
             item_no=str(number), description=(line.description or "").strip() or catalog.name,
             unit=(line.unit or catalog.unit or "وحدة").strip(), quantity=line.quantity,
-            unit_price=line.unit_price)
+            unit_price=line.unit_price, original_quantity=line.quantity,
+            original_unit_price=line.unit_price)
         db.add(item); db.flush()
         write_audit(db,user.user_id,"Create","ContractItems",item.item_id,new={
             "contract_id":c.contract_id,"item_no":item.item_no,"catalog_item_id":item.catalog_item_id,
