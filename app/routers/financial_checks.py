@@ -132,8 +132,10 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
     if body.status in settlement_statuses:
         required_sources = {"تحت التحصيل"} if c.check_type == "INCOMING" else {"تم التسليم"}
         # Legacy outgoing imports used the old direct settlement status.
-        legacy_direct = (c.check_type == "INCOMING" and body.status == "مُحصّل" and c.status == "مسودة") or (c.check_type == "OUTGOING" and c.status == "مسودة")
-        if c.status not in required_sources and not legacy_direct:
+        # Preserve the historical incoming-cheque label only. Outgoing cheques
+        # must complete approval, issuance, and delivery before payment.
+        legacy_incoming_direct = c.check_type == "INCOMING" and body.status == "مُحصّل" and c.status == "مسودة"
+        if c.status not in required_sources and not legacy_incoming_direct:
             raise HTTPException(409, "لا يمكن تسوية الشيك قبل اكتمال دورة الاستلام أو التسليم")
     if c.journal_entry_id and body.status != c.status:
         raise HTTPException(409, "الشيك له قيد مرحّل؛ لا تغيّر حالته قبل إجراء عكس محاسبي معتمد")
@@ -246,7 +248,14 @@ def import_csv(file: UploadFile = File(...), user: User = Depends(require_any(SC
             if body.project_id is not None:
                 project = db.get(Project, body.project_id)
                 if not project or not project.is_active: raise ValueError("المشروع غير صحيح أو غير نشط")
-            db.add(FinancialCheck(**body.model_dump(), status="مسودة", created_by=user.user_id)); made += 1
+            imported_check = FinancialCheck(**body.model_dump(), status="مسودة", created_by=user.user_id)
+            db.add(imported_check)
+            db.flush()
+            db.add(FinancialCheckStatusHistory(
+                check_id=imported_check.check_id, old_status=None, new_status="مسودة",
+                changed_by=user.user_id, note="استيراد الشيك"
+            ))
+            made += 1
         db.commit()
     except Exception as e:
         db.rollback(); raise HTTPException(422, f"فشل الاستيراد بالكامل دون حفظ جزئي: {str(e)[:180]}")
@@ -297,13 +306,13 @@ def add_allocation(cid: int, body: AllocationIn,
         raise HTTPException(404, "المستخلص غير موجود")
     if settlement.settlement_side != "Subcontractor" or settlement.status not in ("Approved", "Posted"):
         raise HTTPException(409, "يجب اختيار مستخلص مقاول باطن معتمد نهائيًا")
-    if settlement.counterparty_id is not None and contract.counterparty_id != settlement.counterparty_id:
-        raise HTTPException(409, "المقاول المسجل في المستخلص لا يطابق المقاول المرتبط بالعقد")
     if not settlement.manager_approved_by or not settlement.manager_approved_at:
         raise HTTPException(409, "المستخلص لم يحصل على اعتماد المدير النهائي")
     contract = db.get(Contract, settlement.contract_id)
     if not contract or contract.status.lower() != "active":
         raise HTTPException(409, "عقد المستخلص غير موجود أو غير نشط")
+    if settlement.counterparty_id is not None and contract.counterparty_id != settlement.counterparty_id:
+        raise HTTPException(409, "المقاول المسجل في المستخلص لا يطابق المقاول المرتبط بالعقد")
     if check.project_id is not None and contract.project_id is not None and check.project_id != contract.project_id:
         raise HTTPException(422, "المستخلص لا يتبع مشروع الشيك")
     if contract.counterparty_id is None:
