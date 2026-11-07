@@ -53,7 +53,9 @@ def balance_sheet(as_of: date | None = None, account_ids: list[int] = Query(defa
     rows = [r for r in compute_tb(db, None, as_of)
             if not r["is_parent"] and (not selected_ids or r["account_id"] in selected_ids)]
     bs = _group([r for r in rows if r["statement_type"] == "BalanceSheet"], lambda r: r["td"] - r["tc"])
-    result = sum((r["tc"] - r["td"] for r in rows if r["statement_type"] == "IncomeStatement"), D0)
+    result = sum((r["tc"] - r["td"] for r in compute_tb(db, None, as_of)
+                   if not r["is_parent"] and r["statement_type"] == "IncomeStatement"
+                   and (not selected_ids or r["account_id"] in selected_ids)), D0)
     assets, liabs = [], []
     for g in bs.values():
         side = "DR" if g["dr"] >= g["cr"] else "CR"
