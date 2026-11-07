@@ -194,10 +194,15 @@ export async function render(main, { api }) {
   const mountMultiPicker = (prefix, items, idField, labelOf, selected) => {
     const input = `#${prefix}-search`, box = `#${prefix}-options`, chips = `#${prefix}-selected`;
     const drawChips = () => {
-      $(chips).innerHTML = [...selected].map(id => {
+      if (!selected.size || selected.size === items.length) {
+        $(chips).innerHTML = `<span class="tag">${T("الكل")}</span>`;
+        return;
+      }
+      const values = [...selected], visible = values.slice(0, 4);
+      $(chips).innerHTML = visible.map(id => {
         const item = items.find(x => String(x[idField]) === String(id));
         return item ? `<button type="button" class="tag" data-remove-id="${esc(id)}">${esc(labelOf(item))} ×</button>` : "";
-      }).join("");
+      }).join("") + (values.length > 4 ? `<span class="tag">+${values.length - 4}</span>` : "");
     };
     const drawOptions = () => {
       const needle = $(input).value.trim().toLocaleLowerCase();
