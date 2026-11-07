@@ -497,6 +497,30 @@ def list_all_settlements(settlement_side: Literal["Customer","Subcontractor"] | 
         result.append(data)
     return {"items": result}
 
+@router.get("/manager-pending-settlements")
+def list_manager_pending_settlements(
+        _: User = Depends(require_permission("ContractSettlements", "ManagerApprove")),
+        db: Session = Depends(get_db)):
+    """Dedicated manager queue; does not depend on the accounting list's View permission."""
+    rows = db.scalars(
+        select(ContractSettlement)
+        .where(ContractSettlement.status == "PendingFinalApproval",
+               ContractSettlement.financial_approved_by.is_not(None))
+        .order_by(ContractSettlement.settlement_date.asc(),
+                  ContractSettlement.settlement_id.asc())
+        .limit(1000)
+    ).all()
+    items = []
+    for settlement in rows:
+        data = settlement_out(settlement, db)
+        contract = db.get(Contract, settlement.contract_id)
+        data["contract_no"] = contract.contract_no if contract else ""
+        data["contract_title"] = contract.title if contract else ""
+        data["contract_title_en"] = contract.title_en if contract else ""
+        items.append(data)
+    return {"items": items}
+
+
 @router.get("/{contract_id}/settlements")
 def list_settlements(contract_id:int,settlement_side:Literal["Customer","Subcontractor"]|None=None, _:User=Depends(require_permission("ContractSettlements","View")),db:Session=Depends(get_db)):
     q=select(ContractSettlement).where(ContractSettlement.contract_id==contract_id)
