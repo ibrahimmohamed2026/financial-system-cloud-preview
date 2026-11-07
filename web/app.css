@@ -136,7 +136,7 @@ table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
 th,td{padding:9px 14px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
 th{background:var(--head);color:var(--muted);font-weight:600;font-size:13px;position:sticky;top:0}
 tbody tr:hover td{background:var(--brand-soft)}
-td.num{text-align:left;font-variant-numeric:tabular-nums}
+td.num{text-align:right;direction:ltr;white-space:nowrap;min-width:124px;font-variant-numeric:tabular-nums}
 table, .kpi-v, .num, .money, .financial-number{font-variant-numeric:tabular-nums}
 .tag.print{color:#fff;background:#6d5bd0;border-color:transparent}
 tr.off td{color:var(--muted)}
@@ -289,16 +289,17 @@ dialog .tbl-wrap{overflow:auto}
 @media print{body.contract-print-mode #contractPrint{padding:5mm!important;font-size:9px!important;max-width:100%!important;min-height:281mm!important;overflow:visible!important}body.contract-print-mode #contractPrint .contract-print-header{padding:6px!important;margin-bottom:7px!important}body.contract-print-mode #contractPrint .contract-print-header img{height:45px!important}body.contract-print-mode #contractPrint .contract-print-meta{gap:5px!important;padding:5px 0!important}body.contract-print-mode #contractPrint .contract-print-meta>div{padding:5px!important}body.contract-print-mode #contractPrint table{margin:5px 0!important}body.contract-print-mode #contractPrint th,body.contract-print-mode #contractPrint td{padding:3px 4px!important;font-size:9px!important}body.contract-print-mode #contractPrint .contract-print-notes{margin:6px 0!important;min-height:0!important}body.contract-print-mode #contractPrint .contract-print-notes p{margin:4px 0!important;line-height:1.35!important}body.contract-print-mode #contractPrint .contract-signature-area{break-inside:avoid!important;page-break-inside:avoid!important}body.contract-print-mode #contractPrint .contract-signature-grid{gap:8px!important;margin-top:10px!important}body.contract-print-mode #contractPrint .contract-signature{min-height:55px!important;padding:6px!important;gap:8px!important}body.contract-print-mode #contractPrint .contract-approval{margin-top:8px!important;padding:6px!important}body.contract-print-mode #contractPrint .contract-approval-line{margin-top:8px!important}@page{size:A4 portrait;margin:8mm}}
 
 
-/* ميزان المراجعة: اجعل كامل الأعمدة ضمن عرض الصفحة بدل قصها */
+/* ميزان المراجعة: أعمدة مدين/دائن ثابتة تمنع تزاحم الأرقام */
 .trial-balance-page{width:100%;min-width:0;max-width:100%;overflow:hidden}
 .trial-balance-page .toolbar{width:100%;min-width:0}
 .trial-balance-page .tbl-wrap{width:100%;max-width:100%;min-width:0;overflow-x:auto;overscroll-behavior-inline:contain}
-.trial-balance-page table{width:100%;min-width:0;table-layout:fixed;font-size:clamp(10px,0.72vw,13px)}
-.trial-balance-page th,.trial-balance-page td{padding:7px clamp(3px,0.45vw,8px);white-space:normal;overflow-wrap:anywhere}
-.trial-balance-page th:nth-child(1){width:8%}.trial-balance-page th:nth-child(2){width:18%}.trial-balance-page th:nth-child(3){width:12%}
-.trial-balance-page th:nth-child(n+4){width:7.75%}
-.trial-balance-page td.num{white-space:nowrap;font-size:clamp(9px,0.68vw,12px)}
-@media(max-width:900px){.trial-balance-page .tbl-wrap{overflow-x:auto}.trial-balance-page table{min-width:950px;font-size:12px}.trial-balance-page th,.trial-balance-page td{padding:7px 8px;white-space:nowrap}}
+.trial-balance-page table{width:100%;min-width:1450px;table-layout:fixed;font-size:12px}
+.trial-balance-page th,.trial-balance-page td{padding:8px 10px;white-space:nowrap;overflow-wrap:normal}
+.trial-balance-page th:nth-child(1){width:7%}.trial-balance-page th:nth-child(2){width:20%}.trial-balance-page th:nth-child(3){width:9%}
+.trial-balance-page th:nth-child(n+4){width:8%}
+.trial-balance-page td.num{direction:ltr;text-align:right;white-space:nowrap;min-width:116px;font-size:12px;font-variant-numeric:tabular-nums}
+.trial-balance-page th:nth-child(n+4){text-align:center;line-height:1.4}
+@media(max-width:900px){.trial-balance-page .tbl-wrap{overflow-x:auto}.trial-balance-page table{min-width:1450px;font-size:12px}.trial-balance-page th,.trial-balance-page td{padding:8px 10px;white-space:nowrap}}
 
 /* فلاتر شجرة الحسابات: حقول أوسع ومحاذاة عربية واضحة */
 .accounts-toolbar{display:flex;flex-direction:column;align-items:stretch;gap:12px;margin:0 0 16px}
