@@ -162,9 +162,16 @@ class SettlementIn(BaseModel):
 
 class ManualSettlementDeductionIn(BaseModel):
     name: str = Field(min_length=2, max_length=150)
-    amount: Decimal = Field(gt=0)
+    calculation_type: Literal["Percent","Fixed"] = "Fixed"
+    rate: Decimal = Field(gt=0)
+    base_type: Optional[Literal["CurrentWork","CumulativeWork","RemainingContract"]] = None
     account_id: int = Field(gt=0)
     reason: str = Field(min_length=3, max_length=1000)
+    @model_validator(mode="after")
+    def validate_base(self):
+        if self.calculation_type == "Percent" and not self.base_type:
+            raise ValueError("يجب تحديد أساس حساب الخصم النسبي")
+        return self
 
 class SettlementDeductionsUpdate(BaseModel):
     amounts: dict[str, Decimal] = Field(default_factory=dict)
@@ -591,16 +598,28 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
         d["amount"]=str(amount)
         total+=amount
     added_codes=[]
+    previous,contract_value=contract_financial_summary(db,x.contract_id,x.settlement_side)[1:]
     for addition in body.additions:
         account=leaf_account_or_422(db, addition.account_id, "حساب الخصم الإضافي: ")
+        base=ZERO
+        if addition.calculation_type=="Percent":
+            base=(Decimal(str(x.work_value)) if addition.base_type=="CurrentWork" else
+                  Decimal(str(x.cumulative_work_value)) if addition.base_type=="CumulativeWork" else
+                  max(ZERO,contract_value-Decimal(str(x.cumulative_work_value))))
+            amount=money(base*addition.rate/Decimal("100"))
+        else:
+            amount=money(addition.rate)
+        if amount<=ZERO:
+            raise HTTPException(422,"قيمة الخصم الإضافي المحسوبة يجب أن تكون أكبر من صفر")
         code=f"manual_{uuid4().hex}"
         posting_side="Debit" if x.settlement_side=="Customer" else "Credit"
-        deductions[code]={"name":addition.name.strip(),"amount":str(money(addition.amount)),
+        deductions[code]={"name":addition.name.strip(),"amount":str(amount),
             "account_id":account.account_id,"posting_side":posting_side,"source":"manual",
-            "calculation_type":"Fixed","rate":str(money(addition.amount)),
+            "calculation_type":addition.calculation_type,"rate":str(addition.rate),
+            "base_type":addition.base_type,"base_value":str(money(base)),
             "reason":addition.reason.strip(),"created_by":user.user_id,
             "created_at":datetime.utcnow().isoformat()}
-        total+=money(addition.amount); added_codes.append(code)
+        total+=amount; added_codes.append(code)
     vat=money(body.vat_amount)
     net=money(Decimal(str(x.work_value))+vat-total)
     if net<0: raise HTTPException(422,"إجمالي الخصومات أكبر من قيمة الأعمال والضريبة")
