@@ -300,7 +300,7 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, *, a
         amount=money(base*Decimal(str(r.rate))/Decimal("100")) if r.calculation_type=="Percent" else money(r.rate)
         if r.cap_amount is not None: amount=min(amount,money(r.cap_amount))
         account=resolve_rule_account(r.code,r.name_ar,r.gl_account_id,cfg)
-        if amount>0 and not account: raise HTTPException(422,f"قاعدة الخصم «{r.name_ar}» غير مربوطة بحساب في شجرة الحسابات. اربطها من تفاصيل العقد (ربط تلقائي بالشجرة) ثم أعد الاعتماد الهندسي.")
+        if amount>0 and not account: raise HTTPException(422,f"قاعدة الخصم «{r.name_ar}» غير مربوطة بحساب في شجرة الحسابات. اربطها من تفاصيل العقد (ربط تلقائي بالشجرة) ثم أعد حفظ المستخلص.")
         deductions[r.code]={"name":r.name_ar,"amount":str(amount),"account_id":account,"posting_side":r.posting_side};total_d+=amount
     # Add the standard settlement-template deduction rows to every incoming financial draft.
     # They start at zero and can be edited by Finance; positive values still require a
