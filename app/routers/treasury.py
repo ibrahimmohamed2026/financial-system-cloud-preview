@@ -594,6 +594,7 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
         if body.counterpart_account_id and body.counterpart_account_id != linked:
             raise HTTPException(422, "حساب الطرف لا يطابق الحساب المرتبط به في بطاقة العميل/المورد")
         values["counterpart_account_id"] = linked
+        body.counterpart_account_id = linked
     t = TreasuryTransaction(treasury_account_id=a.treasury_account_id, **values)
     db.add(t)
     db.flush()
