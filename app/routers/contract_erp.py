@@ -391,7 +391,7 @@ def settlement_summary(contract_id: int, settlement_side: Literal["Customer","Su
     valid_estimate_ids = select(TechnicalSettlementEstimate.estimate_id).where(
         TechnicalSettlementEstimate.contract_id == contract_id,
         TechnicalSettlementEstimate.settlement_side == settlement_side,
-        TechnicalSettlementEstimate.status == "TechnicallyApproved")
+        TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")))
     technical_rows = db.execute(select(TechnicalSettlementEstimateItem.contract_item_id,
         func.sum(func.coalesce(TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)))
         .where(TechnicalSettlementEstimateItem.estimate_id.in_(valid_estimate_ids))
@@ -841,7 +841,7 @@ def delete_settlement(settlement_id: int, cascade: bool = False,
     if x.status not in ("Draft", "PendingApproval") or x.journal_entry_id is not None:
         raise HTTPException(409, "الحذف متاح قبل الاعتماد والترحيل فقط؛ المستخلص المعتمد أو المرحّل لا يُحذف حفاظًا على الأثر المحاسبي")
     linked = db.scalar(select(TechnicalSettlementEstimate).where(TechnicalSettlementEstimate.financial_settlement_id == x.settlement_id).with_for_update())
-    if linked and linked.status not in ("UnderReview", "TechnicallyApproved"):
+    if linked and linked.status not in ("UnderReview", "TechnicallyApproved", "ForwardedToFinance"):
         raise HTTPException(409, "لا يمكن حذف المستخلص المالي المرتبط بحالة فنية غير قابلة للحذف")
     old = settlement_out(x, db)
     if linked:

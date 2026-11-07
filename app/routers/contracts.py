@@ -244,8 +244,8 @@ def create_contract(body: ContractIn, user: User = Depends(require_permission("C
     schedule_rows = _build_contract_schedule(body)
     values = body.model_dump(exclude={"items", "deduction_rules", "schedule_items"})
     values["statement_distribution_method"] = body.statement_distribution_method or "Manual"
-    # New contracts await accounting review; the reviewer activates them after checking deductions.
-    values["status"] = "PendingEngineering"
+    # New contracts go directly to accounting review; there is no engineering approval stage.
+    values["status"] = "PendingFinancial"
     values["contract_no"] = f"CT-PENDING-{uuid4().hex}"
     c = Contract(**values, created_by=user.user_id)
     db.add(c); db.flush(); c.contract_no = f"CT-{date.today().year}-{c.contract_id:06d}"
@@ -318,20 +318,8 @@ def submit_contract(contract_id: int, user: User = Depends(require_permission("C
     if not c: raise HTTPException(404, "العقد غير موجود")
     if c.status.lower() not in ("draft", "returned"):
         raise HTTPException(409, "لا يمكن إرسال العقد للمراجعة بهذه الحالة")
-    old = _contract(c); c.status = "PendingEngineering"
-    write_audit(db, user.user_id, "SubmitForApproval", "Contracts", c.contract_id, old=old, new=_contract(c))
-    db.commit(); db.refresh(c); return _contract(c)
-
-@router.post("/{contract_id}/engineering-approve")
-def engineering_approve_contract(contract_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not has_permission(db, user.user_id, "Contracts", "EngineeringApprove"):
-        raise HTTPException(403, "ليس لديك صلاحية الاعتماد الهندسي للعقود")
-    c = db.get(Contract, contract_id)
-    if not c: raise HTTPException(404, "العقد غير موجود")
-    if c.status.lower() not in ("pendingengineering", "pendingapproval"):
-        raise HTTPException(409, "العقد ليس بانتظار الاعتماد الهندسي")
     old = _contract(c); c.status = "PendingFinancial"
-    write_audit(db, user.user_id, "EngineeringApprove", "Contracts", c.contract_id, old=old, new=_contract(c))
+    write_audit(db, user.user_id, "SubmitForApproval", "Contracts", c.contract_id, old=old, new=_contract(c))
     db.commit(); db.refresh(c); return _contract(c)
 
 @router.post("/{contract_id}/approve")
@@ -341,8 +329,8 @@ def approve_contract(contract_id: int, body: ContractActivationIn | None = None,
         raise HTTPException(403, "ليس لديك صلاحية الاعتماد المالي للعقود")
     c = db.get(Contract, contract_id)
     if not c: raise HTTPException(404, "العقد غير موجود")
-    if c.status.lower() != "pendingfinancial":
-        raise HTTPException(409, "يجب إتمام الاعتماد الهندسي أولًا قبل الاعتماد المالي")
+    if c.status.lower() not in ("pendingfinancial", "pendingengineering", "pendingapproval"):
+        raise HTTPException(409, "العقد ليس بانتظار المراجعة المالية")
     if body and body.deduction_rules is not None:
         current = db.scalars(select(ContractDeductionRule).where(ContractDeductionRule.contract_id == contract_id)).all()
         current_by_key = {(r.settlement_side, r.code.casefold()): r for r in current}
@@ -381,11 +369,11 @@ def approve_contract(contract_id: int, body: ContractActivationIn | None = None,
 def return_contract(contract_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     c = db.get(Contract, contract_id)
     if not c: raise HTTPException(404, "العقد غير موجود")
-    action = "FinancialApprove" if c.status.lower() == "pendingfinancial" else "EngineeringApprove"
+    action = "FinancialApprove"
     if not has_permission(db, user.user_id, "Contracts", action):
         raise HTTPException(403, "ليس لديك صلاحية إعادة العقد للتعديل")
-    if c.status.lower() not in ("pendingengineering", "pendingfinancial", "pendingapproval"):
-        raise HTTPException(409, "العقد ليس بانتظار الاعتماد")
+    if c.status.lower() not in ("pendingfinancial", "pendingengineering", "pendingapproval"):
+        raise HTTPException(409, "العقد ليس بانتظار المراجعة المالية")
     old = _contract(c); c.status = "Returned"
     write_audit(db, user.user_id, "ReturnForChanges", "Contracts", c.contract_id, old=old, new=_contract(c))
     db.commit(); db.refresh(c); return _contract(c)
@@ -441,7 +429,7 @@ def add_addendum_line(contract_id: int, addendum_id: int, body: AddendumLineIn,
                 TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)), 0))
                 .join(TechnicalSettlementEstimate, TechnicalSettlementEstimate.estimate_id == TechnicalSettlementEstimateItem.estimate_id)
                 .where(TechnicalSettlementEstimate.contract_id == contract_id,
-                    TechnicalSettlementEstimate.status == "TechnicallyApproved",
+                    TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")),
                     TechnicalSettlementEstimateItem.contract_item_id == target.item_id)) or 0
             used_financial = db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity), 0))
                 .join(ContractSettlement, ContractSettlement.settlement_id == ContractSettlementItem.settlement_id)
@@ -606,7 +594,7 @@ def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(re
                 TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)), 0))
                 .join(TechnicalSettlementEstimate, TechnicalSettlementEstimate.estimate_id == TechnicalSettlementEstimateItem.estimate_id)
                 .where(TechnicalSettlementEstimate.contract_id == contract_id,
-                    TechnicalSettlementEstimate.status == "TechnicallyApproved",
+                    TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")),
                     TechnicalSettlementEstimateItem.contract_item_id == item.item_id)) or 0
             used_financial = db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity), 0))
                 .join(ContractSettlement, ContractSettlement.settlement_id == ContractSettlementItem.settlement_id)
@@ -651,7 +639,7 @@ def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(re
             ContractSettlement.settlement_id.not_in(linked_financial_ids))) or 0
         technical_work = db.scalar(select(func.coalesce(func.sum(TechnicalSettlementEstimate.work_value), 0)).where(
             TechnicalSettlementEstimate.contract_id == contract_id, TechnicalSettlementEstimate.settlement_side == side,
-            TechnicalSettlementEstimate.status == "TechnicallyApproved")) or 0
+            TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")))) or 0
         legacy_work = db.scalar(select(func.coalesce(func.sum(ProgressBilling.work_value), 0)).where(
             ProgressBilling.contract_id == contract_id,
             func.lower(ProgressBilling.status).in_(("approved", "paid", "posted")))) or 0

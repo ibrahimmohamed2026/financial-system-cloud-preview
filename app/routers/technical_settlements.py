@@ -114,7 +114,7 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
         seen.add(req.contract_item_id)
         item=db.scalar(select(ContractItem).where(ContractItem.item_id==req.contract_item_id,ContractItem.contract_id==c.contract_id))
         if not item: raise HTTPException(422,f"البند {req.contract_item_id} لا يتبع العقد")
-        prev_ids=select(TechnicalSettlementEstimate.estimate_id).where(TechnicalSettlementEstimate.contract_id==c.contract_id,TechnicalSettlementEstimate.settlement_side==body.settlement_side,TechnicalSettlementEstimate.status=="TechnicallyApproved")
+        prev_ids=select(TechnicalSettlementEstimate.estimate_id).where(TechnicalSettlementEstimate.contract_id==c.contract_id,TechnicalSettlementEstimate.settlement_side==body.settlement_side,TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")))
         prev=db.scalar(select(func.coalesce(func.sum(func.coalesce(TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)),0)).where(TechnicalSettlementEstimateItem.contract_item_id==item.item_id,TechnicalSettlementEstimateItem.estimate_id.in_(prev_ids))) or 0
         # Include posted/approved financial settlement quantities if the history predates this technical workflow.
         linked_financial_ids=select(TechnicalSettlementEstimate.financial_settlement_id).where(TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
@@ -127,15 +127,16 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     if total<=0: raise HTTPException(422,"قيمة الأعمال يجب أن تكون أكبر من صفر")
     x=TechnicalSettlementEstimate(contract_id=c.contract_id,settlement_side=body.settlement_side,estimate_no=estimate_no,
        estimate_date=(body.estimate_date if body.estimate_date else datetime.utcnow().date()),counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,
-       work_value=total,status="UnderReview",notes=body.notes,created_by=user.user_id)
+       work_value=total,status="TechnicalReviewed",notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
     if planned_row is not None:
         planned_row.technical_estimate_id = x.estimate_id
         planned_row.status = "Submitted"
     for item,prev,qty,amount in prepared:
-        db.add(TechnicalSettlementEstimateItem(estimate_id=x.estimate_id,contract_item_id=item.item_id,previous_quantity=prev,current_quantity=qty,unit_price=item.unit_price,amount=amount))
-    write_audit(db,user.user_id,"Create","TechnicalSettlementEstimates",x.estimate_id,new={"estimate_no":x.estimate_no,"work_value":str(total),"status":x.status})
-    db.commit();db.refresh(x);return estimate_out(x,db)
+        db.add(TechnicalSettlementEstimateItem(estimate_id=x.estimate_id,contract_item_id=item.item_id,previous_quantity=prev,current_quantity=qty,approved_quantity=qty,unit_price=item.unit_price,amount=amount))
+    write_audit(db,user.user_id,"Create","TechnicalSettlementEstimates",x.estimate_id,new={"estimate_no":x.estimate_no,"work_value":str(total),"status":"ForwardedToFinance","engineering_approval":False})
+    db.flush()
+    return _create_financial_from_estimate(x.estimate_id, user, db, allow_creator=True)
 
 @router.post("/{estimate_id}/return")
 def return_estimate_for_correction(estimate_id: int, body: TechnicalReturnIn,
@@ -269,12 +270,11 @@ def review_estimate(estimate_id: int, body: TechnicalReviewIn,
     return {"estimate": estimate_out(x, db), "message": "تم حفظ مراجعة البنود. المستخلص جاهز للاعتماد الفني النهائي."}
 
 
-@router.post("/{estimate_id}/approve")
-def approve_estimate(estimate_id:int,user:User=Depends(require_permission("ContractSettlements","Approve")),db:Session=Depends(get_db)):
+def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, *, allow_creator: bool = False):
     x=db.scalar(select(TechnicalSettlementEstimate).where(TechnicalSettlementEstimate.estimate_id==estimate_id).with_for_update())
     if not x: raise HTTPException(404,"المستخلص الفني غير موجود")
     if x.status!="TechnicalReviewed": raise HTTPException(409,"يجب إتمام مراجعة البنود الفنية أولاً")
-    if x.technical_reviewed_by == user.user_id or x.created_by == user.user_id: raise HTTPException(403,"لا يجوز لمُعدّ المستخلص أو مراجع البنود اعتماده فنياً")
+    if not allow_creator and (x.technical_reviewed_by == user.user_id or x.created_by == user.user_id): raise HTTPException(403,"لا يجوز لمُعدّ المستخلص أو مراجع البنود اعتماده فنياً")
     c=db.get(Contract,x.contract_id)
     if not c or (c.status or "").lower()!="active": raise HTTPException(409,"العقد لم يعد نشطاً")
     lines=db.scalars(select(TechnicalSettlementEstimateItem).where(TechnicalSettlementEstimateItem.estimate_id==x.estimate_id)).all()
@@ -282,7 +282,7 @@ def approve_estimate(estimate_id:int,user:User=Depends(require_permission("Contr
     cfg=db.scalar(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==x.contract_id,ContractAccountingConfig.settlement_side==x.settlement_side))
     rules=db.scalars(select(ContractDeductionRule).where(ContractDeductionRule.contract_id==x.contract_id,ContractDeductionRule.settlement_side==x.settlement_side,ContractDeductionRule.is_active.is_(True)).order_by(ContractDeductionRule.sort_order,ContractDeductionRule.rule_id)).all()
     # Use the same configured deductions as the existing financial-settlement engine.
-    prior_technical=db.scalar(select(func.coalesce(func.sum(TechnicalSettlementEstimate.work_value),0)).where(TechnicalSettlementEstimate.contract_id==x.contract_id,TechnicalSettlementEstimate.settlement_side==x.settlement_side,TechnicalSettlementEstimate.status=="TechnicallyApproved",TechnicalSettlementEstimate.estimate_id!=x.estimate_id)) or 0
+    prior_technical=db.scalar(select(func.coalesce(func.sum(TechnicalSettlementEstimate.work_value),0)).where(TechnicalSettlementEstimate.contract_id==x.contract_id,TechnicalSettlementEstimate.settlement_side==x.settlement_side,TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")),TechnicalSettlementEstimate.estimate_id!=x.estimate_id)) or 0
     linked_financial_ids=select(TechnicalSettlementEstimate.financial_settlement_id).where(TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
     prior_financial=db.scalar(select(func.coalesce(func.sum(ContractSettlement.work_value),0)).where(ContractSettlement.contract_id==x.contract_id,ContractSettlement.settlement_side==x.settlement_side,ContractSettlement.status.in_(("Approved","Posted")),ContractSettlement.settlement_id.not_in(linked_financial_ids))) or 0
     previous=money(Decimal(str(prior_technical))+Decimal(str(prior_financial)))
@@ -300,7 +300,7 @@ def approve_estimate(estimate_id:int,user:User=Depends(require_permission("Contr
         amount=money(base*Decimal(str(r.rate))/Decimal("100")) if r.calculation_type=="Percent" else money(r.rate)
         if r.cap_amount is not None: amount=min(amount,money(r.cap_amount))
         account=resolve_rule_account(r.code,r.name_ar,r.gl_account_id,cfg)
-        if amount>0 and not account: raise HTTPException(422,f"قاعدة الخصم «{r.name_ar}» غير مربوطة بحساب في شجرة الحسابات. اربطها من تفاصيل العقد (ربط تلقائي بالشجرة) ثم أعد الاعتماد الهندسي.")
+        if amount>0 and not account: raise HTTPException(422,f"قاعدة الخصم «{r.name_ar}» غير مربوطة بحساب في شجرة الحسابات. اربطها من تفاصيل العقد (ربط تلقائي بالشجرة) ثم أعد حفظ المستخلص.")
         deductions[r.code]={"name":r.name_ar,"amount":str(amount),"account_id":account,"posting_side":r.posting_side};total_d+=amount
     # Add the standard settlement-template deduction rows to every incoming financial draft.
     # They start at zero and can be edited by Finance; positive values still require a
@@ -333,12 +333,17 @@ def approve_estimate(estimate_id:int,user:User=Depends(require_permission("Contr
         approved_qty = line.approved_quantity if line.approved_quantity is not None else Decimal("0")
         if approved_qty > 0:
             db.add(ContractSettlementItem(settlement_id=fin.settlement_id,contract_item_id=line.contract_item_id,quantity=approved_qty,unit_price=line.unit_price,amount=money(approved_qty*line.unit_price)))
-    x.status="TechnicallyApproved";x.reviewed_by=user.user_id;x.reviewed_at=datetime.utcnow();x.financial_settlement_id=fin.settlement_id
+    x.status="ForwardedToFinance";x.reviewed_by=None;x.reviewed_at=None;x.financial_settlement_id=fin.settlement_id
     linked_schedule=db.scalar(select(ContractSettlementSchedule).where(ContractSettlementSchedule.technical_estimate_id==x.estimate_id).with_for_update())
-    if linked_schedule is not None: linked_schedule.status="Completed"
-    write_audit(db,user.user_id,"Approve","TechnicalSettlementEstimates",x.estimate_id,new={"status":x.status,"financial_settlement_id":fin.settlement_id,"work_value":str(work)})
+    if linked_schedule is not None: linked_schedule.status="Submitted"
+    write_audit(db,user.user_id,"ForwardToFinance","TechnicalSettlementEstimates",x.estimate_id,new={"status":x.status,"financial_settlement_id":fin.settlement_id,"work_value":str(work),"engineering_approval":False})
     db.commit();db.refresh(fin)
-    return {"estimate":estimate_out(x,db),"financial_settlement_id":fin.settlement_id,"financial_settlement_no":fin.settlement_no,"financial_status":fin.status,"net_amount":str(fin.net_amount),"message":"تم الاعتماد الهندسي وإنشاء مستخلص الحسابات كمسودة؛ يلزم مراجعته واعتماده وترحيله من شاشة المستخلصات المالية."}
+    return {"estimate":estimate_out(x,db),"financial_settlement_id":fin.settlement_id,"financial_settlement_no":fin.settlement_no,"financial_status":fin.status,"net_amount":str(fin.net_amount),"message":"تم حفظ المستخلص وتحويله مباشرة إلى المالية دون اعتماد هندسي؛ المستخلص المالي الآن مسودة للمراجعة."}
+
+
+@router.post("/{estimate_id}/approve")
+def approve_estimate(estimate_id: int, user: User = Depends(require_permission("ContractSettlements", "Approve")), db: Session = Depends(get_db)):
+    return _create_financial_from_estimate(estimate_id, user, db)
 
 
 @router.delete("/{estimate_id}", status_code=204)
