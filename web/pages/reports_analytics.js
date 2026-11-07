@@ -229,6 +229,7 @@ export async function render(main, { api }) {
         if (!$(`#${prefix}-wrap`).contains(document.activeElement)) $(box).hidden = true;
       }, 0);
     });
+    drawChips();
   };
   mountMultiPicker("account", accounts, "account_id", accountLabel, selectedAccounts);
   mountMultiPicker("treasury", treasuries, "treasury_account_id", x => `${x.name} — ${x.currency}`, selectedTreasuries);
