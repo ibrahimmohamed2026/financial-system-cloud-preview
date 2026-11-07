@@ -16,16 +16,22 @@ router = APIRouter(prefix="/trial-balance", tags=["TrialBalance"])
 
 @router.get("")
 def trial_balance(date_from: date | None = None, date_to: date | None = None, q: str | None = None, lang: str = Query("ar", pattern="^(ar|en)$"),
-                  classification_id: int | None = None, hide_zero: bool = False, leaves_only: bool = False,
+                  classification_id: int | None = None, account_ids: list[int] = Query(default=[]),
+                  hide_zero: bool = False, leaves_only: bool = False,
                   _: User = Depends(require_permission(SCREEN, "View")), db: Session = Depends(get_db)):
     rows = compute_tb(db, date_from, date_to)
     tot = {k: Decimal("0") for k in ("od", "oc", "d", "c")}
+    selected_ids = set(account_ids)
     for r in rows:  # الإجماليات من أرقام كل حساب نفسه (من غير تجميع الآباء) عشان ما يتكررش العد
+        if selected_ids and r["account_id"] not in selected_ids:
+            continue
         for k in tot:
             tot[k] += r["own"][k]
     needle = (q or "").strip().lower()
     items = []
     for r in rows:
+        if selected_ids and r["account_id"] not in selected_ids:
+            continue
         if needle and needle not in r["code"].lower() and needle not in r["name"].lower() and needle not in (r.get("name_en") or "").lower():
             continue
         if classification_id is not None and r["classification_id"] != classification_id:
