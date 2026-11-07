@@ -113,6 +113,7 @@ def test_outgoing_payment_posts_one_journal_and_allocated_bank_movements(monkeyp
         check_id=11, check_type="OUTGOING", status="تم التسليم",
         amount=Decimal("500.00"), project_id=4, party_account_id=20,
         treasury_account_id=6, journal_entry_id=None, check_number="CHK-11",
+        due_date=date(2026, 11, 30), drawee_bank="Test Bank", description="Test payment",
     )
     fiscal_year = SimpleNamespace(
         company_id=1, fiscal_year_id=2026, start_date=date(2026, 1, 1),
@@ -164,7 +165,9 @@ def test_outgoing_payment_posts_one_journal_and_allocated_bank_movements(monkeyp
 def test_outgoing_cheque_approval_does_not_post_to_bank_or_ledger(monkeypatch):
     check = SimpleNamespace(
         check_id=12, check_type="OUTGOING", status="مسودة",
-        journal_entry_id=None,
+        journal_entry_id=None, check_number="CHK-12", amount=Decimal("100.00"),
+        due_date=date(2026, 11, 30), drawee_bank=None, project_id=None,
+        party_account_id=20, treasury_account_id=6, description=None,
     )
     db = MagicMock()
     db.scalar.return_value = check
