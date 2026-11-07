@@ -281,3 +281,53 @@ def add_allocation(cid: int, body: AllocationIn,
         db.rollback()
         raise HTTPException(409, "التخصيص موجود بالفعل أو تعارضت عملية تخصيص متزامنة")
     return {"items": _allocations_out(db, cid), "allocated_total": str(_money(_money(check_allocated) + amount))}
+
+
+@router.get("/{cid}/allocation-options")
+def allocation_options(cid: int, _: User = Depends(require_any(SCREENS, "View")), db: Session = Depends(get_db)):
+    check = db.get(FinancialCheck, cid)
+    if not check:
+        raise HTTPException(404, "الشيك غير موجود")
+    if check.check_type != "OUTGOING":
+        raise HTTPException(422, "تخصيص المستخلصات متاح للشيكات الصادرة فقط")
+    result = []
+    rows = db.scalars(select(ContractSettlement).where(
+        ContractSettlement.settlement_side == "Subcontractor",
+        ContractSettlement.status.in_(("Approved", "Posted")),
+        ContractSettlement.manager_approved_by.is_not(None),
+        ContractSettlement.manager_approved_at.is_not(None)
+    ).order_by(ContractSettlement.settlement_date, ContractSettlement.settlement_id)).all()
+    for settlement in rows:
+        contract = db.get(Contract, settlement.contract_id)
+        if not contract or contract.status.lower() != "active":
+            continue
+        if check.project_id is not None and contract.project_id is not None and check.project_id != contract.project_id:
+            continue
+        party = db.get(Counterparty, contract.counterparty_id) if contract.counterparty_id else None
+        if not party or not party.is_active:
+            continue
+        if check.party_account_id not in {x for x in (party.account_id, party.linked_account_id) if x is not None}:
+            continue
+        paid = db.scalar(select(func.coalesce(func.sum(TreasuryTransaction.outflow), 0)).where(
+            TreasuryTransaction.settlement_id == settlement.settlement_id,
+            TreasuryTransaction.status == "تم الصرف")) or 0
+        reserved = db.scalar(select(func.coalesce(func.sum(FinancialCheckSettlementAllocation.allocated_amount), 0)).where(
+            FinancialCheckSettlementAllocation.settlement_id == settlement.settlement_id)) or 0
+        remaining = max(Decimal("0.00"), _money(settlement.net_amount) - _money(paid) - _money(reserved))
+        duplicate = db.scalar(select(FinancialCheckSettlementAllocation.allocation_id).where(
+            FinancialCheckSettlementAllocation.check_id == cid,
+            FinancialCheckSettlementAllocation.settlement_id == settlement.settlement_id))
+        if remaining <= 0 or duplicate:
+            continue
+        result.append({
+            "settlement_id": settlement.settlement_id,
+            "settlement_no": settlement.settlement_no,
+            "contract_no": contract.contract_no,
+            "counterparty_name": settlement.counterparty_name,
+            "net_amount": str(_money(settlement.net_amount)),
+            "paid_amount": str(_money(paid)),
+            "allocated_amount": str(_money(reserved)),
+            "remaining_amount": str(remaining),
+            "project_id": contract.project_id,
+        })
+    return {"items": result}
