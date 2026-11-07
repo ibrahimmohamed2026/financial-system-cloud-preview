@@ -109,6 +109,35 @@ def _validate_cash_bank_gl(db: Session, account_id: int) -> Account:
         raise HTTPException(400, "اختَر حسابًا فرعيًا من شجرة الحسابات، وليس حسابًا رئيسيًا")
     return gl
 
+def _validate_treasury_gl_link(db: Session, account_id: int,
+                               exclude_treasury_account_id: int | None = None) -> None:
+    """A ledger cash/bank account must belong to one treasury record only."""
+    stmt = select(TreasuryAccount.treasury_account_id).where(
+        TreasuryAccount.gl_account_id == account_id)
+    if exclude_treasury_account_id is not None:
+        stmt = stmt.where(TreasuryAccount.treasury_account_id != exclude_treasury_account_id)
+    if db.scalar(stmt) is not None:
+        raise HTTPException(409, "حساب الأستاذ مربوط بالفعل بخزينة أو بنك آخر؛ خصص حسابًا مستقلًا لكل حساب نقدي")
+
+
+def _ensure_gl_relink_safe(db: Session, treasury: TreasuryAccount, new_gl_account_id: int) -> None:
+    """Do not detach a ledger account after it has acquired opening or transaction history."""
+    if treasury.gl_account_id == new_gl_account_id:
+        return
+    has_treasury_moves = db.scalar(select(TreasuryTransaction.transaction_id).where(
+        TreasuryTransaction.treasury_account_id == treasury.treasury_account_id).limit(1))
+    old_gl = db.get(Account, treasury.gl_account_id)
+    has_opening_balance = bool(old_gl and (
+        old_gl.opening_debit != 0 or old_gl.opening_credit != 0))
+    has_ledger_history = db.scalar(select(JournalEntryDetail.detail_id).where(
+        JournalEntryDetail.account_id == treasury.gl_account_id).limit(1))
+    if has_treasury_moves or has_opening_balance or has_ledger_history:
+        raise HTTPException(
+            409,
+            "لا يمكن تغيير ربط حساب الأستاذ بعد وجود رصيد افتتاحي أو حركات خزينة أو قيود عليه؛ "
+            "يلزم إجراء تسوية وإعادة تصنيف محاسبية معتمدة أولًا",
+        )
+
 
 @router.get("/analysis")
 def analysis(_: User = Depends(require_permission("CashAnalysis", "View")), db: Session = Depends(get_db)):
@@ -137,8 +166,15 @@ def gl_list(screen_code: str, q: str | None = None, _: User = Depends(require_dy
     cash_bank_classes = select(AccountClassification.classification_id).where(
         AccountClassification.name_ar == "نقدية بالصندوق و البنوك")
     parent_ids = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
+    current_treasury = db.scalar(select(TreasuryAccount).where(
+        TreasuryAccount.screen_code == screen_code))
+    used_by_other_treasuries = select(TreasuryAccount.gl_account_id)
+    if current_treasury is not None:
+        used_by_other_treasuries = used_by_other_treasuries.where(
+            TreasuryAccount.treasury_account_id != current_treasury.treasury_account_id)
     stmt = select(Account).where(Account.is_active == True, Account.classification_id.in_(cash_bank_classes),
-                                 Account.account_id.not_in(parent_ids))
+                                 Account.account_id.not_in(parent_ids),
+                                 Account.account_id.not_in(used_by_other_treasuries))
     if screen_code == "CashUsd":
         stmt = stmt.where(Account.account_code == "15301002")
     if q and q.strip():
@@ -193,6 +229,7 @@ def create_account(screen_code: str, body: AccountIn,
     if db.scalar(select(TreasuryAccount).where(TreasuryAccount.screen_code == screen_code)):
         raise HTTPException(409, "الشاشة دي مربوطة بحساب قبل كده")
     gl = _validate_cash_bank_gl(db, body.gl_account_id)
+    _validate_treasury_gl_link(db, gl.account_id)
     if screen_code == "CashUsd" and gl.account_code != "15301002":
         raise HTTPException(400, "خزينة الدولار يجب ربطها بالحساب 15301002 — الصندوق - خزينة (دولار أمريكي)")
     expected_type, expected_currency = BANK_SCREENS[screen_code]
@@ -215,8 +252,10 @@ def update_account_gl(screen_code: str, body: GLAccountLinkIn,
                       user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))), db: Session = Depends(get_db)):
     a = _bound(db, screen_code)
     gl = _validate_cash_bank_gl(db, body.gl_account_id)
+    _validate_treasury_gl_link(db, gl.account_id, exclude_treasury_account_id=a.treasury_account_id)
     if screen_code == "CashUsd" and gl.account_code != "15301002":
         raise HTTPException(400, "خزينة الدولار يجب ربطها بالحساب 15301002 — الصندوق - خزينة (دولار أمريكي)")
+    _ensure_gl_relink_safe(db, a, gl.account_id)
     old = {"gl_account_id": a.gl_account_id}
     a.gl_account_id = gl.account_id
     write_audit(db, user.user_id, "Update", "TreasuryAccounts", a.treasury_account_id,
