@@ -979,6 +979,7 @@ class TechnicalSettlementEstimate(Base):
     status: Mapped[str] = C("Status", Unicode(30), default="Draft")
     notes: Mapped[Optional[str]] = C("Notes", UnicodeText, nullable=True)
     financial_settlement_id: Mapped[Optional[int]] = C("FinancialSettlementId", ForeignKey("ContractSettlements.SettlementId"), nullable=True, unique=True)
+    is_final: Mapped[bool] = C("IsFinal", Boolean, default=False, nullable=False)
     created_by: Mapped[Optional[int]] = C("CreatedBy", ForeignKey("Users.UserId"), nullable=True)
     reviewed_by: Mapped[Optional[int]] = C("ReviewedBy", ForeignKey("Users.UserId"), nullable=True)
     reviewed_at: Mapped[Optional[datetime]] = C("ReviewedAt", DateTime, nullable=True)
