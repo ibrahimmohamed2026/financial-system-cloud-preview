@@ -499,7 +499,7 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
             raise HTTPException(400, "الحساب المختار لا يتبع التصنيف المسموح لنوع الحركة")
 
     fy = _fy_for(db, body.transaction_date)
-    from .journal import _next_no
+    from .journal import _fy_for, _next_no
     entry = JournalEntry(
         entry_no=_next_no(db, fy), entry_date=body.transaction_date,
         company_id=fy.company_id, fiscal_year_id=fy.fiscal_year_id,
