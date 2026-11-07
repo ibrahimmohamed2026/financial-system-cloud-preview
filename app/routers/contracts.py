@@ -372,7 +372,7 @@ def return_contract(contract_id: int, user: User = Depends(get_current_user), db
     action = "FinancialApprove"
     if not has_permission(db, user.user_id, "Contracts", action):
         raise HTTPException(403, "ليس لديك صلاحية إعادة العقد للتعديل")
-    if c.status.lower() != "pendingfinancial":
+    if c.status.lower() not in ("pendingfinancial", "pendingengineering", "pendingapproval"):
         raise HTTPException(409, "العقد ليس بانتظار المراجعة المالية")
     old = _contract(c); c.status = "Returned"
     write_audit(db, user.user_id, "ReturnForChanges", "Contracts", c.contract_id, old=old, new=_contract(c))
