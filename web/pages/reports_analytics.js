@@ -46,7 +46,7 @@ const columns = {
   project_financials: [["project", "المشروع"], ["revenue", "الإيرادات"], ["expenses", "المصروفات"], ["net", "صافي النتيجة"]],
   aging: [["kind", "النوع"], ["party", "الطرف"], ["document_no", "رقم المستند"], ["document_date", "التاريخ"], ["age_days", "العمر بالأيام"], ["bucket", "الفئة العمرية"], ["balance", "الرصيد المتبقي"], ["project", "المشروع"]],
   settlements: [["settlement_no", "رقم المستخلص"], ["settlement_date", "التاريخ"], ["settlement_side", "النوع"], ["contract_no", "رقم العقد"], ["contract_title", "العقد"], ["project", "المشروع"], ["counterparty_name", "الطرف كما سُجل"], ["work_value", "قيمة الأعمال"], ["deductions", "الخصومات"], ["vat_amount", "الضريبة"], ["net_amount", "الصافي"], ["paid_amount", "المدفوع"], ["remaining_amount", "المتبقي"], ["status", "الحالة"]],
-  checks: [["check_no", "رقم الشيك"], ["check_date", "التاريخ"], ["bank", "البنك"], ["beneficiary", "المستفيد"], ["project", "المشروع"], ["amount", "المبلغ"], ["settlement_no", "المستخلص المرتبط"], ["status", "الحالة"], ["description", "البيان"]],
+  checks: [["check_no", "رقم الشيك"], ["check_date", "التاريخ"], ["bank", "البنك"], ["currency", "العملة"], ["beneficiary", "المستفيد"], ["project", "المشروع"], ["amount", "المبلغ"], ["settlement_no", "المستخلص المرتبط"], ["status", "الحالة"], ["description", "البيان"]],
   purchases: [["order_no", "أمر الشراء"], ["order_date", "التاريخ"], ["supplier", "المورد كما سُجل"], ["project", "مركز التكلفة"], ["warehouse", "المخزن"], ["ordered_quantity", "الكمية المطلوبة"], ["received_quantity", "الكمية المستلمة"], ["total_amount", "الإجمالي"], ["status", "الحالة"]],
   inventory: [["code", "كود الصنف"], ["name", "الصنف"], ["category", "التصنيف"], ["unit", "الوحدة"], ["balance", "الرصيد الحالي"], ["minimum", "حد الطلب"], ["low_stock", "تنبيه النقص"]],
   contractor: [["date", "التاريخ"], ["kind", "النوع"], ["number", "رقم المستخلص"], ["contract_no", "رقم العقد"], ["contract_title", "العقد"], ["counterparty_name", "الطرف كما سُجل"], ["status", "الحالة"], ["work_value", "قيمة الأعمال"], ["deductions", "الخصومات"], ["vat", "الضريبة"], ["net", "الصافي"], ["paid", "المدفوع"], ["outstanding", "المتبقي"]],
@@ -109,7 +109,7 @@ export async function render(main, { api }) {
     $("#status-wrap").hidden = !["checks", "purchases", "settlements"].includes(kind);
     $("#party-wrap").hidden = kind !== "contractor";
     $("#account-wrap").hidden = !["account_ledger", "project_financials"].includes(kind);
-    $("#treasury-wrap").hidden = kind !== "cash_flow";
+    $("#treasury-wrap").hidden = !["cash_flow", "checks"].includes(kind);
     main.querySelectorAll(".date-filter").forEach(e => e.hidden = kind === "inventory");
     if (kind === "aging") $("#from").closest(".date-filter").hidden = true;
     if (kind === "checks") setStatuses(["جديد", "مطبوع", "تم التسليم", "تم الصرف", "ملغي", "مرتد"]);
@@ -172,7 +172,10 @@ export async function render(main, { api }) {
     }
     if (kind === "checks") {
       const p = new URLSearchParams(dateParams); if ($("#status").value) p.set("status", $("#status").value); if ($("#project").value) p.set("project_id", $("#project").value);
-      const r = await api(`/api/reports/checks?${p}`), summary = kpis([["عدد الشيكات", r.summary.count], ["إجمالي القيمة", money(r.summary.amount)], ["المصروف", money(r.summary.paid_amount)], ["غير مربوط بمستخلص", r.summary.unlinked_count]]);
+      [...selectedTreasuries].forEach(id => p.append("treasury_account_ids", id));
+      const r = await api(`/api/reports/checks?${p}`);
+      const summary = kpis([["عدد الشيكات", r.summary.count], ["غير مربوط بمستخلص", r.summary.unlinked_count],
+        ...(r.summary.currency_totals || []).flatMap(x => [[`قيمة الشيكات — ${x.currency}`, money(x.amount)], [`المصروف — ${x.currency}`, money(x.paid_amount)]])]);
       return formatReport("تقرير الشيكات", r.items || [], summary, columns.checks);
     }
     if (kind === "purchases") {
