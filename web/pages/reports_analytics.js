@@ -7,6 +7,12 @@ const EN = {
 "حركة النقدية الشهرية":"Monthly cash flow","لا توجد حركات نقدية في الفترة المحددة.":"No cash movements in the selected period.","المصروفات حسب التصنيف":"Expenses by category","لا توجد مصروفات مصنفة في الفترة المحددة.":"No categorized expenses in the selected period.",
 "مركز التقارير":"Reports Center","تقارير مالية وتشغيلية من بيانات النظام، مع فلاتر وطباعة وتصدير.":"Financial and operational reports from system data, with filters, print and export.","ميزان المراجعة":"Trial balance","المركز المالي":"Balance sheet","قائمة الدخل":"Income statement","الخزينة والبنوك":"Treasury & banks","دورة المشتريات":"Purchasing workflow","إدارة المخزون":"Inventory management","نوع التقرير":"Report type","من تاريخ":"From date","إلى تاريخ":"To date","نوع المستخلص":"Statement type","الكل":"All","العميل":"Customer","مقاول الباطن":"Subcontractor","كل المشروعات":"All projects","كل الحالات":"All statuses","الطرف — الاسم المسجل":"Party — registered name","اختر الاسم":"Select party","الحساب التفصيلي":"Ledger account","اكتب كود الحساب أو اسمه":"Type account code or name","ابحث عن الحساب":"Search account","الخزينة / البنك":"Treasury / bank","عرض التقرير":"Run report","تصدير CSV":"Export CSV","طباعة / PDF":"Print / PDF","تاريخ البداية يجب أن يكون قبل تاريخ النهاية":"Start date must be before end date","كل الفترات":"All periods","حتى اليوم":"To date","سجل":"records","إجمالي الإيرادات":"Total revenue","إجمالي المصروفات":"Total expenses","صافي الربح / الخسارة":"Net profit / loss","الشهر":"Month","الوارد":"Inflow","المنصرف":"Outflow","أكثر الحسابات حركة":"Most active accounts","الكود":"Code","الحساب":"Account","الطبيعة":"Nature","اختر الحساب التفصيلي لعرض كشف الأستاذ":"Select a ledger account to view its statement","عدد الحركات":"Transactions","إجمالي المقبوضات":"Total receipts","إجمالي المدفوعات":"Total payments","عدد المشروعات":"Projects","مستحق لنا":"Receivable","مستحق علينا":"Payable","أكثر من 90 يوم":"Over 90 days","حتى":"As of","المستخلصات":"Statements","صافي المستحق":"Net due","إجمالي القيمة":"Total value","المصروف":"Paid","غير مربوط بمستخلص":"Not linked to a statement","أوامر الشراء":"Purchase orders","إجمالي قيمة الأوامر":"Total order value","عدد الأصناف":"Items","أصناف عند حد الطلب أو أقل":"Items at or below reorder level","اختر الطرف المطلوب؛ القائمة تعرض الأسماء كما سُجلت دون توحيدها":"Select a party; the list shows names as originally recorded, without merging them","العقود":"Contracts","المستخلصات الفنية":"Technical statements","المستخلصات المالية":"Financial statements","صافي المستخلصات":"Net statements","كشف الطرف:":"Party statement:","لا يوجد حساب مطابق للاسم أو الكود":"No account matches the name or code"
 };
+Object.assign(EN, {
+  "الحسابات":"Accounts", "الخزائن والبنوك":"Treasury & banks", "العملة":"Currency",
+  "كود الحساب":"Account code", "تصفية حسب عدة حسابات":"Filter by multiple accounts",
+  "ابحث عن الخزينة أو البنك":"Search treasury or bank", "تحديد الكل":"Select all",
+  "إلغاء الكل":"Clear all", "إزالة":"Remove", "لا توجد نتائج":"No results"
+});
 const T = value => { try { return localStorage.getItem("fs_lang")==="en" ? (EN[value] || value) : value; } catch { return value; } };
 
 const REPORTS = [
@@ -35,12 +41,12 @@ const csvDownload = (filename, keys, labels, rows) => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 const columns = {
-  account_ledger: [["date", "التاريخ"], ["entry_no", "رقم القيد"], ["description", "البيان"], ["project", "المشروع"], ["debit", "مدين"], ["credit", "دائن"], ["balance", "الرصيد" ]],
-  cash_flow: [["date", "التاريخ"], ["account", "الخزينة / البنك"], ["voucher_no", "رقم الإذن"], ["description", "البيان"], ["recipient", "المستفيد"], ["project", "المشروع"], ["inflow", "وارد"], ["outflow", "منصرف"], ["net", "الصافي"]],
+  account_ledger: [["account_code", "كود الحساب"], ["account_name", "الحساب"], ["date", "التاريخ"], ["entry_no", "رقم القيد"], ["description", "البيان"], ["project", "المشروع"], ["debit", "مدين"], ["credit", "دائن"], ["balance", "الرصيد" ]],
+  cash_flow: [["date", "التاريخ"], ["account", "الخزينة / البنك"], ["currency", "العملة"], ["voucher_no", "رقم الإذن"], ["description", "البيان"], ["recipient", "المستفيد"], ["project", "المشروع"], ["inflow", "وارد"], ["outflow", "منصرف"], ["net", "الصافي"]],
   project_financials: [["project", "المشروع"], ["revenue", "الإيرادات"], ["expenses", "المصروفات"], ["net", "صافي النتيجة"]],
   aging: [["kind", "النوع"], ["party", "الطرف"], ["document_no", "رقم المستند"], ["document_date", "التاريخ"], ["age_days", "العمر بالأيام"], ["bucket", "الفئة العمرية"], ["balance", "الرصيد المتبقي"], ["project", "المشروع"]],
   settlements: [["settlement_no", "رقم المستخلص"], ["settlement_date", "التاريخ"], ["settlement_side", "النوع"], ["contract_no", "رقم العقد"], ["contract_title", "العقد"], ["project", "المشروع"], ["counterparty_name", "الطرف كما سُجل"], ["work_value", "قيمة الأعمال"], ["deductions", "الخصومات"], ["vat_amount", "الضريبة"], ["net_amount", "الصافي"], ["paid_amount", "المدفوع"], ["remaining_amount", "المتبقي"], ["status", "الحالة"]],
-  checks: [["check_no", "رقم الشيك"], ["check_date", "التاريخ"], ["bank", "البنك"], ["beneficiary", "المستفيد"], ["project", "المشروع"], ["amount", "المبلغ"], ["settlement_no", "المستخلص المرتبط"], ["status", "الحالة"], ["description", "البيان"]],
+  checks: [["check_no", "رقم الشيك"], ["check_date", "التاريخ"], ["bank", "البنك"], ["currency", "العملة"], ["beneficiary", "المستفيد"], ["project", "المشروع"], ["amount", "المبلغ"], ["settlement_no", "المستخلص المرتبط"], ["status", "الحالة"], ["description", "البيان"]],
   purchases: [["order_no", "أمر الشراء"], ["order_date", "التاريخ"], ["supplier", "المورد كما سُجل"], ["project", "مركز التكلفة"], ["warehouse", "المخزن"], ["ordered_quantity", "الكمية المطلوبة"], ["received_quantity", "الكمية المستلمة"], ["total_amount", "الإجمالي"], ["status", "الحالة"]],
   inventory: [["code", "كود الصنف"], ["name", "الصنف"], ["category", "التصنيف"], ["unit", "الوحدة"], ["balance", "الرصيد الحالي"], ["minimum", "حد الطلب"], ["low_stock", "تنبيه النقص"]],
   contractor: [["date", "التاريخ"], ["kind", "النوع"], ["number", "رقم المستخلص"], ["contract_no", "رقم العقد"], ["contract_title", "العقد"], ["counterparty_name", "الطرف كما سُجل"], ["status", "الحالة"], ["work_value", "قيمة الأعمال"], ["deductions", "الخصومات"], ["vat", "الضريبة"], ["net", "الصافي"], ["paid", "المدفوع"], ["outstanding", "المتبقي"]],
@@ -57,9 +63,9 @@ const dataTable = (key, items) => {
   }).join("")}</tr>`).join("") || `<tr><td class="muted" colspan="${cols.length}">${T("لا توجد بيانات مطابقة للفلاتر")}</td></tr>`}</tbody></table></div>`;
 };
 const chartNum = value => { const n = Number(value || 0); return Number.isFinite(n) ? n : 0; };
-const monthlyCashChart = items => {
-  const rows = items || [], width = 960, height = 310, left = 94, right = 18, top = 22, bottom = 58;
-  if (!rows.some(x => chartNum(x.inflow) || chartNum(x.outflow))) return `<section class="report-chart"><h4>${T("حركة النقدية الشهرية")}</h4><p class="muted">${T("لا توجد حركات نقدية في الفترة المحددة.")}</p></section>`;
+const monthlyCashChart = (items, currency) => {
+  const rows = (items || []).filter(x => x.currency === currency), width = 960, height = 310, left = 94, right = 18, top = 22, bottom = 58;
+  if (!rows.some(x => chartNum(x.inflow) || chartNum(x.outflow))) return `<section class="report-chart"><h4>${T("حركة النقدية الشهرية")} — ${esc(currency)}</h4><p class="muted">${T("لا توجد حركات نقدية في الفترة المحددة.")}</p></section>`;
   const plotW = width - left - right, plotH = height - top - bottom;
   const max = Math.max(1, ...rows.flatMap(x => [chartNum(x.inflow), chartNum(x.outflow)]));
   const axis = Array.from({ length: 5 }, (_, i) => { const value = max * (4 - i) / 4, y = top + plotH * i / 4;
@@ -72,7 +78,7 @@ const monthlyCashChart = items => {
     const label = String(x.month || "");
     return `<rect x="${center - gap / 2 - barW}" y="${top + plotH - hi}" width="${barW}" height="${hi}" rx="3" fill="#35c27a"><title>${esc(`${label} — ${T("وارد")} ${money(inflow)}`)}</title></rect><rect x="${center + gap / 2}" y="${top + plotH - ho}" width="${barW}" height="${ho}" rx="3" fill="#ef6a62"><title>${esc(`${label} — ${T("منصرف")} ${money(outflow)}`)}</title></rect><text x="${center}" y="${top + plotH + 22}" text-anchor="middle" class="report-chart-label">${esc(label)}</text>`;
   }).join("");
-  return `<section class="report-chart"><div class="report-chart-head"><h4>${T("حركة النقدية الشهرية")}</h4><div class="report-legend"><span><i class="in"></i>${T("وارد")}</span><span><i class="out"></i>${T("منصرف")}</span></div></div><div class="report-chart-scroll"><svg class="report-monthly-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${T("حركة النقدية الشهرية")}">${axis}${bars}</svg></div></section>`;
+  return `<section class="report-chart"><div class="report-chart-head"><h4>${T("حركة النقدية الشهرية")} — ${esc(currency)}</h4><div class="report-legend"><span><i class="in"></i>${T("وارد")}</span><span><i class="out"></i>${T("منصرف")}</span></div></div><div class="report-chart-scroll"><svg class="report-monthly-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${T("حركة النقدية الشهرية")}">${axis}${bars}</svg></div></section>`;
 };
 const expenseBreakdownChart = items => {
   const rows = (items || []).slice(0, 8), max = Math.max(1, ...rows.map(x => chartNum(x.amount)));
@@ -89,8 +95,8 @@ export async function render(main, { api }) {
         <div class="w" id="project-wrap" hidden><label>${T("المشروع")}</label><select id="project"><option value="">${T("كل المشروعات")}</option></select></div>
         <div class="w" id="status-wrap" hidden><label>${T("الحالة")}</label><select id="status"><option value="">${T("كل الحالات")}</option></select></div>
         <div class="w" id="party-wrap" hidden><label>${T("الطرف — الاسم المسجل")}</label><select id="party"><option value="">${T("اختر الاسم")}</option></select></div>
-        <div class="w" id="account-wrap" hidden><label>${T("الحساب التفصيلي")}</label><div class="report-account-picker"><input id="account-search" type="search" placeholder="${T("اكتب كود الحساب أو اسمه")}" autocomplete="off" aria-label="${T("ابحث عن الحساب")}"><input id="account" type="hidden" value=""><div id="account-options" class="journal-account-options" role="listbox" hidden></div></div></div>
-        <div class="w" id="treasury-wrap" hidden><label>${T("الخزينة / البنك")}</label><select id="treasury"><option value="">${T("الكل")}</option></select></div>
+        <div class="w" id="account-wrap" hidden><label>${T("الحسابات")}</label><div class="report-account-picker"><input id="account-search" type="search" placeholder="${T("اكتب كود الحساب أو اسمه")}" autocomplete="off" aria-label="${T("ابحث عن الحساب")}"><div id="account-selected" class="report-multi-selected"></div><div id="account-options" class="journal-account-options report-multi-options" role="listbox" hidden></div></div></div>
+        <div class="w" id="treasury-wrap" hidden><label>${T("الخزائن والبنوك")}</label><div class="report-account-picker"><input id="treasury-search" type="search" placeholder="${T("ابحث عن الخزينة أو البنك")}" autocomplete="off"><div id="treasury-selected" class="report-multi-selected"></div><div id="treasury-options" class="journal-account-options report-multi-options" role="listbox" hidden></div></div></div>
         <button class="btn primary" id="run">${T("عرض التقرير")}</button><button class="btn" id="csv" disabled>${T("تصدير CSV")}</button><button class="btn" id="print" disabled>${T("طباعة / PDF")}</button></div></section>
       <div id="report-output"></div>`;
   const $ = selector => main.querySelector(selector), out = $("#report-output");
@@ -102,8 +108,8 @@ export async function render(main, { api }) {
     $("#project-wrap").hidden = !["settlements", "checks", "purchases", "account_ledger", "project_financials", "aging"].includes(kind);
     $("#status-wrap").hidden = !["checks", "purchases", "settlements"].includes(kind);
     $("#party-wrap").hidden = kind !== "contractor";
-    $("#account-wrap").hidden = kind !== "account_ledger";
-    $("#treasury-wrap").hidden = kind !== "cash_flow";
+    $("#account-wrap").hidden = !["account_ledger", "project_financials"].includes(kind);
+    $("#treasury-wrap").hidden = !["cash_flow", "checks"].includes(kind);
     main.querySelectorAll(".date-filter").forEach(e => e.hidden = kind === "inventory");
     if (kind === "aging") $("#from").closest(".date-filter").hidden = true;
     if (kind === "checks") setStatuses(["جديد", "مطبوع", "تم التسليم", "تم الصرف", "ملغي", "مرتد"]);
@@ -126,26 +132,28 @@ export async function render(main, { api }) {
     if (kind === "overview") {
       const p = new URLSearchParams(dateParams), r = await api(`/api/reports/data?${p}`);
       const summary = kpis([["إجمالي الإيرادات", money(r.kpis.total_revenue)], ["إجمالي المصروفات", money(r.kpis.total_expenses)], ["صافي الربح / الخسارة", money(r.kpis.net_profit)]]);
-      currentRows = [...(r.cash_flow_monthly || []).map(x => ({ period: x.month, inflow: x.inflow, outflow: x.outflow, net: Number(x.inflow) - Number(x.outflow) }))];
-      currentColumns = ["period", "inflow", "outflow", "net"]; currentLabels = ["الشهر", "الوارد", "المنصرف", "الصافي"]; currentTitle = "المؤشرات المالية";
-      out.innerHTML = `<section class="panel reports-result"><h3>المؤشرات المالية</h3><p class="muted">${esc(`${r.date_from} — ${r.date_to}`)}</p>${summary}<div class="reports-charts">${monthlyCashChart(r.cash_flow_monthly)}${expenseBreakdownChart(r.expenses_breakdown)}</div><h4>حركة النقدية الشهرية</h4><div class="tbl-wrap"><table><thead><tr><th>الشهر</th><th>الوارد</th><th>المنصرف</th><th>الصافي</th></tr></thead><tbody>${currentRows.map(x => `<tr><td>${esc(x.period)}</td><td class="num">${money(x.inflow)}</td><td class="num">${money(x.outflow)}</td><td class="num">${money(x.net)}</td></tr>`).join("")}</tbody></table></div><h4>أكثر الحسابات حركة</h4><div class="tbl-wrap"><table><thead><tr><th>الكود</th><th>الحساب</th><th>الرصيد</th><th>الطبيعة</th><th>الحالة</th></tr></thead><tbody>${(r.top_accounts || []).map(x => `<tr><td>${esc(x.account_code)}</td><td>${esc(x.account_name)}</td><td>${money(x.closing_balance)}</td><td>${esc(x.side)}</td><td>${esc(x.status)}</td></tr>`).join("") || '<tr><td colspan="5">لا توجد بيانات</td></tr>'}</tbody></table></div></section>`;
+      const monthlyRows = (r.cash_flow_monthly || []).map(x => ({ period: x.month, currency: x.currency, inflow: x.inflow, outflow: x.outflow, net: Number(x.inflow) - Number(x.outflow) }));
+      const currencies = [...new Set(monthlyRows.map(x => x.currency))];
+      currentRows = monthlyRows;
+      currentColumns = ["period", "currency", "inflow", "outflow", "net"]; currentLabels = ["الشهر", "العملة", "الوارد", "المنصرف", "الصافي"]; currentTitle = "المؤشرات المالية";
+      out.innerHTML = `<section class="panel reports-result"><h3>المؤشرات المالية</h3><p class="muted">${esc(`${r.date_from} — ${r.date_to}`)}</p>${summary}<div class="reports-charts">${(currencies.length ? currencies.map(currency => monthlyCashChart(monthlyRows, currency)) : [monthlyCashChart([], "EGP")]).join("")}${expenseBreakdownChart(r.expenses_breakdown)}</div><h4>حركة النقدية الشهرية حسب العملة</h4><div class="tbl-wrap"><table><thead><tr><th>الشهر</th><th>العملة</th><th>الوارد</th><th>المنصرف</th><th>الصافي</th></tr></thead><tbody>${currentRows.map(x => `<tr><td>${esc(x.period)}</td><td>${esc(x.currency)}</td><td class="num">${money(x.inflow)}</td><td class="num">${money(x.outflow)}</td><td class="num">${money(x.net)}</td></tr>`).join("")}</tbody></table></div><h4>أكثر الحسابات حركة</h4><div class="tbl-wrap"><table><thead><tr><th>الكود</th><th>الحساب</th><th>الرصيد</th><th>الطبيعة</th><th>الحالة</th></tr></thead><tbody>${(r.top_accounts || []).map(x => `<tr><td>${esc(x.account_code)}</td><td>${esc(x.account_name)}</td><td>${money(x.closing_balance)}</td><td>${esc(x.side)}</td><td>${esc(x.status)}</td></tr>`).join("") || '<tr><td colspan="5">لا توجد بيانات</td></tr>'}</tbody></table></div></section>`;
       $("#csv").disabled = $("#print").disabled = false; return;
     }
     if (kind === "account_ledger") {
-      if (!$("#account").value) throw new Error("اختر الحساب التفصيلي لعرض كشف الأستاذ");
-      const p = new URLSearchParams(dateParams);p.set("account_id", $("#account").value);if($("#project").value)p.set("project_id",$("#project").value);
-      const r=await api(`/api/reports/account-ledger?${p}`),a=r.account;
-      const summary=kpis([["الحساب",`${a.code} — ${a.name}`],["رصيد أول المدة",money(r.opening_balance)],["إجمالي المدين",money(r.total_debit)],["إجمالي الدائن",money(r.total_credit)],["رصيد آخر المدة",money(r.closing_balance)]]);
+      const ids = selectedAccounts.size ? [...selectedAccounts] : accounts.map(x => x.account_id);
+      const p = new URLSearchParams(dateParams); ids.forEach(id => p.append("account_ids", id)); if($("#project").value)p.set("project_id",$("#project").value);
+      const r=await api(`/api/reports/account-ledger?${p}`);
+      const summary=kpis([["عدد الحسابات",r.accounts.length],["رصيد أول المدة",money(r.opening_balance)],["إجمالي المدين",money(r.total_debit)],["إجمالي الدائن",money(r.total_credit)],["رصيد آخر المدة",money(r.closing_balance)]]);
       return formatReport("كشف حساب الأستاذ",r.items||[],summary,columns.account_ledger);
     }
     if (kind === "cash_flow") {
-      const p=new URLSearchParams(dateParams);if($("#treasury").value)p.set("treasury_account_id",$("#treasury").value);
+      const p=new URLSearchParams(dateParams); [...selectedTreasuries].forEach(id => p.append("treasury_account_ids", id));
       const r=await api(`/api/reports/cash-flow?${p}`),s=r.summary;
-      const summary=kpis([["عدد الحركات",s.count],["إجمالي المقبوضات",money(s.inflow)],["إجمالي المدفوعات",money(s.outflow)],["صافي الحركة",money(s.net)]]);
+      const summary=kpis([["عدد الحركات",s.count], ...(s.currency_totals || []).flatMap(x => [[`المقبوضات — ${x.currency}`,money(x.inflow)],[`المدفوعات — ${x.currency}`,money(x.outflow)],[`الصافي — ${x.currency}`,money(x.net)]])]);
       return formatReport("تقرير التدفقات النقدية التفصيلي",r.items||[],summary,columns.cash_flow);
     }
     if (kind === "project_financials") {
-      const p=new URLSearchParams(dateParams);if($("#project").value)p.set("project_id",$("#project").value);
+      const p=new URLSearchParams(dateParams);if($("#project").value)p.set("project_id",$("#project").value); [...selectedAccounts].forEach(id => p.append("account_ids", id));
       const r=await api(`/api/reports/project-financials?${p}`),s=r.summary;
       const summary=kpis([["عدد المشروعات",s.project_count],["الإيرادات",money(s.revenue)],["المصروفات",money(s.expenses)],["صافي النتيجة",money(s.net)]]);
       return formatReport("التحليل المالي للمشروعات",r.items||[],summary,columns.project_financials);
@@ -164,7 +172,10 @@ export async function render(main, { api }) {
     }
     if (kind === "checks") {
       const p = new URLSearchParams(dateParams); if ($("#status").value) p.set("status", $("#status").value); if ($("#project").value) p.set("project_id", $("#project").value);
-      const r = await api(`/api/reports/checks?${p}`), summary = kpis([["عدد الشيكات", r.summary.count], ["إجمالي القيمة", money(r.summary.amount)], ["المصروف", money(r.summary.paid_amount)], ["غير مربوط بمستخلص", r.summary.unlinked_count]]);
+      [...selectedTreasuries].forEach(id => p.append("treasury_account_ids", id));
+      const r = await api(`/api/reports/checks?${p}`);
+      const summary = kpis([["عدد الشيكات", r.summary.count], ["غير مربوط بمستخلص", r.summary.unlinked_count],
+        ...(r.summary.currency_totals || []).flatMap(x => [[`قيمة الشيكات — ${x.currency}`, money(x.amount)], [`المصروف — ${x.currency}`, money(x.paid_amount)]])]);
       return formatReport("تقرير الشيكات", r.items || [], summary, columns.checks);
     }
     if (kind === "purchases") {
@@ -186,32 +197,51 @@ export async function render(main, { api }) {
   $("#party").innerHTML += (parties.items || []).map(x => `<option value="${esc(x.name)}">${esc(x.name)}</option>`).join("");
   $("#project").innerHTML += (projects.items || []).map(x => `<option value="${x.project_id}">${esc(x.name)}</option>`).join("");
   const accounts = lookups.accounts || [];
+  const treasuries = lookups.treasury_accounts || [];
+  const selectedAccounts = new Set(), selectedTreasuries = new Set();
   const accountLabel = a => `${a.code} — ${a.name}`;
-  const selectAccount = id => { const a = accounts.find(x => x.account_id === id); if (!a) return; $("#account").value = a.account_id; $("#account-search").value = accountLabel(a); $("#account-options").hidden = true; };
-  const accountOptions = (term = "", showAll = false) => {
-    const box = $("#account-options"), input = $("#account-search"), needle = term.trim().toLocaleLowerCase();
-    if (!needle && !showAll) { box.hidden = true; box.innerHTML = ""; return; }
-    const matches = needle ? accounts.filter(a => accountLabel(a).toLocaleLowerCase().includes(needle)) : accounts;
-    box.innerHTML = (matches.length ? matches.map(a => `<button type="button" class="journal-account-option" role="option" data-report-account-id="${a.account_id}">${esc(accountLabel(a))}</button>`).join("") : `<div class="journal-account-empty">${T("لا يوجد حساب مطابق للاسم أو الكود")}</div>`);
-    box.hidden = false;
-    const rect = input.getBoundingClientRect(), width = Math.min(Math.max(rect.width, 360), window.innerWidth - 24);
-    box.style.width = `${width}px`; box.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`;
-    const height = Math.min(window.innerHeight * .42, 360), below = rect.bottom + height <= window.innerHeight - 12;
-    box.style.maxHeight = `${Math.max(54, Math.min(height, below ? window.innerHeight - rect.bottom - 16 : rect.top - 16))}px`;
-    box.style.top = `${below ? rect.bottom + 4 : Math.max(12, rect.top - height - 4)}px`;
+  const mountMultiPicker = (prefix, items, idField, labelOf, selected) => {
+    const input = `#${prefix}-search`, box = `#${prefix}-options`, chips = `#${prefix}-selected`;
+    const drawChips = () => {
+      if (!selected.size || selected.size === items.length) {
+        $(chips).innerHTML = `<span class="tag">${T("الكل")}</span>`;
+        return;
+      }
+      const values = [...selected], visible = values.slice(0, 4);
+      $(chips).innerHTML = visible.map(id => {
+        const item = items.find(x => String(x[idField]) === String(id));
+        return item ? `<button type="button" class="tag" data-remove-id="${esc(id)}">${esc(labelOf(item))} ×</button>` : "";
+      }).join("") + (values.length > 4 ? `<span class="tag">+${values.length - 4}</span>` : "");
+    };
+    const drawOptions = () => {
+      const needle = $(input).value.trim().toLocaleLowerCase();
+      const matches = items.filter(x => !needle || labelOf(x).toLocaleLowerCase().includes(needle));
+      $(box).innerHTML = `<div class="report-multi-actions"><button type="button" data-pick-all="1">${T("تحديد الكل")}</button><button type="button" data-pick-none="1">${T("إلغاء الكل")}</button></div>` +
+        (matches.length ? matches.map(x => `<label class="report-multi-option"><input type="checkbox" data-pick-id="${esc(x[idField])}" ${selected.has(String(x[idField])) ? "checked" : ""}><span>${esc(labelOf(x))}</span></label>`).join("") :
+          `<div class="journal-account-empty">${T("لا توجد نتائج")}</div>`);
+      $(box).hidden = false;
+      const rect = $(input).getBoundingClientRect(), width = Math.min(Math.max(rect.width, 360), window.innerWidth - 24);
+      $(box).style.width = `${width}px`; $(box).style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`;
+      $(box).style.maxHeight = `${Math.min(window.innerHeight * .42, 360)}px`;
+      $(box).style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 370)}px`;
+    };
+    $(input).oninput = drawOptions; $(input).onfocus = $(input).onclick = drawOptions;
+    $(box).onchange = ev => { const id = ev.target.dataset.pickId; if (!id) return; ev.target.checked ? selected.add(String(id)) : selected.delete(String(id)); drawChips(); drawOptions(); };
+    $(box).onclick = ev => {
+      if (ev.target.closest("[data-pick-all]")) { items.forEach(x => selected.add(String(x[idField]))); drawChips(); drawOptions(); }
+      if (ev.target.closest("[data-pick-none]")) { selected.clear(); drawChips(); drawOptions(); }
+    };
+    $(chips).onclick = ev => { const id = ev.target.closest("[data-remove-id]")?.dataset.removeId; if (id) { selected.delete(String(id)); drawChips(); } };
+    $(input).onkeydown = ev => { if (ev.key === "Escape") $(box).hidden = true; };
+    main.addEventListener("focusout", ev => {
+      if (ev.target === $(input) || ev.target.closest?.(box)) setTimeout(() => {
+        if (!$(`#${prefix}-wrap`).contains(document.activeElement)) $(box).hidden = true;
+      }, 0);
+    });
+    drawChips();
   };
-  $("#account-search").oninput = ev => { $("#account").value = ""; accountOptions(ev.target.value); };
-  $("#account-search").onfocus = () => accountOptions("", true);
-  $("#account-search").onclick = () => accountOptions("", true);
-  $("#account-search").onkeydown = ev => {
-    if (ev.key === "ArrowDown") { const first = $("#account-options .journal-account-option"); if (first) { ev.preventDefault(); first.focus(); } }
-    if (ev.key === "Enter") { const opts = [...$("#account-options").querySelectorAll(".journal-account-option")], exact = accounts.find(a => accountLabel(a).toLocaleLowerCase() === ev.target.value.trim().toLocaleLowerCase()); if (exact || opts.length === 1) { ev.preventDefault(); selectAccount(exact?.account_id || +opts[0].dataset.reportAccountId); } else if (opts.length) { ev.preventDefault(); opts[0].focus(); } }
-    if (ev.key === "Escape") $("#account-options").hidden = true;
-  };
-  $("#account-options").onmousedown = ev => { const option = ev.target.closest("[data-report-account-id]"); if (!option) return; ev.preventDefault(); selectAccount(+option.dataset.reportAccountId); };
-  $("#account-options").onkeydown = ev => { const option = ev.target.closest(".journal-account-option"); if (!option) return; if (ev.key === "ArrowDown" || ev.key === "ArrowUp") { ev.preventDefault(); const opts = [...$("#account-options").querySelectorAll(".journal-account-option")], n = opts.indexOf(option) + (ev.key === "ArrowDown" ? 1 : -1); (opts[n] || (ev.key === "ArrowUp" ? $("#account-search") : opts[0]))?.focus(); } else if (ev.key === "Enter") { ev.preventDefault(); selectAccount(+option.dataset.reportAccountId); $("#account-search").focus(); } else if (ev.key === "Escape") { $("#account-options").hidden = true; $("#account-search").focus(); } };
-  main.addEventListener("focusout", ev => { if (ev.target.id === "account-search" || ev.target.closest?.("#account-options")) setTimeout(() => { if (!$("#account-wrap").contains(document.activeElement)) $("#account-options").hidden = true; }, 0); });
-  $("#treasury").innerHTML += (lookups.treasury_accounts || []).map(x => `<option value="${x.treasury_account_id}">${esc(x.name)} — ${esc(x.currency)}</option>`).join("");
+  mountMultiPicker("account", accounts, "account_id", accountLabel, selectedAccounts);
+  mountMultiPicker("treasury", treasuries, "treasury_account_id", x => `${x.name} — ${x.currency}`, selectedTreasuries);
   $("#kind").onchange = updateFilters; updateFilters();
   main.querySelectorAll("[data-select]").forEach(button => button.onclick = () => { $("#kind").value = button.dataset.select; updateFilters(); if (button.dataset.select !== "contractor") safe(run)(); });
   $("#run").onclick = safe(run); $("#from").onchange = $("#to").onchange = () => {};

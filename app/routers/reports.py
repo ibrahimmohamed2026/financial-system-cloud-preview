@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract, select, case, or_
@@ -46,12 +46,17 @@ def _group(rows: list[dict], net) -> dict[int, dict]:
 
 
 @router.get("/balance-sheet")
-def balance_sheet(as_of: date | None = None, _: User = Depends(require_permission("BalanceSheet", "View")),
-                  db: Session = Depends(get_db)):
+def balance_sheet(as_of: date | None = None, account_ids: list[int] = Query(default=[]),
+                  _: User = Depends(require_permission("BalanceSheet", "View")), db: Session = Depends(get_db)):
     as_of = as_of or date.today()
-    rows = [r for r in compute_tb(db, None, as_of) if not r["is_parent"]]
+    selected_ids = set(account_ids)
+    all_rows = compute_tb(db, None, as_of)
+    rows = [r for r in all_rows
+            if not r["is_parent"] and (not selected_ids or r["account_id"] in selected_ids)]
     bs = _group([r for r in rows if r["statement_type"] == "BalanceSheet"], lambda r: r["td"] - r["tc"])
-    result = sum((r["tc"] - r["td"] for r in rows if r["statement_type"] == "IncomeStatement"), D0)
+    result = sum((r["tc"] - r["td"] for r in all_rows
+                  if not r["is_parent"] and r["statement_type"] == "IncomeStatement"
+                  and (not selected_ids or r["account_id"] in selected_ids)), D0)
     assets, liabs = [], []
     for g in bs.values():
         side = "DR" if g["dr"] >= g["cr"] else "CR"
@@ -68,11 +73,15 @@ def balance_sheet(as_of: date | None = None, _: User = Depends(require_permissio
 
 @router.get("/income-statement")
 def income_statement(date_from: date | None = None, date_to: date | None = None,
+                     account_ids: list[int] = Query(default=[]),
                      _: User = Depends(require_permission("IncomeStatement", "View")),
                      db: Session = Depends(get_db)):
     today = date.today()
     date_from, date_to = date_from or date(today.year, 1, 1), date_to or today
-    rows = [r for r in compute_tb(db, date_from, date_to) if not r["is_parent"] and r["statement_type"] == "IncomeStatement"]
+    selected_ids = set(account_ids)
+    rows = [r for r in compute_tb(db, date_from, date_to)
+            if not r["is_parent"] and r["statement_type"] == "IncomeStatement"
+            and (not selected_ids or r["account_id"] in selected_ids)]
     g = _group(rows, lambda r: r["d"] - r["c"])
     revenue, expenses = [], []
     for x in g.values():
@@ -134,17 +143,22 @@ def reports_analytics(date_from: date | None = None, date_to: date | None = None
     months.reverse()
     labels = [f"{y:04d}-{m:02d}" for y, m in months]
     cash_stmt = (select(extract("year", TreasuryTransaction.transaction_date),
-                        extract("month", TreasuryTransaction.transaction_date),
+                        extract("month", TreasuryTransaction.transaction_date), TreasuryAccount.currency_code,
                         func.coalesce(func.sum(TreasuryTransaction.inflow), 0),
                         func.coalesce(func.sum(TreasuryTransaction.outflow), 0))
                  .select_from(TreasuryTransaction)
                  .join(TreasuryAccount, TreasuryAccount.treasury_account_id == TreasuryTransaction.treasury_account_id)
                  .where(TreasuryTransaction.transaction_date >= date_from, TreasuryTransaction.transaction_date <= date_to,
                         TreasuryAccount.is_active == True)
-                 .group_by(extract("year", TreasuryTransaction.transaction_date), extract("month", TreasuryTransaction.transaction_date)))
-    cash_rows = {(int(y), int(m)): (Decimal(i or 0), Decimal(o or 0)) for y, m, i, o in db.execute(cash_stmt).all()}
-    cash_flow = [{"month": label, "inflow": money(cash_rows.get((y, m), (D0, D0))[0]),
-                  "outflow": money(cash_rows.get((y, m), (D0, D0))[1])} for (y, m), label in zip(months, labels)]
+                 .group_by(extract("year", TreasuryTransaction.transaction_date), extract("month", TreasuryTransaction.transaction_date),
+                           TreasuryAccount.currency_code))
+    cash_rows = {(int(y), int(m), (currency or "غير محدد").upper()): (Decimal(i or 0), Decimal(o or 0))
+                 for y, m, currency, i, o in db.execute(cash_stmt).all()}
+    currencies = sorted({key[2] for key in cash_rows}) or ["EGP"]
+    cash_flow = [{"month": label, "currency": currency,
+                  "inflow": money(cash_rows.get((y, m, currency), (D0, D0))[0]),
+                  "outflow": money(cash_rows.get((y, m, currency), (D0, D0))[1])}
+                 for currency in currencies for (y, m), label in zip(months, labels)]
 
     # أفضل خمسة حسابات حسب إجمالي الحركة المدينة/الدائنة في الفترة؛ الرصيد الختامي شامل الافتتاحي.
     rows = compute_tb(db, None, date_to)
@@ -190,52 +204,62 @@ def financial_report_lookups(_: User = Depends(require_permission("AnalyticsRepo
 
 
 @api_router.get("/account-ledger")
-def account_ledger_report(account_id: int, date_from: date | None = None, date_to: date | None = None,
+def account_ledger_report(account_id: int | None = None, account_ids: list[int] = Query(default=[]),
+                          date_from: date | None = None, date_to: date | None = None,
                           project_id: int | None = None,
                           _: User = Depends(require_permission("AnalyticsReports", "View")), db: Session = Depends(get_db)):
     _validate_report_dates(date_from, date_to)
-    account = db.get(Account, account_id)
-    if not account:
-        raise HTTPException(404, "الحساب غير موجود")
-    base = (select(JournalEntryDetail, JournalEntry).join(JournalEntry,
-        JournalEntry.journal_entry_id == JournalEntryDetail.journal_entry_id)
-        .where(JournalEntryDetail.account_id == account_id, JournalEntry.status == "Posted"))
+    selected_ids = list(dict.fromkeys([*account_ids, *([account_id] if account_id else [])]))
+    if not selected_ids:
+        raise HTTPException(422, "اختر حسابًا واحدًا على الأقل")
+    accounts = db.scalars(select(Account).where(Account.account_id.in_(selected_ids)).order_by(Account.account_code)).all()
+    if len(accounts) != len(selected_ids):
+        raise HTTPException(404, "أحد الحسابات المحددة غير موجود")
+    account_by_id = {a.account_id: a for a in accounts}
+    base = (select(JournalEntryDetail, JournalEntry)
+            .join(JournalEntry, JournalEntry.journal_entry_id == JournalEntryDetail.journal_entry_id)
+            .where(JournalEntryDetail.account_id.in_(selected_ids), JournalEntry.status == "Posted"))
     if project_id:
         base = base.where(JournalEntryDetail.project_id == project_id)
-    # For a bounded period, calculate the balance immediately before its start.
-    # With no start date, the ledger itself begins at the account opening balance.
-    opening_q = base.where(JournalEntry.entry_date < date_from) if date_from else None
-    opening_rows = db.execute(opening_q).all() if opening_q is not None else []
-    opening_debit = sum((Decimal(r.debit_amount or 0) for r, _ in opening_rows), D0)
-    opening_credit = sum((Decimal(r.credit_amount or 0) for r, _ in opening_rows), D0)
-    account_opening = (Decimal(account.opening_debit or 0) - Decimal(account.opening_credit or 0)) if not project_id else D0
-    opening = account_opening + opening_debit - opening_credit
+    opening_rows = db.execute(base.where(JournalEntry.entry_date < date_from)).all() if date_from else []
+    opening_by_account = {aid: ((Decimal(a.opening_debit or 0) - Decimal(a.opening_credit or 0)) if not project_id else D0)
+                          for aid, a in account_by_id.items()}
+    for detail, _entry in opening_rows:
+        opening_by_account[detail.account_id] += Decimal(detail.debit_amount or 0) - Decimal(detail.credit_amount or 0)
     stmt = base
     if date_from:
         stmt = stmt.where(JournalEntry.entry_date >= date_from)
     if date_to:
         stmt = stmt.where(JournalEntry.entry_date <= date_to)
-    rows = db.execute(stmt.order_by(JournalEntry.entry_date, JournalEntry.journal_entry_id,
-                                    JournalEntryDetail.line_no, JournalEntryDetail.detail_id)).all()
-    running = opening
+    rows = db.execute(stmt.order_by(JournalEntryDetail.account_id, JournalEntry.entry_date,
+                                    JournalEntry.journal_entry_id, JournalEntryDetail.line_no,
+                                    JournalEntryDetail.detail_id)).all()
+    running = dict(opening_by_account)
     items = []
+    total_debit = total_credit = D0
     for detail, entry in rows:
         debit, credit = Decimal(detail.debit_amount or 0), Decimal(detail.credit_amount or 0)
-        running += debit - credit
+        running[detail.account_id] += debit - credit
+        total_debit += debit
+        total_credit += credit
+        account = account_by_id[detail.account_id]
         project = db.get(Project, detail.project_id) if detail.project_id else None
-        items.append({"date": str(entry.entry_date), "entry_no": entry.entry_no,
+        items.append({"account_id": account.account_id, "account_code": account.account_code,
+            "account_name": account.account_name_ar, "date": str(entry.entry_date), "entry_no": entry.entry_no,
             "description": detail.description or entry.description or "", "project": project.name_ar if project else "",
-            "debit": str(debit), "credit": str(credit), "balance": str(running)})
-    return {"account": {"account_id": account.account_id, "code": account.account_code,
-        "name": account.account_name_ar, "normal_balance": account.normal_balance},
-        "opening_balance": str(opening), "total_debit": str(sum((Decimal(r[0].debit_amount or 0) for r in rows), D0)),
-        "total_credit": str(sum((Decimal(r[0].credit_amount or 0) for r in rows), D0)),
-        "closing_balance": str(running), "items": items}
+            "debit": str(debit), "credit": str(credit), "balance": str(running[detail.account_id])})
+    opening_total = sum(opening_by_account.values(), D0)
+    closing_total = sum(running.values(), D0)
+    return {"accounts": [{"account_id": a.account_id, "code": a.account_code, "name": a.account_name_ar,
+                          "normal_balance": a.normal_balance, "opening_balance": str(opening_by_account[a.account_id]),
+                          "closing_balance": str(running[a.account_id])} for a in accounts],
+        "opening_balance": str(opening_total), "total_debit": str(total_debit), "total_credit": str(total_credit),
+        "closing_balance": str(closing_total), "items": items}
 
 
 @api_router.get("/project-financials")
 def project_financial_report(date_from: date | None = None, date_to: date | None = None,
-                             project_id: int | None = None,
+                             project_id: int | None = None, account_ids: list[int] = Query(default=[]),
                              _: User = Depends(require_permission("AnalyticsReports", "View")), db: Session = Depends(get_db)):
     _validate_report_dates(date_from, date_to)
     stmt = (select(Project.project_id, Project.name_ar, AccountClassification.statement_type,
@@ -249,6 +273,7 @@ def project_financial_report(date_from: date | None = None, date_to: date | None
     if date_from: stmt = stmt.where(JournalEntry.entry_date >= date_from)
     if date_to: stmt = stmt.where(JournalEntry.entry_date <= date_to)
     if project_id: stmt = stmt.where(Project.project_id == project_id)
+    if account_ids: stmt = stmt.where(JournalEntryDetail.account_id.in_(set(account_ids)))
     stmt = stmt.group_by(Project.project_id, Project.name_ar, AccountClassification.statement_type, Account.normal_balance)
     totals: dict[int, dict] = {}
     names: dict[int, str] = {}
@@ -271,25 +296,36 @@ def project_financial_report(date_from: date | None = None, date_to: date | None
 @api_router.get("/cash-flow")
 def cash_flow_report(date_from: date | None = None, date_to: date | None = None,
                      treasury_account_id: int | None = None,
+                     treasury_account_ids: list[int] = Query(default=[]),
                      _: User = Depends(require_permission("AnalyticsReports", "View")), db: Session = Depends(get_db)):
     _validate_report_dates(date_from, date_to)
+    selected_ids = list(dict.fromkeys([*treasury_account_ids, *([treasury_account_id] if treasury_account_id else [])]))
     stmt = (select(TreasuryTransaction, TreasuryAccount).join(TreasuryAccount,
         TreasuryAccount.treasury_account_id == TreasuryTransaction.treasury_account_id)
         .where(or_(TreasuryTransaction.status.is_(None), TreasuryTransaction.status.notin_(
             ("Cancelled", "ملغي", "ملغى", "مرتد")))))
     if date_from: stmt = stmt.where(TreasuryTransaction.transaction_date >= date_from)
     if date_to: stmt = stmt.where(TreasuryTransaction.transaction_date <= date_to)
-    if treasury_account_id: stmt = stmt.where(TreasuryAccount.treasury_account_id == treasury_account_id)
+    if selected_ids: stmt = stmt.where(TreasuryAccount.treasury_account_id.in_(selected_ids))
     rows = db.execute(stmt.order_by(TreasuryTransaction.transaction_date, TreasuryTransaction.transaction_id).limit(5000)).all()
-    items = [{"date": str(tx.transaction_date), "account": account.name_ar, "voucher_no": tx.voucher_no or "",
-        "description": tx.description or "", "recipient": tx.recipient_name or "", "inflow": str(tx.inflow or 0),
-        "outflow": str(tx.outflow or 0), "net": str(Decimal(tx.inflow or 0) - Decimal(tx.outflow or 0)),
-        "project": db.get(Project, tx.project_id).name_ar if tx.project_id and db.get(Project, tx.project_id) else ""}
-        for tx, account in rows]
-    return {"items": items, "summary": {"count": len(items),
-        "inflow": str(sum((Decimal(x["inflow"]) for x in items), D0)),
-        "outflow": str(sum((Decimal(x["outflow"]) for x in items), D0)),
-        "net": str(sum((Decimal(x["net"]) for x in items), D0))}}
+    items = []
+    totals = {}
+    for tx, account in rows:
+        currency = (account.currency_code or "غير محدد").upper()
+        inflow = Decimal(tx.inflow or 0)
+        outflow = Decimal(tx.outflow or 0)
+        bucket = totals.setdefault(currency, {"currency": currency, "count": 0, "inflow": D0, "outflow": D0, "net": D0})
+        bucket["count"] += 1
+        bucket["inflow"] += inflow
+        bucket["outflow"] += outflow
+        bucket["net"] += inflow - outflow
+        project = db.get(Project, tx.project_id) if tx.project_id else None
+        items.append({"date": str(tx.transaction_date), "account": account.name_ar, "currency": currency,
+            "voucher_no": tx.voucher_no or "", "description": tx.description or "", "recipient": tx.recipient_name or "",
+            "inflow": str(inflow), "outflow": str(outflow), "net": str(inflow-outflow), "project": project.name_ar if project else ""})
+    currency_totals = [{"currency": k, "count": v["count"], "inflow": str(v["inflow"]),
+                        "outflow": str(v["outflow"]), "net": str(v["net"])} for k, v in sorted(totals.items())]
+    return {"items": items, "summary": {"count": len(items), "currency_totals": currency_totals}}
 
 
 @api_router.get("/aging")
@@ -391,11 +427,12 @@ def settlements_report(date_from: date | None = None, date_to: date | None = Non
 
 @api_router.get("/checks")
 def checks_report(date_from: date | None = None, date_to: date | None = None, status: str | None = None,
-                  project_id: int | None = None,
+                  project_id: int | None = None, treasury_account_ids: list[int] = Query(default=[]),
                   _: User = Depends(require_permission("AnalyticsReports", "View")), db: Session = Depends(get_db)):
-    """قائمة شيكات البنك حسب تاريخ الشيك وحالته، مع المستخلص المالي إن كان مرتبطًا."""
+    """قائمة شيكات البنك حسب الفترة والحالة والبنوك المحددة، مع فصل الإجماليات حسب العملة."""
     _validate_report_dates(date_from, date_to)
-    q = (select(Check, Beneficiary.name_ar, TreasuryAccount.name_ar, ContractSettlement.settlement_no)
+    q = (select(Check, Beneficiary.name_ar, TreasuryAccount.name_ar, TreasuryAccount.currency_code,
+                ContractSettlement.settlement_no)
          .join(Beneficiary, Beneficiary.beneficiary_id == Check.beneficiary_id)
          .join(TreasuryAccount, TreasuryAccount.treasury_account_id == Check.treasury_account_id)
          .outerjoin(ContractSettlement, ContractSettlement.settlement_id == Check.settlement_id))
@@ -403,16 +440,28 @@ def checks_report(date_from: date | None = None, date_to: date | None = None, st
     if date_to: q = q.where(Check.check_date <= date_to)
     if status: q = q.where(Check.status == status)
     if project_id: q = q.where(Check.project_id == project_id)
+    if treasury_account_ids: q = q.where(Check.treasury_account_id.in_(set(treasury_account_ids)))
     rows = db.execute(q.order_by(Check.check_date.desc(), Check.check_id.desc()).limit(5000)).all()
-    items = [{"check_no": c.check_no or str(c.sequence_no), "check_date": c.check_date, "bank": bank,
-              "beneficiary": beneficiary, "amount": money(c.amount or 0), "status": c.status,
-              "settlement_no": settlement_no or "", "project_id": c.project_id,
-              "project": (db.get(Project, c.project_id).name_ar if c.project_id and db.get(Project, c.project_id) else ""),
-              "description": c.description or ""} for c, beneficiary, bank, settlement_no in rows]
-    summary = {"count": len(items), "amount": money(sum((Decimal(i["amount"]) for i in items), D0)),
-               "paid_amount": money(sum((Decimal(i["amount"]) for i in items if i["status"] == "تم الصرف"), D0)),
-               "unlinked_count": sum(1 for i in items if not i["settlement_no"])}
-    return {"items": items, "summary": summary, "date_from": date_from, "date_to": date_to}
+    items = []
+    totals = {}
+    for check, beneficiary, bank, currency_code, settlement_no in rows:
+        currency = (currency_code or "غير محدد").upper()
+        amount = Decimal(check.amount or 0)
+        bucket = totals.setdefault(currency, {"currency": currency, "count": 0, "amount": D0, "paid_amount": D0})
+        bucket["count"] += 1
+        bucket["amount"] += amount
+        if check.status == "تم الصرف":
+            bucket["paid_amount"] += amount
+        project = db.get(Project, check.project_id) if check.project_id else None
+        items.append({"check_no": check.check_no or str(check.sequence_no), "check_date": check.check_date,
+            "bank": bank, "currency": currency, "beneficiary": beneficiary, "amount": money(amount),
+            "status": check.status, "settlement_no": settlement_no or "", "project_id": check.project_id,
+            "project": project.name_ar if project else "", "description": check.description or ""})
+    currency_totals = [{"currency": k, "count": v["count"], "amount": money(v["amount"]),
+                        "paid_amount": money(v["paid_amount"])} for k, v in sorted(totals.items())]
+    return {"items": items, "summary": {"count": len(items), "unlinked_count": sum(1 for i in items if not i["settlement_no"]),
+                                        "currency_totals": currency_totals},
+            "date_from": date_from, "date_to": date_to}
 
 
 @api_router.get("/purchases")
