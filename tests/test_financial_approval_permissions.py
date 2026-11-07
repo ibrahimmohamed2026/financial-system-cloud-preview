@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.bootstrap import seed_job_profiles
@@ -43,5 +43,5 @@ def test_existing_finance_profiles_receive_new_stage_permissions_without_full_re
         # Re-running startup seeding must remain idempotent.
         before = len(grants)
         seed_job_profiles(db)
-        after = db.scalar(select(__import__("sqlalchemy").func.count()).select_from(JobProfilePermission))
+        after = db.scalar(select(func.count()).select_from(JobProfilePermission))
         assert after == before
