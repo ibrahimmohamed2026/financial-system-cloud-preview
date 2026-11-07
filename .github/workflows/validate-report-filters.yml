@@ -13,6 +13,8 @@ jobs:
     timeout-minutes: 10
     env:
       JWT_SECRET: ci-only-test-secret-not-used-in-deployment
+      DATABASE_URL: sqlite:///./ci-test.db
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
