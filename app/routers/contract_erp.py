@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import require_permission, write_audit, get_current_user, has_permission
 from ..models import (Contract, ContractAddendum, ContractChangeOrder, ContractItem, ContractDeductionRule,
-                      ContractAccountingConfig, ContractSettlement, ContractSettlementItem, ProgressBilling, Account, Company,
+                      ContractAccountingConfig, ContractSettlement, ContractSettlementItem, ContractSettlementSchedule, ProgressBilling, Account, Company,
                       FiscalYear, JournalEntry, JournalEntryDetail, User, TechnicalSettlementEstimate, TechnicalSettlementEstimateItem,
                       ItemCatalog, InventoryItem, TreasuryTransaction, Check)
 from ..contract_deletion import delete_settlement_tree, require_admin
@@ -910,7 +910,8 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
     x.journal_entry_id=entry.journal_entry_id;x.status="Posted"
     # Close automatically only on the agreed final sequence and after all other
     # contract settlements have been posted (no drafts or pending approvals).
-    if contract.agreed_statement_count and x.sequence_no >= contract.agreed_statement_count:
+    final_sequence = contract.agreed_statement_count or db.scalar(select(func.max(ContractSettlementSchedule.sequence_no)).where(ContractSettlementSchedule.contract_id==contract.contract_id))
+    if final_sequence and x.sequence_no >= final_sequence:
         unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
             ContractSettlement.contract_id==contract.contract_id,
             ContractSettlement.status!="Posted",
