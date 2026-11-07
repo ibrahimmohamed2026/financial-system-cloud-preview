@@ -911,19 +911,22 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
     for idx,(aid,dr,cr,desc,project_id) in enumerate(lines,1): db.add(JournalEntryDetail(journal_entry_id=entry.journal_entry_id,line_no=idx,account_id=aid,project_id=project_id or contract.project_id,debit_amount=dr,credit_amount=cr,description=desc))
     write_audit(db,user.user_id,"Create","JournalEntries",entry.journal_entry_id,new={"entry_no":entry.entry_no,"source":"ContractSettlement","settlement_id":x.settlement_id,"settlement_no":x.settlement_no,"contract_id":x.contract_id,"debit_total":str(debit),"credit_total":str(credit)})
     x.journal_entry_id=entry.journal_entry_id;x.status="Posted"
-    # Close only when the explicitly marked final settlement is posted and
-    # every other financial settlement for this contract has already been posted.
-    if x.is_final:
+    # Close when the explicitly marked final settlement has been posted and
+    # every other settlement for this contract is posted as well.
+    posted_final = db.scalar(select(ContractSettlement.settlement_id).where(
+        ContractSettlement.contract_id==contract.contract_id,
+        ContractSettlement.is_final.is_(True),
+        ContractSettlement.status=="Posted").limit(1))
+    if posted_final:
         unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
             ContractSettlement.contract_id==contract.contract_id,
-            ContractSettlement.status!="Posted",
-            ContractSettlement.settlement_id!=x.settlement_id)) or 0
+            ContractSettlement.status!="Posted")) or 0
         if unfinished == 0:
             contract.status="Closed"
             contract.closed_at=datetime.utcnow()
             contract.closed_by=user.user_id
             write_audit(db,user.user_id,"AutoClose","Contracts",contract.contract_id,
-                        old={"status":"Active"},new={"status":"Closed","closed_at":contract.closed_at.isoformat(),"reason":"Explicit final settlement posted"})
+                        old={"status":"Active"},new={"status":"Closed","closed_at":contract.closed_at.isoformat(),"reason":"Final settlement posted and all contract settlements completed"})
     write_audit(db,user.user_id,"Post","ContractSettlements",x.settlement_id,new={**settlement_out(x, db),"journal_entry_id":entry.journal_entry_id});db.commit();db.refresh(x)
     return {"settlement":settlement_out(x, db),"journal_entry_id":entry.journal_entry_id,"entry_no":entry.entry_no,"debit_total":str(debit),"credit_total":str(credit),"contract_status":contract.status,"contract_auto_closed":contract.status=="Closed"}
 
