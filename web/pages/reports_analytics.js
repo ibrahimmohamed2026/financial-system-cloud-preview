@@ -226,10 +226,18 @@ export async function render(main, { api }) {
       $(box).style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 370)}px`;
     };
     $(input).oninput = drawOptions; $(input).onfocus = $(input).onclick = drawOptions;
-    $(box).onchange = ev => { const id = ev.target.dataset.pickId; if (!id) return; ev.target.checked ? selected.add(String(id)) : selected.delete(String(id)); drawChips(); drawOptions(); };
+    const syncChecks = () => $(box).querySelectorAll("input[data-pick-id]").forEach(check => {
+      check.checked = selected.has(String(check.dataset.pickId));
+    });
+    $(box).onchange = ev => {
+      const id = ev.target.dataset.pickId; if (!id) return;
+      ev.target.checked ? selected.add(String(id)) : selected.delete(String(id));
+      drawChips();
+      // Preserve the checkbox focus and keep the dropdown open for the next selection.
+    };
     $(box).onclick = ev => {
-      if (ev.target.closest("[data-pick-all]")) { items.forEach(x => selected.add(String(x[idField]))); drawChips(); drawOptions(); }
-      if (ev.target.closest("[data-pick-none]")) { selected.clear(); drawChips(); drawOptions(); }
+      if (ev.target.closest("[data-pick-all]")) { items.forEach(x => selected.add(String(x[idField]))); drawChips(); syncChecks(); }
+      if (ev.target.closest("[data-pick-none]")) { selected.clear(); drawChips(); syncChecks(); }
     };
     $(chips).onclick = ev => { const id = ev.target.closest("[data-remove-id]")?.dataset.removeId; if (id) { selected.delete(String(id)); drawChips(); } };
     $(input).onkeydown = ev => { if (ev.key === "Escape") $(box).hidden = true; };
