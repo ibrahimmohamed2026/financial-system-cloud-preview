@@ -1,0 +1,39 @@
+name: Validate multi-select report filters
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project requirements
+        run: python -m pip install -r requirements.txt
+      - name: Compile Python application
+        run: python -m compileall -q app
+      - name: Run available Python tests
+        shell: bash
+        run: |
+          if find tests -type f -name 'test_*.py' -print -quit 2>/dev/null | grep -q .; then
+            python -m pytest -q
+          else
+            echo "No Python test files found; compile check completed."
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check changed JavaScript modules
+        shell: bash
+        run: |
+          for file in web/pages/reports_analytics.js web/pages/reports.js web/pages/journal.js web/pages/trial_balance.js; do
+            node --input-type=module --check < "$file"
+          done
