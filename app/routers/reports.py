@@ -427,11 +427,12 @@ def settlements_report(date_from: date | None = None, date_to: date | None = Non
 
 @api_router.get("/checks")
 def checks_report(date_from: date | None = None, date_to: date | None = None, status: str | None = None,
-                  project_id: int | None = None,
+                  project_id: int | None = None, treasury_account_ids: list[int] = Query(default=[]),
                   _: User = Depends(require_permission("AnalyticsReports", "View")), db: Session = Depends(get_db)):
-    """قائمة شيكات البنك حسب تاريخ الشيك وحالته، مع المستخلص المالي إن كان مرتبطًا."""
+    """قائمة شيكات البنك حسب الفترة والحالة والبنوك المحددة، مع فصل الإجماليات حسب العملة."""
     _validate_report_dates(date_from, date_to)
-    q = (select(Check, Beneficiary.name_ar, TreasuryAccount.name_ar, ContractSettlement.settlement_no)
+    q = (select(Check, Beneficiary.name_ar, TreasuryAccount.name_ar, TreasuryAccount.currency_code,
+                ContractSettlement.settlement_no)
          .join(Beneficiary, Beneficiary.beneficiary_id == Check.beneficiary_id)
          .join(TreasuryAccount, TreasuryAccount.treasury_account_id == Check.treasury_account_id)
          .outerjoin(ContractSettlement, ContractSettlement.settlement_id == Check.settlement_id))
@@ -439,16 +440,28 @@ def checks_report(date_from: date | None = None, date_to: date | None = None, st
     if date_to: q = q.where(Check.check_date <= date_to)
     if status: q = q.where(Check.status == status)
     if project_id: q = q.where(Check.project_id == project_id)
+    if treasury_account_ids: q = q.where(Check.treasury_account_id.in_(set(treasury_account_ids)))
     rows = db.execute(q.order_by(Check.check_date.desc(), Check.check_id.desc()).limit(5000)).all()
-    items = [{"check_no": c.check_no or str(c.sequence_no), "check_date": c.check_date, "bank": bank,
-              "beneficiary": beneficiary, "amount": money(c.amount or 0), "status": c.status,
-              "settlement_no": settlement_no or "", "project_id": c.project_id,
-              "project": (db.get(Project, c.project_id).name_ar if c.project_id and db.get(Project, c.project_id) else ""),
-              "description": c.description or ""} for c, beneficiary, bank, settlement_no in rows]
-    summary = {"count": len(items), "amount": money(sum((Decimal(i["amount"]) for i in items), D0)),
-               "paid_amount": money(sum((Decimal(i["amount"]) for i in items if i["status"] == "تم الصرف"), D0)),
-               "unlinked_count": sum(1 for i in items if not i["settlement_no"])}
-    return {"items": items, "summary": summary, "date_from": date_from, "date_to": date_to}
+    items = []
+    totals = {}
+    for check, beneficiary, bank, currency_code, settlement_no in rows:
+        currency = (currency_code or "غير محدد").upper()
+        amount = Decimal(check.amount or 0)
+        bucket = totals.setdefault(currency, {"currency": currency, "count": 0, "amount": D0, "paid_amount": D0})
+        bucket["count"] += 1
+        bucket["amount"] += amount
+        if check.status == "تم الصرف":
+            bucket["paid_amount"] += amount
+        project = db.get(Project, check.project_id) if check.project_id else None
+        items.append({"check_no": check.check_no or str(check.sequence_no), "check_date": check.check_date,
+            "bank": bank, "currency": currency, "beneficiary": beneficiary, "amount": money(amount),
+            "status": check.status, "settlement_no": settlement_no or "", "project_id": check.project_id,
+            "project": project.name_ar if project else "", "description": check.description or ""})
+    currency_totals = [{"currency": k, "count": v["count"], "amount": money(v["amount"]),
+                        "paid_amount": money(v["paid_amount"])} for k, v in sorted(totals.items())]
+    return {"items": items, "summary": {"count": len(items), "unlinked_count": sum(1 for i in items if not i["settlement_no"]),
+                                        "currency_totals": currency_totals},
+            "date_from": date_from, "date_to": date_to}
 
 
 @api_router.get("/purchases")
