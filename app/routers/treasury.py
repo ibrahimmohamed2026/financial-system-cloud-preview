@@ -530,6 +530,53 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
 
 
 @router.post("/{screen_code}/transactions", status_code=201)
+def _create_egp_transfer_mirror(db: Session, source: TreasuryAccount, original: TreasuryTransaction,
+                                  body: TxIn, user: User) -> TreasuryTransaction | None:
+    """Create the opposite operational bank/cash movement for an EGP transfer.
+
+    Both operational rows share the single balanced journal created for the
+    original movement. This is intentionally applied only to new transfers;
+    historical one-sided rows are never backfilled automatically.
+    """
+    if body.transaction_type != "cash_transfer":
+        return None
+    target = db.scalar(select(TreasuryAccount).where(
+        TreasuryAccount.gl_account_id == body.counterpart_account_id,
+        TreasuryAccount.currency_code == source.currency_code,
+        TreasuryAccount.is_active == True,
+        TreasuryAccount.treasury_account_id != source.treasury_account_id,
+    ))
+    if target is None:
+        raise HTTPException(400, "حساب التحويل المقابل غير مربوط بخزينة أو بنك نشط بنفس العملة")
+    if original.journal_entry_id is None:
+        raise HTTPException(409, "لا يمكن إنشاء الحركة المقابلة قبل إنشاء قيد اليومية")
+    mirror = TreasuryTransaction(
+        treasury_account_id=target.treasury_account_id,
+        transaction_date=body.transaction_date,
+        inflow=body.outflow,
+        outflow=body.inflow,
+        description=body.description or f"تحويل مقابل من {source.name_ar}",
+        voucher_no=body.voucher_no,
+        status=body.status,
+        recipient_name=body.recipient_name,
+        project_id=body.project_id,
+        counterpart_account_id=source.gl_account_id,
+        transaction_type="cash_transfer",
+        journal_entry_id=original.journal_entry_id,
+    )
+    db.add(mirror)
+    db.flush()
+    write_audit(db, user.user_id, "Create", "TreasuryTransactions", mirror.transaction_id, None, {
+        "source": "EGPTransferMirror",
+        "source_transaction_id": original.transaction_id,
+        "journal_entry_id": original.journal_entry_id,
+        "treasury_account_id": target.treasury_account_id,
+        "inflow": str(mirror.inflow),
+        "outflow": str(mirror.outflow),
+    })
+    return mirror
+
+
 def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
            db: Session = Depends(get_db)):
     a = _bound(db, screen_code)
@@ -540,6 +587,8 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
     db.flush()
     journal_no = (_create_usd_journal(db, a, t, body, user) if a.currency_code == "USD"
                   else _create_egp_journal(db, a, t, body, user))
+    if a.currency_code == "EGP":
+        _create_egp_transfer_mirror(db, a, t, body, user)
     write_audit(db, user.user_id, "Create", "TreasuryTransactions", t.transaction_id, None, body.model_dump())
     db.commit()
     return {"transaction_id": t.transaction_id, "journal_entry_id": t.journal_entry_id,
