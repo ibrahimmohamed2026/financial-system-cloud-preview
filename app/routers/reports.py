@@ -214,7 +214,7 @@ def account_ledger_report(account_id: int | None = None, account_ids: list[int] 
     if project_id:
         base = base.where(JournalEntryDetail.project_id == project_id)
     opening_rows = db.execute(base.where(JournalEntry.entry_date < date_from)).all() if date_from else []
-    opening_by_account = {aid: (Decimal(a.opening_debit or 0) - Decimal(a.opening_credit or 0))
+    opening_by_account = {aid: ((Decimal(a.opening_debit or 0) - Decimal(a.opening_credit or 0)) if not project_id else D0)
                           for aid, a in account_by_id.items()}
     for detail, _entry in opening_rows:
         opening_by_account[detail.account_id] += Decimal(detail.debit_amount or 0) - Decimal(detail.credit_amount or 0)
