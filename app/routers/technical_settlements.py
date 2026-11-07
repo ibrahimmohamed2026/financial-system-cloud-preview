@@ -97,6 +97,8 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     c=db.scalar(select(Contract).where(Contract.contract_id==body.contract_id).with_for_update())
     if not c: raise HTTPException(404,"العقد غير موجود")
     if (c.status or "").lower()!="active": raise HTTPException(409,"لا يمكن إعداد مستخلص فني إلا لعقد نشط ومعتمد نهائياً")
+    if db.scalar(select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==c.contract_id,ContractSettlement.settlement_side==body.settlement_side,ContractSettlement.is_final.is_(True)).limit(1)):
+        raise HTTPException(409,"تم تحديد مستخلص ختامي لهذا العقد ونوع المستخلص؛ لا يمكن إنشاء مستخلصات إضافية بعده")
     estimate_no = next_estimate_no(db, c.contract_id)
     planned_row = None
     if body.planned_schedule_id is not None:
