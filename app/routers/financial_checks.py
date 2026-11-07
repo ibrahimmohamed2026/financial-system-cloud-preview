@@ -396,3 +396,20 @@ def allocation_options(cid: int, _: User = Depends(require_any(SCREENS, "View"))
             "project_id": contract.project_id,
         })
     return {"items": result}
+
+
+@router.get("/{cid}/history")
+def check_history(cid: int, _: User = Depends(require_any(SCREENS, "View")), db: Session = Depends(get_db)):
+    if not db.get(FinancialCheck, cid):
+        raise HTTPException(404, "الشيك غير موجود")
+    rows = db.scalars(select(FinancialCheckStatusHistory).where(
+        FinancialCheckStatusHistory.check_id == cid
+    ).order_by(FinancialCheckStatusHistory.changed_at, FinancialCheckStatusHistory.history_id)).all()
+    return {"items": [{
+        "history_id": row.history_id,
+        "old_status": row.old_status,
+        "new_status": row.new_status,
+        "changed_by": row.changed_by,
+        "note": row.note,
+        "changed_at": row.changed_at.isoformat() if row.changed_at else None,
+    } for row in rows]}
