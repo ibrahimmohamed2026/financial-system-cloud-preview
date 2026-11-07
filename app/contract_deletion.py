@@ -3,7 +3,7 @@ from sqlalchemy import select, func
 from fastapi import HTTPException
 
 from .deps import write_audit
-from .models import (Role, UserRole, Check, FinancialCheck, TreasuryTransaction, JournalEntry, JournalEntryDetail,
+from .models import (Role, UserRole, User, JobProfile, Check, FinancialCheck, TreasuryTransaction, JournalEntry, JournalEntryDetail,
     ContractSettlement, ContractSettlementItem, ContractAttachment,
     TechnicalSettlementEstimate, TechnicalSettlementEstimateItem)
 
@@ -11,8 +11,25 @@ from .models import (Role, UserRole, Check, FinancialCheck, TreasuryTransaction,
 def require_admin(db, user_id: int) -> None:
     is_admin = db.scalar(select(Role.role_id).join(UserRole, UserRole.role_id == Role.role_id)
         .where(UserRole.user_id == user_id, func.lower(Role.role_name).like("%admin%")).limit(1))
+    # Current system administrators are assigned through JobProfiles, not the
+    # legacy Roles/UserRoles tables. Keep legacy Admin support for older accounts.
     if not is_admin:
-        raise HTTPException(403, "الحذف العام متاح لمسؤول النظام فقط")
+        is_system_admin = db.scalar(
+            select(JobProfile.job_profile_id)
+            .join(User, User.job_profile_id == JobProfile.job_profile_id)
+            .where(
+                User.user_id == user_id,
+                User.is_active.is_(True),
+                User.is_deleted.is_(False),
+                JobProfile.is_active.is_(True),
+                func.lower(func.trim(JobProfile.name_ar)).in_((
+                    "مسؤول النظام it", "مدير النظام"
+                )),
+            )
+            .limit(1)
+        )
+        if not is_system_admin:
+            raise HTTPException(403, "الحذف العام متاح لمسؤول النظام فقط")
 
 
 def delete_settlement_tree(db, settlement: ContractSettlement, user_id: int) -> None:
