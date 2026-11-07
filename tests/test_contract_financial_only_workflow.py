@@ -9,6 +9,7 @@ def test_new_contracts_enter_financial_review_without_engineering_stage():
     assert 'values["status"] = "PendingFinancial"' in create_contract
     assert 'c.status = "PendingFinancial"' in submit_contract
     assert 'values["status"] = "PendingEngineering"' not in create_contract
+    assert '@router.post("/{contract_id}/engineering-approve")' not in source
 
 
 def test_new_technical_estimates_are_forwarded_to_finance_when_saved():
@@ -22,4 +23,6 @@ def test_new_technical_estimates_are_forwarded_to_finance_when_saved():
     assert 'x.status="ForwardedToFinance"' in forwarding
     assert 'status="Draft"' in forwarding
     assert '"engineering_approval":False' in forwarding
+    assert 'linked_schedule.status="Submitted"' in forwarding
+    assert 'linked_schedule.status="Completed"' not in forwarding
     assert "تم حفظ المستخلص وتحويله مباشرة إلى المالية دون اعتماد هندسي" in forwarding
