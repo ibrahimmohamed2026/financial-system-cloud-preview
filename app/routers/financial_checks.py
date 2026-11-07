@@ -132,7 +132,8 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
     if body.status in settlement_statuses:
         required_sources = {"تحت التحصيل"} if c.check_type == "INCOMING" else {"تم التسليم"}
         # Legacy outgoing imports used the old direct settlement status.
-        if c.status not in required_sources and not (c.check_type == "OUTGOING" and c.status == "مسودة"):
+        legacy_direct = (c.check_type == "INCOMING" and body.status == "مُحصّل" and c.status == "مسودة") or (c.check_type == "OUTGOING" and c.status == "مسودة")
+        if c.status not in required_sources and not legacy_direct:
             raise HTTPException(409, "لا يمكن تسوية الشيك قبل اكتمال دورة الاستلام أو التسليم")
     if c.journal_entry_id and body.status != c.status:
         raise HTTPException(409, "الشيك له قيد مرحّل؛ لا تغيّر حالته قبل إجراء عكس محاسبي معتمد")
@@ -296,6 +297,8 @@ def add_allocation(cid: int, body: AllocationIn,
         raise HTTPException(404, "المستخلص غير موجود")
     if settlement.settlement_side != "Subcontractor" or settlement.status not in ("Approved", "Posted"):
         raise HTTPException(409, "يجب اختيار مستخلص مقاول باطن معتمد نهائيًا")
+    if settlement.counterparty_id is not None and contract.counterparty_id != settlement.counterparty_id:
+        raise HTTPException(409, "المقاول المسجل في المستخلص لا يطابق المقاول المرتبط بالعقد")
     if not settlement.manager_approved_by or not settlement.manager_approved_at:
         raise HTTPException(409, "المستخلص لم يحصل على اعتماد المدير النهائي")
     contract = db.get(Contract, settlement.contract_id)
