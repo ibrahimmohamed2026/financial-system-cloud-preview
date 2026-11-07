@@ -441,7 +441,7 @@ def add_addendum_line(contract_id: int, addendum_id: int, body: AddendumLineIn,
                 TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)), 0))
                 .join(TechnicalSettlementEstimate, TechnicalSettlementEstimate.estimate_id == TechnicalSettlementEstimateItem.estimate_id)
                 .where(TechnicalSettlementEstimate.contract_id == contract_id,
-                    TechnicalSettlementEstimate.status == "TechnicallyApproved",
+                    TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")),
                     TechnicalSettlementEstimateItem.contract_item_id == target.item_id)) or 0
             used_financial = db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity), 0))
                 .join(ContractSettlement, ContractSettlement.settlement_id == ContractSettlementItem.settlement_id)
@@ -606,7 +606,7 @@ def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(re
                 TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)), 0))
                 .join(TechnicalSettlementEstimate, TechnicalSettlementEstimate.estimate_id == TechnicalSettlementEstimateItem.estimate_id)
                 .where(TechnicalSettlementEstimate.contract_id == contract_id,
-                    TechnicalSettlementEstimate.status == "TechnicallyApproved",
+                    TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")),
                     TechnicalSettlementEstimateItem.contract_item_id == item.item_id)) or 0
             used_financial = db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity), 0))
                 .join(ContractSettlement, ContractSettlement.settlement_id == ContractSettlementItem.settlement_id)
@@ -651,7 +651,7 @@ def approve_addendum(contract_id: int, addendum_id: int, user: User = Depends(re
             ContractSettlement.settlement_id.not_in(linked_financial_ids))) or 0
         technical_work = db.scalar(select(func.coalesce(func.sum(TechnicalSettlementEstimate.work_value), 0)).where(
             TechnicalSettlementEstimate.contract_id == contract_id, TechnicalSettlementEstimate.settlement_side == side,
-            TechnicalSettlementEstimate.status == "TechnicallyApproved")) or 0
+            TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")))) or 0
         legacy_work = db.scalar(select(func.coalesce(func.sum(ProgressBilling.work_value), 0)).where(
             ProgressBilling.contract_id == contract_id,
             func.lower(ProgressBilling.status).in_(("approved", "paid", "posted")))) or 0
