@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models import Account, AccountClassification, JournalEntry
-from app.routers.treasury import TxIn, _create_egp_journal, _egp_journal_sides
+from app.routers.treasury import TxIn, _create_egp_journal, _create_egp_transfer_mirror, _egp_journal_sides
 
 
 @pytest.mark.parametrize(
@@ -83,5 +83,70 @@ def test_egp_journal_never_creates_a_duplicate_for_already_linked_transaction():
                  counterpart_account_id=20, transaction_type="direct_income"),
             SimpleNamespace(user_id=7),
         )
+    assert exc.value.status_code == 409
+    db.add.assert_not_called()
+
+
+
+@pytest.mark.parametrize(
+    ("inflow", "outflow", "mirror_inflow", "mirror_outflow"),
+    [
+        (Decimal("100000"), Decimal("0"), Decimal("0"), Decimal("100000")),
+        (Decimal("0"), Decimal("25000"), Decimal("25000"), Decimal("0")),
+    ],
+)
+def test_egp_cash_transfer_creates_one_opposite_operational_movement(
+    monkeypatch, inflow, outflow, mirror_inflow, mirror_outflow
+):
+    import app.routers.treasury as treasury_module
+
+    monkeypatch.setattr(treasury_module, "write_audit", lambda *args, **kwargs: None)
+    db = MagicMock()
+    target = SimpleNamespace(treasury_account_id=8, name_ar="البنك التجاري الدولي",
+                             gl_account_id=20, currency_code="EGP")
+    db.scalar.return_value = target
+    source = SimpleNamespace(treasury_account_id=3, name_ar="خزينة الجنيه",
+                             gl_account_id=10, currency_code="EGP")
+    original = SimpleNamespace(transaction_id=41, journal_entry_id=99)
+    body = TxIn(transaction_date=date(2026, 11, 7), inflow=inflow, outflow=outflow,
+                counterpart_account_id=20, transaction_type="cash_transfer",
+                description="تحويل تجريبي", voucher_no="TR-001", project_id=2)
+
+    mirror = _create_egp_transfer_mirror(db, source, original, body, SimpleNamespace(user_id=7))
+
+    assert mirror is not None
+    assert mirror.treasury_account_id == 8
+    assert mirror.inflow == mirror_inflow
+    assert mirror.outflow == mirror_outflow
+    assert mirror.counterpart_account_id == 10
+    assert mirror.transaction_type == "cash_transfer"
+    assert mirror.journal_entry_id == 99
+    assert mirror.voucher_no == "TR-001"
+    db.add.assert_called_once_with(mirror)
+    db.flush.assert_called_once()
+
+
+def test_egp_non_transfer_does_not_create_a_mirror():
+    db = MagicMock()
+    source = SimpleNamespace(treasury_account_id=3, gl_account_id=10, currency_code="EGP")
+    original = SimpleNamespace(transaction_id=41, journal_entry_id=99)
+    body = TxIn(transaction_date=date(2026, 11, 7), inflow=100, outflow=0,
+                counterpart_account_id=20, transaction_type="direct_income")
+
+    assert _create_egp_transfer_mirror(db, source, original, body, SimpleNamespace(user_id=7)) is None
+    db.add.assert_not_called()
+
+
+def test_egp_transfer_mirror_requires_existing_journal():
+    db = MagicMock()
+    target = SimpleNamespace(treasury_account_id=8, name_ar="البنك", gl_account_id=20, currency_code="EGP")
+    db.scalar.return_value = target
+    source = SimpleNamespace(treasury_account_id=3, name_ar="الخزينة", gl_account_id=10, currency_code="EGP")
+    original = SimpleNamespace(transaction_id=41, journal_entry_id=None)
+    body = TxIn(transaction_date=date(2026, 11, 7), inflow=100, outflow=0,
+                counterpart_account_id=20, transaction_type="cash_transfer")
+
+    with pytest.raises(HTTPException) as exc:
+        _create_egp_transfer_mirror(db, source, original, body, SimpleNamespace(user_id=7))
     assert exc.value.status_code == 409
     db.add.assert_not_called()
