@@ -50,12 +50,13 @@ def balance_sheet(as_of: date | None = None, account_ids: list[int] = Query(defa
                   _: User = Depends(require_permission("BalanceSheet", "View")), db: Session = Depends(get_db)):
     as_of = as_of or date.today()
     selected_ids = set(account_ids)
-    rows = [r for r in compute_tb(db, None, as_of)
+    all_rows = compute_tb(db, None, as_of)
+    rows = [r for r in all_rows
             if not r["is_parent"] and (not selected_ids or r["account_id"] in selected_ids)]
     bs = _group([r for r in rows if r["statement_type"] == "BalanceSheet"], lambda r: r["td"] - r["tc"])
-    result = sum((r["tc"] - r["td"] for r in compute_tb(db, None, as_of)
-                   if not r["is_parent"] and r["statement_type"] == "IncomeStatement"
-                   and (not selected_ids or r["account_id"] in selected_ids)), D0)
+    result = sum((r["tc"] - r["td"] for r in all_rows
+                  if not r["is_parent"] and r["statement_type"] == "IncomeStatement"
+                  and (not selected_ids or r["account_id"] in selected_ids)), D0)
     assets, liabs = [], []
     for g in bs.values():
         side = "DR" if g["dr"] >= g["cr"] else "CR"
