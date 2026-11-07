@@ -270,6 +270,19 @@ def _money(value) -> Decimal:
     return Decimal(str(value or 0)).quantize(Decimal("0.01"))
 
 
+def _reserved_allocations_stmt(settlement_id: int):
+    """Only unpaid, non-cancelled cheques reserve settlement balance."""
+    return (
+        select(func.coalesce(func.sum(FinancialCheckSettlementAllocation.allocated_amount), 0))
+        .select_from(FinancialCheckSettlementAllocation)
+        .join(FinancialCheck, FinancialCheck.check_id == FinancialCheckSettlementAllocation.check_id)
+        .where(
+            FinancialCheckSettlementAllocation.settlement_id == settlement_id,
+            FinancialCheck.status.notin_(("منصرف", "مرتد", "ملغي")),
+        )
+    )
+
+
 def _allocations_out(db: Session, check_id: int):
     rows = db.execute(
         select(FinancialCheckSettlementAllocation, ContractSettlement)
@@ -342,8 +355,7 @@ def add_allocation(cid: int, body: AllocationIn,
     paid = db.scalar(select(func.coalesce(func.sum(TreasuryTransaction.outflow), 0)).where(
         TreasuryTransaction.settlement_id == settlement.settlement_id,
         TreasuryTransaction.status == "تم الصرف")) or 0
-    reserved = db.scalar(select(func.coalesce(func.sum(FinancialCheckSettlementAllocation.allocated_amount), 0)).where(
-        FinancialCheckSettlementAllocation.settlement_id == settlement.settlement_id)) or 0
+    reserved = db.scalar(_reserved_allocations_stmt(settlement.settlement_id)) or 0
     remaining = max(Decimal("0.00"), _money(settlement.net_amount) - _money(paid) - _money(reserved))
     if amount > remaining:
         raise HTTPException(409, f"قيمة التخصيص تتجاوز المتبقي غير المدفوع من المستخلص: {remaining}")
@@ -389,8 +401,7 @@ def allocation_options(cid: int, _: User = Depends(require_any(SCREENS, "View"))
         paid = db.scalar(select(func.coalesce(func.sum(TreasuryTransaction.outflow), 0)).where(
             TreasuryTransaction.settlement_id == settlement.settlement_id,
             TreasuryTransaction.status == "تم الصرف")) or 0
-        reserved = db.scalar(select(func.coalesce(func.sum(FinancialCheckSettlementAllocation.allocated_amount), 0)).where(
-            FinancialCheckSettlementAllocation.settlement_id == settlement.settlement_id)) or 0
+        reserved = db.scalar(_reserved_allocations_stmt(settlement.settlement_id)) or 0
         remaining = max(Decimal("0.00"), _money(settlement.net_amount) - _money(paid) - _money(reserved))
         duplicate = db.scalar(select(FinancialCheckSettlementAllocation.allocation_id).where(
             FinancialCheckSettlementAllocation.check_id == cid,
