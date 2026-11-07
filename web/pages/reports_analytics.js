@@ -57,8 +57,8 @@ const dataTable = (key, items) => {
   }).join("")}</tr>`).join("") || `<tr><td class="muted" colspan="${cols.length}">${T("لا توجد بيانات مطابقة للفلاتر")}</td></tr>`}</tbody></table></div>`;
 };
 const chartNum = value => { const n = Number(value || 0); return Number.isFinite(n) ? n : 0; };
-const monthlyCashChart = items => {
-  const rows = items || [], width = 960, height = 310, left = 94, right = 18, top = 22, bottom = 58;
+const monthlyCashChart = (items, currency) => {
+  const rows = (items || []).filter(x => x.currency === currency), width = 960, height = 310, left = 94, right = 18, top = 22, bottom = 58;
   if (!rows.some(x => chartNum(x.inflow) || chartNum(x.outflow))) return `<section class="report-chart"><h4>${T("حركة النقدية الشهرية")}</h4><p class="muted">${T("لا توجد حركات نقدية في الفترة المحددة.")}</p></section>`;
   const plotW = width - left - right, plotH = height - top - bottom;
   const max = Math.max(1, ...rows.flatMap(x => [chartNum(x.inflow), chartNum(x.outflow)]));
@@ -126,14 +126,15 @@ export async function render(main, { api }) {
     if (kind === "overview") {
       const p = new URLSearchParams(dateParams), r = await api(`/api/reports/data?${p}`);
       const summary = kpis([["إجمالي الإيرادات", money(r.kpis.total_revenue)], ["إجمالي المصروفات", money(r.kpis.total_expenses)], ["صافي الربح / الخسارة", money(r.kpis.net_profit)]]);
-      currentRows = [...(r.cash_flow_monthly || []).map(x => ({ period: x.month, inflow: x.inflow, outflow: x.outflow, net: Number(x.inflow) - Number(x.outflow) }))];
-      currentColumns = ["period", "inflow", "outflow", "net"]; currentLabels = ["الشهر", "الوارد", "المنصرف", "الصافي"]; currentTitle = "المؤشرات المالية";
-      out.innerHTML = `<section class="panel reports-result"><h3>المؤشرات المالية</h3><p class="muted">${esc(`${r.date_from} — ${r.date_to}`)}</p>${summary}<div class="reports-charts">${monthlyCashChart(r.cash_flow_monthly)}${expenseBreakdownChart(r.expenses_breakdown)}</div><h4>حركة النقدية الشهرية</h4><div class="tbl-wrap"><table><thead><tr><th>الشهر</th><th>الوارد</th><th>المنصرف</th><th>الصافي</th></tr></thead><tbody>${currentRows.map(x => `<tr><td>${esc(x.period)}</td><td class="num">${money(x.inflow)}</td><td class="num">${money(x.outflow)}</td><td class="num">${money(x.net)}</td></tr>`).join("")}</tbody></table></div><h4>أكثر الحسابات حركة</h4><div class="tbl-wrap"><table><thead><tr><th>الكود</th><th>الحساب</th><th>الرصيد</th><th>الطبيعة</th><th>الحالة</th></tr></thead><tbody>${(r.top_accounts || []).map(x => `<tr><td>${esc(x.account_code)}</td><td>${esc(x.account_name)}</td><td>${money(x.closing_balance)}</td><td>${esc(x.side)}</td><td>${esc(x.status)}</td></tr>`).join("") || '<tr><td colspan="5">لا توجد بيانات</td></tr>'}</tbody></table></div></section>`;
+      const monthlyRows = (r.cash_flow_monthly || []).map(x => ({ period: x.month, currency: x.currency, inflow: x.inflow, outflow: x.outflow, net: Number(x.inflow) - Number(x.outflow) }));
+      const currencies = [...new Set(monthlyRows.map(x => x.currency))];
+      currentRows = monthlyRows;
+      currentColumns = ["period", "currency", "inflow", "outflow", "net"]; currentLabels = ["الشهر", "العملة", "الوارد", "المنصرف", "الصافي"]; currentTitle = "المؤشرات المالية";
+      out.innerHTML = `<section class="panel reports-result"><h3>المؤشرات المالية</h3><p class="muted">${esc(`${r.date_from} — ${r.date_to}`)}</p>${summary}<div class="reports-charts">${currencies.map(currency => monthlyCashChart(monthlyRows, currency)).join("")}${expenseBreakdownChart(r.expenses_breakdown)}</div><h4>حركة النقدية الشهرية حسب العملة</h4><div class="tbl-wrap"><table><thead><tr><th>الشهر</th><th>العملة</th><th>الوارد</th><th>المنصرف</th><th>الصافي</th></tr></thead><tbody>${currentRows.map(x => `<tr><td>${esc(x.period)}</td><td>${esc(x.currency)}</td><td class="num">${money(x.inflow)}</td><td class="num">${money(x.outflow)}</td><td class="num">${money(x.net)}</td></tr>`).join("")}</tbody></table></div><h4>أكثر الحسابات حركة</h4><div class="tbl-wrap"><table><thead><tr><th>الكود</th><th>الحساب</th><th>الرصيد</th><th>الطبيعة</th><th>الحالة</th></tr></thead><tbody>${(r.top_accounts || []).map(x => `<tr><td>${esc(x.account_code)}</td><td>${esc(x.account_name)}</td><td>${money(x.closing_balance)}</td><td>${esc(x.side)}</td><td>${esc(x.status)}</td></tr>`).join("") || '<tr><td colspan="5">لا توجد بيانات</td></tr>'}</tbody></table></div></section>`;
       $("#csv").disabled = $("#print").disabled = false; return;
     }
     if (kind === "account_ledger") {
-      const ids = [...selectedAccounts];
-      if (!ids.length) throw new Error("اختر حسابًا واحدًا على الأقل لعرض كشف الأستاذ");
+      const ids = selectedAccounts.size ? [...selectedAccounts] : accounts.map(x => x.account_id);
       const p = new URLSearchParams(dateParams); ids.forEach(id => p.append("account_ids", id)); if($("#project").value)p.set("project_id",$("#project").value);
       const r=await api(`/api/reports/account-ledger?${p}`);
       const summary=kpis([["عدد الحسابات",r.accounts.length],["رصيد أول المدة",money(r.opening_balance)],["إجمالي المدين",money(r.total_debit)],["إجمالي الدائن",money(r.total_credit)],["رصيد آخر المدة",money(r.closing_balance)]]);
