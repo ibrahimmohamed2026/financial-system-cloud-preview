@@ -25,4 +25,11 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           JWT_SECRET: "ci-only-test-secret-not-for-production-2026"
           DATABASE_URL: "sqlite:///./ci-test.db"
-        run: pytest -q
+        run: python -m pytest -q
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check cheque register JavaScript
+        run: node --check web/pages/financial_checks.js
