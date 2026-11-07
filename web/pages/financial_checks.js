@@ -5,6 +5,20 @@ import { translate as tr } from "../i18n.js";
 const STATUS = ["مسودة", "معتمد", "صادر", "تم التسليم", "تحت التحصيل", "تم التحصيل", "منصرف", "موقوف", "مرتد", "ملغي", "مُحصّل", "مُرتجع"];
 const STATUS_CLASS = {"مسودة":"draft", "معتمد":"pending", "صادر":"pending", "تم التسليم":"pending", "تحت التحصيل":"pending", "تم التحصيل":"success", "مُحصّل":"success", "منصرف":"success", "مرتد":"danger", "مُرتجع":"danger", "ملغي":"danger", "موقوف":"danger"};
 const statusLabel = s => ({ "مسودة":tr("مسودة","Draft"), "معتمد":tr("معتمد","Approved"), "صادر":tr("صادر","Issued"), "تم التسليم":tr("تم التسليم","Delivered"), "تحت التحصيل":tr("تحت التحصيل","Under collection"), "تم التحصيل":tr("تم التحصيل","Collected"), "مُحصّل":tr("مُحصّل","Collected (legacy)"), "منصرف":tr("منصرف","Paid"), "موقوف":tr("موقوف","On hold"), "مرتد":tr("مرتد","Returned"), "مُرتجع":tr("مُرتجع","Returned (legacy)"), "ملغي":tr("ملغي","Cancelled") }[s] || s || "—");
+const NEXT_STATUS = {
+  INCOMING: {
+    "مسودة": ["تحت التحصيل", "ملغي"],
+    "تحت التحصيل": ["تم التحصيل", "مرتد"]
+  },
+  OUTGOING: {
+    "مسودة": ["معتمد", "ملغي"],
+    "معتمد": ["صادر", "ملغي"],
+    "صادر": ["تم التسليم", "موقوف", "ملغي"],
+    "تم التسليم": ["منصرف", "موقوف", "مرتد"],
+    "موقوف": ["صادر", "ملغي"]
+  }
+};
+const nextStatuses = cheque => NEXT_STATUS[cheque.check_type]?.[cheque.status] || [];
 const EGP = v => `${money(v)} <small class="ch-egp">EGP</small>`;
 
 export async function render(main, { api, auth }) {
@@ -25,7 +39,7 @@ export async function render(main, { api, auth }) {
     <div class="ch-panel">
       <div class="ch-panel-head"><div><h3>${tr("سجل الشيكات","Cheque Register")}</h3><p>${tr("بحث سريع وتصنيف حسب المشروع والحالة والنوع.","Search and filter by project, status and type.")}</p></div><div class="ch-actions">${can("Print")?`<button class="ch-btn" id="ch-export">${tr("تصدير CSV","Export CSV")}</button><button class="ch-btn" id="ch-export-xlsx">${tr("تصدير Excel","Export Excel")}</button>`:''}${can("Add")?`<button class="ch-btn" id="ch-import">${tr("استيراد CSV","Import CSV")}</button><input hidden type="file" id="ch-file" accept=".csv"><button class="ch-btn primary" id="ch-add">＋ ${tr("تسجيل شيك","Register cheque")}</button>`:''}</div></div>
       <div class="ch-tabs" id="ch-tabs"><button type="button" data-project="all" class="active">${tr("كل المشروعات","All projects")}</button><button type="button" data-project="none">${tr("بدون مشروع","No project")}</button>${projects.map(p=>`<button type="button" data-project="${p.id}">${esc(p.name)}</button>`).join("")}</div>
-      <div class="ch-filters"><label><span>${tr("بحث برقم الشيك","Search cheque number")}</span><input id="ch-search" placeholder="${tr("اكتب رقم الشيك…","Enter cheque number…")}" autocomplete="off"></label><label><span>${tr("حالة الشيك","Cheque status")}</span><select id="ch-status"><option value="">${tr("كل الحالات","All statuses")}</option>${STATUS.map(s=>`<option value="${s}">${statusLabel(s)}</option>`).join("")}</select></label><label><span>${tr("نوع الشيك","Cheque type")}</span><select id="ch-type"><option value="">${tr("كل الأنواع","All types")}</option><option value="INCOMING">${tr("وارد من عميل","Incoming from customer")}</option><option value="OUTGOING">${tr("صادر لمورد","Outgoing to supplier")}</option></select></label><button class="ch-btn" id="ch-filter">${tr("تطبيق الفلاتر","Apply filters")}</button><button class="ch-btn ghost" id="ch-reset">${tr("إعادة ضبط","Reset")}</button></div>
+      <div class="ch-filters"><label><span>${tr("بحث برقم الشيك","Search cheque number")}</span><input id="ch-search" placeholder="${tr("اكتب رقم الشيك…","Enter cheque number…")}" autocomplete="off"></label><label><span>${tr("حالة الشيك","Cheque status")}</span><select id="ch-status"><option value="">${tr("كل الحالات","All statuses")}</option>${nextStatuses(c).map(s=>`<option value="${s}">${statusLabel(s)}</option>`).join("")}</select></label><label><span>${tr("نوع الشيك","Cheque type")}</span><select id="ch-type"><option value="">${tr("كل الأنواع","All types")}</option><option value="INCOMING">${tr("وارد من عميل","Incoming from customer")}</option><option value="OUTGOING">${tr("صادر لمورد","Outgoing to supplier")}</option></select></label><button class="ch-btn" id="ch-filter">${tr("تطبيق الفلاتر","Apply filters")}</button><button class="ch-btn ghost" id="ch-reset">${tr("إعادة ضبط","Reset")}</button></div>
       <div class="ch-table-wrap"><table class="ch-table"><thead><tr><th>${tr("رقم الشيك","Cheque No.")}</th><th>${tr("المشروع","Project")}</th><th>${tr("النوع","Type")}</th><th>${tr("المبلغ","Amount")}</th><th>${tr("تاريخ الاستحقاق","Due date")}</th><th>${tr("البنك المسحوب عليه","Drawee bank")}</th><th>${tr("حساب الطرف","Party account")}</th><th>${tr("الحساب البنكي المرتبط","Linked bank account")}</th><th>${tr("الحالة","Status")}</th><th>${tr("قيد اليومية","Journal entry")}</th><th>${tr("إجراء","Action")}</th></tr></thead><tbody id="ch-rows"></tbody></table></div>
       <div class="ch-foot"><span id="ch-count">—</span><span>${tr("جميع المبالغ معروضة بالجنيه المصري EGP","All amounts are displayed in Egyptian pounds (EGP)")}</span></div>
     </div>
