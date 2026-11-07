@@ -28,6 +28,7 @@ class EstimateLine(BaseModel):
 class EstimateIn(BaseModel):
     contract_id: int = Field(gt=0)
     planned_schedule_id: int | None = Field(default=None, gt=0)
+    is_final: bool = False
     settlement_side: Literal["Customer", "Subcontractor"]
     # Optional for backward compatibility; the server assigns the final number.
     estimate_no: str | None = Field(default=None, max_length=50)
@@ -127,7 +128,7 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     if total<=0: raise HTTPException(422,"قيمة الأعمال يجب أن تكون أكبر من صفر")
     x=TechnicalSettlementEstimate(contract_id=c.contract_id,settlement_side=body.settlement_side,estimate_no=estimate_no,
        estimate_date=(body.estimate_date if body.estimate_date else datetime.utcnow().date()),counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,
-       work_value=total,status="TechnicalReviewed",notes=body.notes,created_by=user.user_id)
+       work_value=total,status="TechnicalReviewed",is_final=body.is_final,notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
     if planned_row is not None:
         planned_row.technical_estimate_id = x.estimate_id
@@ -327,7 +328,7 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, *, a
     vat_rate=Decimal(str(cfg.default_vat_rate if cfg else 0)); vat=money(work*vat_rate/Decimal("100")); net=money(work+vat-total_d)
     if net<0: raise HTTPException(422,"الخصومات أكبر من صافي الأعمال والضريبة")
     seq=(db.scalar(select(func.max(ContractSettlement.sequence_no)).where(ContractSettlement.contract_id==x.contract_id,ContractSettlement.settlement_side==x.settlement_side)) or 0)+1
-    fin=ContractSettlement(contract_id=x.contract_id,settlement_side=x.settlement_side,sequence_no=seq,settlement_no=f"FIN-{x.estimate_id:06d}",settlement_date=x.estimate_date,counterparty_name=x.counterparty_name,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,net_amount=net,status="Draft",notes=f"تم إنشاؤه تلقائياً من المستخلص الفني {x.estimate_no}. {x.notes or ''}".strip(),created_by=user.user_id)
+    fin=ContractSettlement(contract_id=x.contract_id,settlement_side=x.settlement_side,sequence_no=seq,settlement_no=f"FIN-{x.estimate_id:06d}",settlement_date=x.estimate_date,counterparty_name=x.counterparty_name,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,net_amount=net,status="Draft",is_final=bool(getattr(x,"is_final",False)),notes=f"تم إنشاؤه تلقائياً من المستخلص الفني {x.estimate_no}. {x.notes or ''}".strip(),created_by=user.user_id)
     db.add(fin);db.flush()
     for line in lines:
         approved_qty = line.approved_quantity if line.approved_quantity is not None else Decimal("0")
