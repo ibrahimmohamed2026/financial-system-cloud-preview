@@ -16,7 +16,7 @@ def test_journal_account_filter_uses_exists_and_does_not_duplicate_entries():
     assert result == {"total": 0, "items": []}
     statement = str(db.scalar.call_args.args[0])
     assert "EXISTS" in statement.upper()
-    assert "account_id IN" in statement
+    assert '"JournalEntryDetails"."AccountId" IN' in statement
 
 
 def test_trial_balance_filters_rows_and_totals_to_selected_accounts(monkeypatch):
