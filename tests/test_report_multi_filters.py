@@ -9,7 +9,7 @@ from app.routers import journal, reports, trial_balance
 def test_journal_account_filter_uses_exists_and_does_not_duplicate_entries():
     db = MagicMock()
     db.scalar.return_value = 0
-    db.scalars.return_value = []
+    db.scalars.return_value.all.return_value = []
 
     result = journal.list_entries(account_ids=[11, 22], db=db, _=None)
 
