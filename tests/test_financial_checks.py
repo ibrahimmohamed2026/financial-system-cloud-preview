@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -7,8 +7,9 @@ import pytest
 from fastapi import HTTPException
 
 from app.models import (
-    Contract, Counterparty, FinancialCheckSettlementAllocation,
-    FinancialCheckStatusHistory,
+    Account, Contract, Counterparty, FinancialCheck, FinancialCheckSettlementAllocation,
+    FinancialCheckStatusHistory, FiscalYear, JournalEntry, JournalEntryDetail,
+    TreasuryAccount, TreasuryTransaction,
 )
 from app.routers import financial_checks
 from app.routers.financial_checks import AllocationIn, _allowed_next_statuses, _money
@@ -101,3 +102,77 @@ def test_allocation_rejects_counterparty_mismatch_without_writing(monkeypatch):
 
     assert exc.value.status_code == 409
     db.commit.assert_not_called()
+
+
+
+def test_outgoing_payment_posts_one_journal_and_allocated_bank_movements(monkeypatch):
+    check = SimpleNamespace(
+        check_id=11, check_type="OUTGOING", status="تم التسليم",
+        amount=Decimal("500.00"), project_id=4, party_account_id=20,
+        treasury_account_id=6, journal_entry_id=None, check_number="CHK-11",
+    )
+    fiscal_year = SimpleNamespace(
+        company_id=1, fiscal_year_id=2026, start_date=date(2026, 1, 1),
+        end_date=date(2026, 12, 31), is_closed=False,
+    )
+    bank = SimpleNamespace(account_type="Bank", currency_code="EGP", gl_account_id=10)
+    bank_gl = SimpleNamespace(account_id=10, is_active=True)
+    party = SimpleNamespace(account_id=20, is_active=True)
+    allocations = [
+        SimpleNamespace(allocation_id=1, settlement_id=31, allocated_amount=Decimal("200.00")),
+        SimpleNamespace(allocation_id=2, settlement_id=32, allocated_amount=Decimal("100.00")),
+    ]
+    db = MagicMock()
+    db.scalar.side_effect = [check, fiscal_year, None, None]
+    db.get.side_effect = lambda model, key: (
+        bank if model is TreasuryAccount else
+        (bank_gl if key == 10 else party) if model is Account else None
+    )
+    db.scalars.return_value.all.return_value = allocations
+    added = []
+
+    def collect(value):
+        added.append(value)
+        if isinstance(value, JournalEntry):
+            value.journal_entry_id = 88
+
+    db.add.side_effect = collect
+    monkeypatch.setattr(financial_checks, "write_audit", lambda *args, **kwargs: None)
+
+    financial_checks.set_status(
+        11, financial_checks.StatusIn(status="منصرف"),
+        SimpleNamespace(user_id=7), db,
+    )
+
+    entries = [x for x in added if isinstance(x, JournalEntry)]
+    lines = [x for x in added if isinstance(x, JournalEntryDetail)]
+    movements = [x for x in added if isinstance(x, TreasuryTransaction)]
+    assert len(entries) == 1
+    assert len(lines) == 2
+    assert sum((x.debit_amount for x in lines), Decimal("0")) == Decimal("500.00")
+    assert sum((x.credit_amount for x in lines), Decimal("0")) == Decimal("500.00")
+    assert len(movements) == 3
+    assert sum((x.outflow for x in movements), Decimal("0")) == Decimal("500.00")
+    assert {x.settlement_id for x in movements if x.settlement_id is not None} == {31, 32}
+    assert all(x.journal_entry_id == 88 for x in movements)
+    db.commit.assert_called_once()
+
+
+def test_outgoing_cheque_approval_does_not_post_to_bank_or_ledger(monkeypatch):
+    check = SimpleNamespace(
+        check_id=12, check_type="OUTGOING", status="مسودة",
+        journal_entry_id=None,
+    )
+    db = MagicMock()
+    db.scalar.return_value = check
+    monkeypatch.setattr(financial_checks, "write_audit", lambda *args, **kwargs: None)
+
+    financial_checks.set_status(
+        12, financial_checks.StatusIn(status="معتمد"),
+        SimpleNamespace(user_id=7), db,
+    )
+
+    db.get.assert_not_called()
+    db.add.assert_called_once()  # status history only
+    assert not isinstance(db.add.call_args.args[0], (JournalEntry, JournalEntryDetail, TreasuryTransaction))
+    db.commit.assert_called_once()
