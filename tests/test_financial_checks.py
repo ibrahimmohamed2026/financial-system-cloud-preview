@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.dialects import sqlite
 
 from app.models import (
     Account, Contract, Counterparty, FinancialCheck, FinancialCheckSettlementAllocation,
@@ -12,7 +13,9 @@ from app.models import (
     TreasuryAccount, TreasuryTransaction,
 )
 from app.routers import financial_checks
-from app.routers.financial_checks import AllocationIn, _allowed_next_statuses, _money
+from app.routers.financial_checks import (
+    AllocationIn, _allowed_next_statuses, _money, _reserved_allocations_stmt,
+)
 
 
 def test_outgoing_cheque_must_follow_approval_issuance_and_delivery():
@@ -176,3 +179,15 @@ def test_outgoing_cheque_approval_does_not_post_to_bank_or_ledger(monkeypatch):
     db.add.assert_called_once()  # status history only
     assert not isinstance(db.add.call_args.args[0], (JournalEntry, JournalEntryDetail, TreasuryTransaction))
     db.commit.assert_called_once()
+
+
+
+def test_paid_returned_and_cancelled_cheques_do_not_reserve_settlement_balance():
+    sql = str(_reserved_allocations_stmt(31).compile(
+        dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}
+    ))
+    assert 'JOIN "FinancialChecks"' in sql
+    assert '"FinancialChecks"."Status" NOT IN' in sql
+    assert "'منصرف'" in sql
+    assert "'مرتد'" in sql
+    assert "'ملغي'" in sql
