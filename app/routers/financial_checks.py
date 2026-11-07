@@ -128,8 +128,8 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
     if c.check_type == "OUTGOING" and body.status in {"تحت التحصيل", "تم التحصيل", "مُحصّل", "مُرتجع"}:
         raise HTTPException(422, "هذه الحالة مخصصة للشيكات الواردة")
 
-    target = "تم التحصيل" if c.check_type == "INCOMING" else "منصرف"
-    if body.status == target:
+    settlement_statuses = {"تم التحصيل", "مُحصّل"} if c.check_type == "INCOMING" else {"منصرف"}
+    if body.status in settlement_statuses:
         required_sources = {"تحت التحصيل"} if c.check_type == "INCOMING" else {"تم التسليم"}
         # Legacy outgoing imports used the old direct settlement status.
         if c.status not in required_sources and not (c.check_type == "OUTGOING" and c.status == "مسودة"):
@@ -137,7 +137,7 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
     if c.journal_entry_id and body.status != c.status:
         raise HTTPException(409, "الشيك له قيد مرحّل؛ لا تغيّر حالته قبل إجراء عكس محاسبي معتمد")
 
-    if body.status == target:
+    if body.status in settlement_statuses:
         if c.journal_entry_id:
             raise HTTPException(409, "تم إنشاء القيد لهذا الشيك مسبقاً")
         today = date.today()
