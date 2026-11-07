@@ -201,7 +201,7 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
             select(Account, AccountClassification)
             .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
             .join(TreasuryAccount, TreasuryAccount.gl_account_id == Account.account_id)
-            .where(TreasuryAccount.is_active == True, TreasuryAccount.currency_code == "USD",
+            .where(TreasuryAccount.is_active == True, TreasuryAccount.currency_code == treasury.currency_code,
                    TreasuryAccount.treasury_account_id != treasury.treasury_account_id,
                    Account.is_active == True, Account.account_id.not_in(parents))
             .order_by(Account.account_code).limit(500)
@@ -452,6 +452,83 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
                 {"entry_no": entry.entry_no, "source": "TreasuryTransaction", "status": "Draft"})
     return entry.entry_no
 
+def _egp_journal_sides(inflow: Decimal, outflow: Decimal) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Return treasury debit/credit and counterpart debit/credit for an EGP movement."""
+    if (inflow > 0) == (outflow > 0):
+        raise HTTPException(422, "الحركة إما وارد أو منصرف (مش الاتنين ومش صفر)")
+    if inflow > 0:
+        return inflow, D0, D0, inflow
+    return D0, outflow, outflow, D0
+
+
+def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
+                        body: TxIn, user: User) -> str:
+    """Create one draft GL journal for each newly-entered EGP treasury movement.
+
+    Existing unlinked rows are intentionally not backfilled: they require a reviewed
+    opening/migration reconciliation so historic entries are never duplicated.
+    """
+    if t.journal_entry_id is not None:
+        raise HTTPException(409, "حركة الخزينة مرتبطة بقيد بالفعل؛ لا يمكن إنشاء قيد مكرر")
+    if body.counterpart_account_id is None or not body.transaction_type:
+        raise HTTPException(422, "حركة خزينة الجنيه تتطلب نوع الحركة وحساب الطرف المقابل")
+    if body.counterpart_account_id == a.gl_account_id:
+        raise HTTPException(422, "حساب الطرف المقابل لازم يختلف عن حساب الخزينة")
+    counterpart = db.get(Account, body.counterpart_account_id)
+    if counterpart is None or not counterpart.is_active:
+        raise HTTPException(400, "حساب الطرف المقابل غير موجود أو غير نشط")
+    parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
+    if counterpart.account_id in parents:
+        raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
+    config = USD_TRANSACTION_TYPES.get(body.transaction_type)
+    direction = "inflow" if body.inflow > 0 else "outflow"
+    if config is None or config["direction"] not in (direction, "either"):
+        raise HTTPException(422, "اختَر نوع حركة صحيحًا ومتوافقًا مع الوارد أو المنصرف")
+    if body.transaction_type == "cash_transfer":
+        target = db.scalar(select(TreasuryAccount).where(
+            TreasuryAccount.gl_account_id == counterpart.account_id,
+            TreasuryAccount.currency_code == a.currency_code,
+            TreasuryAccount.is_active == True,
+            TreasuryAccount.treasury_account_id != a.treasury_account_id,
+        ))
+        if target is None:
+            raise HTTPException(400, "التحويل لازم يكون إلى خزينة أو بنك آخر مسجل بنفس العملة")
+    else:
+        classification = db.get(AccountClassification, counterpart.classification_id)
+        if classification is None or classification.name_ar not in config["classifications"]:
+            raise HTTPException(400, "الحساب المختار لا يتبع التصنيف المسموح لنوع الحركة")
+
+    fy = _fy_for(db, body.transaction_date)
+    from .journal import _next_no
+    entry = JournalEntry(
+        entry_no=_next_no(db, fy), entry_date=body.transaction_date,
+        company_id=fy.company_id, fiscal_year_id=fy.fiscal_year_id,
+        description=body.description or f"حركة خزينة {a.name_ar}",
+        status="Draft", created_by=user.user_id,
+    )
+    db.add(entry)
+    db.flush()
+    td, tc, cd, cc = _egp_journal_sides(body.inflow, body.outflow)
+    db.add_all([
+        JournalEntryDetail(
+            journal_entry_id=entry.journal_entry_id, line_no=1,
+            account_id=a.gl_account_id, project_id=body.project_id,
+            debit_amount=td, credit_amount=tc,
+            description=f"{a.name_ar} — حركة بالجنيه المصري",
+        ),
+        JournalEntryDetail(
+            journal_entry_id=entry.journal_entry_id, line_no=2,
+            account_id=counterpart.account_id, project_id=body.project_id,
+            debit_amount=cd, credit_amount=cc,
+            description=body.description or "الطرف المقابل لحركة الخزينة",
+        ),
+    ])
+    t.journal_entry_id = entry.journal_entry_id
+    write_audit(db, user.user_id, "Create", "JournalEntries", entry.journal_entry_id, None,
+                {"entry_no": entry.entry_no, "source": "TreasuryTransaction", "status": "Draft"})
+    return entry.entry_no
+
+
 @router.post("/{screen_code}/transactions", status_code=201)
 def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
            db: Session = Depends(get_db)):
@@ -461,7 +538,8 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
     t = TreasuryTransaction(treasury_account_id=a.treasury_account_id, **values)
     db.add(t)
     db.flush()
-    journal_no = _create_usd_journal(db, a, t, body, user) if a.currency_code == "USD" else None
+    journal_no = (_create_usd_journal(db, a, t, body, user) if a.currency_code == "USD"
+                  else _create_egp_journal(db, a, t, body, user))
     write_audit(db, user.user_id, "Create", "TreasuryTransactions", t.transaction_id, None, body.model_dump())
     db.commit()
     return {"transaction_id": t.transaction_id, "journal_entry_id": t.journal_entry_id,
