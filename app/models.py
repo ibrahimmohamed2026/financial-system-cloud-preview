@@ -496,6 +496,8 @@ class Contract(Base):
     agreed_statement_count: Mapped[Optional[int]] = C("AgreedStatementCount", Integer, nullable=True)
     statement_distribution_method: Mapped[str] = C("StatementDistributionMethod", Unicode(20), default="Manual")
     status: Mapped[str] = C("Status", Unicode(30), default="Active")
+    closed_at: Mapped[Optional[datetime]] = C("ClosedAt", DateTime, nullable=True)
+    closed_by: Mapped[Optional[int]] = C("ClosedBy", ForeignKey("Users.UserId"), nullable=True)
     notes: Mapped[Optional[str]] = C("Notes", UnicodeText, nullable=True)
     created_by: Mapped[Optional[int]] = C("CreatedBy", ForeignKey("Users.UserId"), nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
