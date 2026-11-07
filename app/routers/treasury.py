@@ -529,7 +529,6 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     return entry.entry_no
 
 
-@router.post("/{screen_code}/transactions", status_code=201)
 def _create_egp_transfer_mirror(db: Session, source: TreasuryAccount, original: TreasuryTransaction,
                                   body: TxIn, user: User) -> TreasuryTransaction | None:
     """Create the opposite operational bank/cash movement for an EGP transfer.
@@ -577,6 +576,7 @@ def _create_egp_transfer_mirror(db: Session, source: TreasuryAccount, original: 
     return mirror
 
 
+@router.post("/{screen_code}/transactions", status_code=201)
 def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
            db: Session = Depends(get_db)):
     a = _bound(db, screen_code)
