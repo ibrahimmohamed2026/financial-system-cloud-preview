@@ -257,12 +257,13 @@ def _allowed_next_statuses(check_type: str, current_status: str) -> set[str]:
     }
     # Legacy labels remain readable without allowing a new outgoing cheque
     # to bypass approval, issuance, and delivery.
-    legacy = {
-        "مسودة": {"تحت التحصيل", "مُحصّل", "مُرتجع"},
+    legacy_incoming = {
+        "مسودة": {"مُحصّل", "مُرتجع"},
         "تحت التحصيل": {"مُحصّل", "مُرتجع"},
     }
     transitions = incoming if check_type == "INCOMING" else outgoing
-    return set(transitions.get(current_status, set())) | set(legacy.get(current_status, set()))
+    legacy = legacy_incoming.get(current_status, set()) if check_type == "INCOMING" else set()
+    return set(transitions.get(current_status, set())) | set(legacy)
 
 
 def _money(value) -> Decimal:
