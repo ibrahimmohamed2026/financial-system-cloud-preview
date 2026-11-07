@@ -97,30 +97,9 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
     if not c:
         raise HTTPException(404, "الشيك غير موجود")
 
-    incoming = {
-        "مسودة": {"تحت التحصيل", "ملغي"},
-        "تحت التحصيل": {"تم التحصيل", "مرتد"},
-        "تم التحصيل": set(), "مرتد": set(), "ملغي": set(),
-    }
-    outgoing = {
-        "مسودة": {"معتمد", "ملغي"},
-        "معتمد": {"صادر", "ملغي"},
-        "صادر": {"تم التسليم", "موقوف", "ملغي"},
-        "تم التسليم": {"منصرف", "موقوف", "مرتد"},
-        "موقوف": {"صادر", "ملغي"},
-        "منصرف": set(), "مرتد": set(), "ملغي": set(),
-    }
-    # Keep legacy labels readable and transitionable without rewriting historical rows.
-    legacy = {
-        "مسودة": {"تحت التحصيل", "مُحصّل", "منصرف", "مُرتجع"},
-        "تحت التحصيل": {"مُحصّل", "مُرتجع"},
-    }
-    valid = set().union(*incoming.values(), *outgoing.values(), *legacy.values())
-    if body.status not in valid:
+    allowed_next = _allowed_next_statuses(c.check_type, c.status)
+    if body.status not in allowed_next:
         raise HTTPException(422, "الحالة غير صحيحة")
-    transitions = incoming if c.check_type == "INCOMING" else outgoing
-    allowed_next = set(transitions.get(c.status, set()))
-    allowed_next.update(legacy.get(c.status, set()))
     if body.status not in allowed_next:
         raise HTTPException(409, f"انتقال الحالة من {c.status} إلى {body.status} غير مسموح")
     if c.check_type == "INCOMING" and body.status in {"معتمد", "صادر", "تم التسليم", "منصرف", "موقوف"}:
@@ -260,6 +239,30 @@ def import_csv(file: UploadFile = File(...), user: User = Depends(require_any(SC
     except Exception as e:
         db.rollback(); raise HTTPException(422, f"فشل الاستيراد بالكامل دون حفظ جزئي: {str(e)[:180]}")
     return {"imported": made}
+
+
+def _allowed_next_statuses(check_type: str, current_status: str) -> set[str]:
+    incoming = {
+        "مسودة": {"تحت التحصيل", "ملغي"},
+        "تحت التحصيل": {"تم التحصيل", "مرتد"},
+        "تم التحصيل": set(), "مرتد": set(), "ملغي": set(),
+    }
+    outgoing = {
+        "مسودة": {"معتمد", "ملغي"},
+        "معتمد": {"صادر", "ملغي"},
+        "صادر": {"تم التسليم", "موقوف", "ملغي"},
+        "تم التسليم": {"منصرف", "موقوف", "مرتد"},
+        "موقوف": {"صادر", "ملغي"},
+        "منصرف": set(), "مرتد": set(), "ملغي": set(),
+    }
+    # Legacy labels remain readable without allowing a new outgoing cheque
+    # to bypass approval, issuance, and delivery.
+    legacy = {
+        "مسودة": {"تحت التحصيل", "مُحصّل", "مُرتجع"},
+        "تحت التحصيل": {"مُحصّل", "مُرتجع"},
+    }
+    transitions = incoming if check_type == "INCOMING" else outgoing
+    return set(transitions.get(current_status, set())) | set(legacy.get(current_status, set()))
 
 
 def _money(value) -> Decimal:
