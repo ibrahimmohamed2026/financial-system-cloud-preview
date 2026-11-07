@@ -322,18 +322,6 @@ def submit_contract(contract_id: int, user: User = Depends(require_permission("C
     write_audit(db, user.user_id, "SubmitForApproval", "Contracts", c.contract_id, old=old, new=_contract(c))
     db.commit(); db.refresh(c); return _contract(c)
 
-@router.post("/{contract_id}/engineering-approve")
-def engineering_approve_contract(contract_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not has_permission(db, user.user_id, "Contracts", "EngineeringApprove"):
-        raise HTTPException(403, "ليس لديك صلاحية الاعتماد الهندسي للعقود")
-    c = db.get(Contract, contract_id)
-    if not c: raise HTTPException(404, "العقد غير موجود")
-    if c.status.lower() not in ("pendingengineering", "pendingapproval"):
-        raise HTTPException(409, "العقد ليس بانتظار الاعتماد الهندسي")
-    old = _contract(c); c.status = "PendingFinancial"
-    write_audit(db, user.user_id, "EngineeringApprove", "Contracts", c.contract_id, old=old, new=_contract(c))
-    db.commit(); db.refresh(c); return _contract(c)
-
 @router.post("/{contract_id}/approve")
 def approve_contract(contract_id: int, body: ContractActivationIn | None = None,
                      user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -341,7 +329,7 @@ def approve_contract(contract_id: int, body: ContractActivationIn | None = None,
         raise HTTPException(403, "ليس لديك صلاحية الاعتماد المالي للعقود")
     c = db.get(Contract, contract_id)
     if not c: raise HTTPException(404, "العقد غير موجود")
-    if c.status.lower() != "pendingfinancial":
+    if c.status.lower() not in ("pendingfinancial", "pendingengineering", "pendingapproval"):
         raise HTTPException(409, "العقد ليس بانتظار المراجعة المالية")
     if body and body.deduction_rules is not None:
         current = db.scalars(select(ContractDeductionRule).where(ContractDeductionRule.contract_id == contract_id)).all()
