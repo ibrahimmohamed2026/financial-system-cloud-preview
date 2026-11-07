@@ -148,8 +148,15 @@ class SettlementIn(BaseModel):
         if any(v < 0 for v in self.deduction_overrides.values()): raise ValueError("الخصومات لا يمكن أن تكون سالبة")
         return self
 
+class ManualSettlementDeductionIn(BaseModel):
+    name: str = Field(min_length=2, max_length=150)
+    amount: Decimal = Field(gt=0)
+    account_id: int = Field(gt=0)
+    reason: str = Field(min_length=3, max_length=1000)
+
 class SettlementDeductionsUpdate(BaseModel):
     amounts: dict[str, Decimal] = Field(default_factory=dict)
+    additions: list[ManualSettlementDeductionIn] = Field(default_factory=list)
     vat_amount: Decimal = Field(default=ZERO, ge=0)
     @model_validator(mode="after")
     def valid_amounts(self):
@@ -466,7 +473,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
                 raise HTTPException(422,f"قيمة الخصم {r.name_ar} تتجاوز الحد الأقصى المسموح {money(r.cap_amount)}")
         rule_account=resolve_rule_account(r.code,r.name_ar,r.gl_account_id,cfg)
         if amount>0 and not rule_account: raise HTTPException(422,f"قاعدة الخصم «{r.name_ar}» غير مربوطة بحساب في شجرة الحسابات. افتح تفاصيل العقد ← بنود الخصومات ← «ربط تلقائي بالشجرة» أو اختر الحساب يدويًا.")
-        deductions[r.code]={"name":r.name_ar,"amount":str(amount),"account_id":rule_account,"posting_side":r.posting_side};total+=amount
+        deductions[r.code]={"name":r.name_ar,"amount":str(amount),"account_id":rule_account,"posting_side":r.posting_side,"source":"contract","calculation_type":r.calculation_type,"rate":str(r.rate),"base_type":r.base_type,"base_value":str(money(base))};total+=amount
     unknown=set(body.deduction_overrides)-{r.code for r in rules}
     if unknown: raise HTTPException(422,"أكواد خصم غير معرفة: "+", ".join(sorted(unknown)))
     vat_rate=body.vat_rate if body.vat_rate is not None else (cfg.default_vat_rate if cfg else Decimal("0"))
@@ -556,13 +563,28 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
         rule=live.get(code)
         if rule and rule.cap_amount is not None and amount > money(rule.cap_amount):
             raise HTTPException(422,f"قيمة الخصم {d.get('name',code)} تتجاوز الحد الأقصى المسموح {money(rule.cap_amount)}")
+        # Contract calculation type and rate are immutable from the settlement screen.
+        if rule:
+            d["source"]="contract"; d["calculation_type"]=rule.calculation_type
+            d["rate"]=str(rule.rate); d["base_type"]=rule.base_type
         d["amount"]=str(amount)
         total+=amount
+    added_codes=[]
+    for addition in body.additions:
+        account=leaf_account_or_422(db, addition.account_id, "حساب الخصم الإضافي: ")
+        code=f"manual_{uuid4().hex}"
+        posting_side="Debit" if x.settlement_side=="Customer" else "Credit"
+        deductions[code]={"name":addition.name.strip(),"amount":str(money(addition.amount)),
+            "account_id":account.account_id,"posting_side":posting_side,"source":"manual",
+            "calculation_type":"Fixed","rate":str(money(addition.amount)),
+            "reason":addition.reason.strip(),"created_by":user.user_id,
+            "created_at":datetime.utcnow().isoformat()}
+        total+=money(addition.amount); added_codes.append(code)
     vat=money(body.vat_amount)
     net=money(Decimal(str(x.work_value))+vat-total)
     if net<0: raise HTTPException(422,"إجمالي الخصومات أكبر من قيمة الأعمال والضريبة")
     x.deductions_json=deductions; x.vat_amount=vat; x.net_amount=net
-    write_audit(db,user.user_id,"UpdateDeductions","ContractSettlements",x.settlement_id,old=old,new={"deductions":deductions,"vat_amount":str(vat),"net_amount":str(net)})
+    write_audit(db,user.user_id,"UpdateDeductions","ContractSettlements",x.settlement_id,old=old,new={"deductions":deductions,"added_manual_codes":added_codes,"vat_amount":str(vat),"net_amount":str(net)})
     db.commit();db.refresh(x)
     return settlement_out(x, db)
 
