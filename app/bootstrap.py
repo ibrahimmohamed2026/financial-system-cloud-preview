@@ -197,15 +197,23 @@ def seed_job_profiles(db: Session) -> None:
     }
     available = {(p.screen_code, p.action_code): p.permission_id for p in db.scalars(select(Permission))}
     for name_ar, (name_en, grants) in templates.items():
-        if db.scalar(select(JobProfile.job_profile_id).where(JobProfile.name_ar == name_ar)) is not None:
-            continue
-        profile = JobProfile(name_ar=name_ar, name_en=name_en, is_active=True)
-        db.add(profile); db.flush()
+        profile = db.scalar(select(JobProfile).where(JobProfile.name_ar == name_ar))
+        if profile is None:
+            profile = JobProfile(name_ar=name_ar, name_en=name_en, is_active=True)
+            db.add(profile)
+            db.flush()
+        # Keep existing administrator customizations, but backfill newly introduced
+        # baseline permissions for the two approval stages. Older installations may
+        # already have these profiles, so the create-only seed above left them without
+        # FinancialApprove / ManagerApprove after the workflow was introduced.
+        existing_ids = set(db.scalars(select(JobProfilePermission.permission_id).where(
+            JobProfilePermission.job_profile_id == profile.job_profile_id)))
         for screen, actions in grants.items():
             for action in actions:
                 pid = available.get((screen, action))
-                if pid is not None:
+                if pid is not None and pid not in existing_ids:
                     db.add(JobProfilePermission(job_profile_id=profile.job_profile_id, permission_id=pid))
+                    existing_ids.add(pid)
     # مسؤول النظام IT هو ملف الصلاحيات الإداري الوحيد، ويحتاج إدارة جميع شاشات النظام.
     it_profile = db.scalar(select(JobProfile).where(JobProfile.name_ar == "مسؤول النظام IT"))
     if it_profile is not None:
