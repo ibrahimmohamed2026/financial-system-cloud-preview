@@ -11,7 +11,8 @@ from ..common import require_any
 from ..database import get_db
 from ..deps import write_audit
 from ..models import (Account, Company, FiscalYear, FinancialCheck, JournalEntry,
-                      JournalEntryDetail, Project, TreasuryAccount, TreasuryTransaction, User, utcnow)
+                      JournalEntryDetail, Project, TreasuryAccount, TreasuryTransaction, User, utcnow,
+                      FinancialCheckStatusHistory, FinancialCheckSettlementAllocation, ContractSettlement)
 
 SCREENS = {"FinancialChecks", "ChecksCib", "ChecksCairoEgp", "ChecksCairoUsd"}
 router = APIRouter(prefix="/checks-register", tags=["Financial Checks"])
@@ -75,6 +76,7 @@ def create(body: CheckIn, user: User = Depends(require_any(SCREENS, "Add")), db:
     db.add(c)
     try:
         db.flush()
+        db.add(FinancialCheckStatusHistory(check_id=c.check_id, old_status=None, new_status="مسودة", changed_by=user.user_id, note="إنشاء الشيك"))
         write_audit(db, user.user_id, "Create", "FinancialChecks", c.check_id, None, body.model_dump(mode="json"))
         db.commit()
     except IntegrityError:
@@ -86,7 +88,12 @@ def create(body: CheckIn, user: User = Depends(require_any(SCREENS, "Add")), db:
 def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREENS, "Edit")), db: Session = Depends(get_db)):
     c = db.scalar(select(FinancialCheck).where(FinancialCheck.check_id == cid).with_for_update())
     if not c: raise HTTPException(404, "الشيك غير موجود")
-    if body.status not in ("تحت التحصيل", "مُحصّل", "منصرف", "مُرتجع", "مسودة"): raise HTTPException(422, "الحالة غير صحيحة")
+    allowed = {"مسودة": {"معتمد", "ملغي"}, "معتمد": {"صادر", "ملغي"}, "صادر": {"تم التسليم", "ملغي", "موقوف"}, "تم التسليم": {"منصرف", "موقوف", "مرتد"}, "موقوف": {"صادر", "ملغي"}, "تحت التحصيل": {"تم التحصيل", "مرتد"}, "تم التحصيل": set(), "منصرف": set(), "مرتد": set(), "ملغي": set()}
+    legacy_allowed = {"مسودة": {"تحت التحصيل", "مُحصّل", "منصرف", "مُرتجع"}, "تحت التحصيل": {"مُحصّل", "مُرتجع"}}
+    if body.status not in set().union(*allowed.values(), *legacy_allowed.values()): raise HTTPException(422, "الحالة غير صحيحة")
+    transitions = allowed if c.status in allowed else legacy_allowed
+    if body.status not in transitions.get(c.status, set()):
+        raise HTTPException(409, f"انتقال الحالة من {c.status} إلى {body.status} غير مسموح")
     target = "مُحصّل" if c.check_type == "INCOMING" else "منصرف"
     if c.journal_entry_id and body.status != c.status:
         raise HTTPException(409, "الشيك له قيد مرحّل؛ لا تغيّر حالته قبل إجراء عكس محاسبي معتمد")
@@ -122,8 +129,10 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
         db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=today,
             inflow=amount if c.check_type == "INCOMING" else Decimal("0"), outflow=amount if c.check_type == "OUTGOING" else Decimal("0"),
             description=f"تسوية شيك {c.check_number}", voucher_no=voucher_no, status=target, journal_entry_id=entry.journal_entry_id))
+    old_status = c.status
     c.status = body.status
-    write_audit(db, user.user_id, "Update", "FinancialChecks", cid, None, {"status": body.status})
+    db.add(FinancialCheckStatusHistory(check_id=cid, old_status=old_status, new_status=body.status, changed_by=user.user_id))
+    write_audit(db, user.user_id, "Update", "FinancialChecks", cid, {"status": old_status}, {"status": body.status})
     db.commit(); return out(c)
 
 @router.post("/{cid}/project")
