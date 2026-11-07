@@ -653,6 +653,7 @@ class ContractSettlement(Base):
     settlement_side: Mapped[str] = C("SettlementSide", Unicode(20))
     sequence_no: Mapped[int] = C("SequenceNo", Integer)
     settlement_no: Mapped[str] = C("SettlementNo", Unicode(50))
+    is_final: Mapped[bool] = C("IsFinal", Boolean, default=False, nullable=False)
     settlement_date: Mapped[date] = C("SettlementDate", Date)
     counterparty_name: Mapped[str] = C("CounterpartyName", Unicode(200))
     counterparty_name_en: Mapped[Optional[str]] = C("CounterpartyNameEn", Unicode(200), nullable=True)
