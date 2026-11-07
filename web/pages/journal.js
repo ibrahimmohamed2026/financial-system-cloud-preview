@@ -13,6 +13,7 @@ export async function render(main, { api, auth }) {
     <div class="grow"><label>${trn("بحث (رقم القيد / البيان)","Search (entry number / description)")}</label><input id="q"></div>
     <div class="w" style="width:130px"><label>${trn("الحالة","Status")}</label><select id="s"><option value="">${trn("الكل","All")}</option>${Object.entries(ST).map(([k]) => `<option value="${k}">${statusLabel(k)}</option>`).join("")}</select></div>
     <div class="w" style="width:150px"><label>${trn("من","From")}</label><input type="date" id="df"></div><div class="w" style="width:150px"><label>${trn("إلى","To")}</label><input type="date" id="dt"></div>
+    <div class="w" style="min-width:250px"><label>${trn("تصفية حسب عدة حسابات","Filter by multiple accounts")}</label><input id="accountSearch" placeholder="${trn("ابحث بكود أو اسم الحساب","Search account code or name")}"><select id="accounts" multiple size="4" aria-label="${trn("الحسابات","Accounts")}">${accs.map(a => `<option value="${a.account_id}">${esc(a.label)}</option>`).join("")}</select><div style="display:flex;gap:6px;margin-top:4px"><button class="btn sm" type="button" id="selectAllAccounts">${trn("تحديد الكل","Select all")}</button><button class="btn sm" type="button" id="clearAccounts">${trn("إلغاء الكل","Clear all")}</button></div></div>
     ${can("Add") ? `<button class="btn primary" id="add">+ ${trn("قيد جديد","New journal entry")}</button>` : ""}${can("Approve") ? `<button class="btn" id="fy">${trn("السنوات المالية","Fiscal years")}</button>` : ""}</div>
     <div class="tbl-wrap"><table><thead><tr><th>${trn("رقم القيد","Entry No.")}</th><th>${trn("التاريخ","Date")}</th><th>${trn("البيان","Description")}</th><th>${trn("مدين","Debit")}</th><th>${trn("دائن","Credit")}</th><th>${trn("الحالة","Status")}</th></tr></thead><tbody id="rows"></tbody></table></div>
     <div class="pager"><button class="btn sm" id="prev">${trn("السابق","Previous")}</button><span id="info"></span><button class="btn sm" id="next">${trn("التالي","Next")}</button></div>`;
@@ -20,6 +21,7 @@ export async function render(main, { api, auth }) {
   const load = async () => {
     const p = new URLSearchParams({ skip: st.skip, limit: PAGE });
     if (st.q) p.set("q", st.q); if (st.status) p.set("status", st.status); if (st.df) p.set("date_from", st.df); if (st.dt) p.set("date_to", st.dt);
+    [...$("#accounts").selectedOptions].forEach(option => p.append("account_ids", option.value));
     const r = await api("/journal?" + p); items = r.items; total = r.total;
     $("#rows").innerHTML = items.map(e => `<tr style="cursor:pointer" data-id="${e.journal_entry_id}" class="${e.status === "Reversed" ? "off" : ""}"><td>${esc(e.entry_no)}</td><td>${e.entry_date}</td><td>${(e.line_descriptions || []).map((l, i) => `<div class="journal-desc-line"${i ? ' style="border-top:1px solid var(--line);margin-top:5px;padding-top:5px"' : ""}>${esc(l.description || "—")}</div>`).join("") || esc(e.description || "—")}</td>
       <td class="num">${money(e.total_debit)}</td><td class="num">${money(e.total_credit)}</td><td><span class="tag ${{ Posted: "ok", Reversed: "bad", Draft: "warn" }[e.status] || ""}">${statusLabel(e.status)}</span></td></tr>`).join("")
@@ -32,6 +34,13 @@ export async function render(main, { api, auth }) {
   $("#s").onchange = e => { st.status = e.target.value; st.skip = 0; reload(); };
   $("#df").onchange = e => { st.df = e.target.value; st.skip = 0; reload(); };
   $("#dt").onchange = e => { st.dt = e.target.value; st.skip = 0; reload(); };
+  $("#accounts").onchange = () => { st.skip = 0; reload(); };
+  $("#accountSearch").oninput = ev => {
+    const term = ev.target.value.trim().toLocaleLowerCase();
+    [...$("#accounts").options].forEach(option => { option.hidden = !!term && !option.text.toLocaleLowerCase().includes(term); });
+  };
+  $("#selectAllAccounts").onclick = () => { [...$("#accounts").options].forEach(o => { if (!o.hidden) o.selected = true; }); st.skip = 0; reload(); };
+  $("#clearAccounts").onclick = () => { [...$("#accounts").options].forEach(o => o.selected = false); st.skip = 0; reload(); };
   $("#prev").onclick = () => { st.skip = Math.max(0, st.skip - PAGE); reload(); };
   $("#next").onclick = () => { st.skip += PAGE; reload(); };
   $("#rows").onclick = safe(async ev => { const tr = ev.target.closest("tr[data-id]"); if (tr) await view(+tr.dataset.id); });
