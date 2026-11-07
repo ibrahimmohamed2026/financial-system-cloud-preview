@@ -12,7 +12,8 @@ from ..database import get_db
 from ..deps import write_audit
 from ..models import (Account, Company, FiscalYear, FinancialCheck, JournalEntry,
                       JournalEntryDetail, Project, TreasuryAccount, TreasuryTransaction, User, utcnow,
-                      FinancialCheckStatusHistory, FinancialCheckSettlementAllocation, ContractSettlement)
+                      FinancialCheckStatusHistory, FinancialCheckSettlementAllocation, ContractSettlement,
+                      Contract, Counterparty)
 
 SCREENS = {"FinancialChecks", "ChecksCib", "ChecksCairoEgp", "ChecksCairoUsd"}
 router = APIRouter(prefix="/checks-register", tags=["Financial Checks"])
@@ -33,6 +34,12 @@ class StatusIn(BaseModel):
 
 class ProjectLinkIn(BaseModel):
     project_id: int | None = Field(default=None, gt=0)
+
+class AllocationIn(BaseModel):
+    settlement_id: int = Field(gt=0)
+    allocated_amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
+
+
 
 
 def out(c):
@@ -181,3 +188,96 @@ def import_csv(file: UploadFile = File(...), user: User = Depends(require_any(SC
     except Exception as e:
         db.rollback(); raise HTTPException(422, f"فشل الاستيراد بالكامل دون حفظ جزئي: {str(e)[:180]}")
     return {"imported": made}
+
+
+def _money(value) -> Decimal:
+    return Decimal(str(value or 0)).quantize(Decimal("0.01"))
+
+
+def _allocations_out(db: Session, check_id: int):
+    rows = db.execute(
+        select(FinancialCheckSettlementAllocation, ContractSettlement)
+        .join(ContractSettlement, ContractSettlement.settlement_id == FinancialCheckSettlementAllocation.settlement_id)
+        .where(FinancialCheckSettlementAllocation.check_id == check_id)
+        .order_by(FinancialCheckSettlementAllocation.allocation_id)
+    ).all()
+    return [{
+        "allocation_id": a.allocation_id,
+        "settlement_id": s.settlement_id,
+        "settlement_no": s.settlement_no,
+        "contract_id": s.contract_id,
+        "allocated_amount": str(_money(a.allocated_amount)),
+        "settlement_net_amount": str(_money(s.net_amount)),
+    } for a, s in rows]
+
+
+@router.get("/{cid}/allocations")
+def list_allocations(cid: int, _: User = Depends(require_any(SCREENS, "View")), db: Session = Depends(get_db)):
+    if not db.get(FinancialCheck, cid):
+        raise HTTPException(404, "الشيك غير موجود")
+    return {"items": _allocations_out(db, cid)}
+
+
+@router.post("/{cid}/allocations", status_code=201)
+def add_allocation(cid: int, body: AllocationIn,
+                   user: User = Depends(require_any(SCREENS, "Edit")), db: Session = Depends(get_db)):
+    check = db.scalar(select(FinancialCheck).where(FinancialCheck.check_id == cid).with_for_update())
+    if not check:
+        raise HTTPException(404, "الشيك غير موجود")
+    if check.check_type != "OUTGOING":
+        raise HTTPException(422, "تخصيص المستخلصات متاح للشيكات الصادرة فقط")
+    if check.status not in ("مسودة", "معتمد", "صادر"):
+        raise HTTPException(409, "لا يمكن تعديل تخصيصات الشيك بعد تسليمه أو تسويته")
+    settlement = db.scalar(select(ContractSettlement).where(
+        ContractSettlement.settlement_id == body.settlement_id).with_for_update())
+    if not settlement:
+        raise HTTPException(404, "المستخلص غير موجود")
+    if settlement.settlement_side != "Subcontractor" or settlement.status not in ("Approved", "Posted"):
+        raise HTTPException(409, "يجب اختيار مستخلص مقاول باطن معتمد نهائيًا")
+    if not settlement.manager_approved_by or not settlement.manager_approved_at:
+        raise HTTPException(409, "المستخلص لم يحصل على اعتماد المدير النهائي")
+    contract = db.get(Contract, settlement.contract_id)
+    if not contract or contract.status.lower() != "active":
+        raise HTTPException(409, "عقد المستخلص غير موجود أو غير نشط")
+    if check.project_id is not None and contract.project_id is not None and check.project_id != contract.project_id:
+        raise HTTPException(422, "المستخلص لا يتبع مشروع الشيك")
+    if contract.counterparty_id is None:
+        raise HTTPException(409, "العقد غير مربوط بمقاول من سجل الأطراف؛ لا يمكن التحقق من المستفيد")
+    party = db.get(Counterparty, contract.counterparty_id)
+    if not party or not party.is_active:
+        raise HTTPException(409, "المقاول المرتبط بالعقد غير نشط أو غير موجود")
+    valid_accounts = {x for x in (party.account_id, party.linked_account_id) if x is not None}
+    if check.party_account_id not in valid_accounts:
+        raise HTTPException(422, "حساب مستفيد الشيك لا يطابق حساب المقاول المرتبط بالمستخلص")
+    amount = _money(body.allocated_amount)
+    if amount <= 0:
+        raise HTTPException(422, "قيمة التخصيص يجب أن تكون أكبر من صفر")
+    duplicate = db.scalar(select(FinancialCheckSettlementAllocation.allocation_id).where(
+        FinancialCheckSettlementAllocation.check_id == cid,
+        FinancialCheckSettlementAllocation.settlement_id == body.settlement_id))
+    if duplicate:
+        raise HTTPException(409, "هذا المستخلص مخصص للشيك بالفعل")
+    check_allocated = db.scalar(select(func.coalesce(func.sum(FinancialCheckSettlementAllocation.allocated_amount), 0)).where(
+        FinancialCheckSettlementAllocation.check_id == cid)) or 0
+    if _money(check_allocated) + amount > _money(check.amount):
+        raise HTTPException(409, "إجمالي تخصيصات المستخلصات سيتجاوز قيمة الشيك")
+    paid = db.scalar(select(func.coalesce(func.sum(TreasuryTransaction.outflow), 0)).where(
+        TreasuryTransaction.settlement_id == settlement.settlement_id,
+        TreasuryTransaction.status == "تم الصرف")) or 0
+    reserved = db.scalar(select(func.coalesce(func.sum(FinancialCheckSettlementAllocation.allocated_amount), 0)).where(
+        FinancialCheckSettlementAllocation.settlement_id == settlement.settlement_id)) or 0
+    remaining = max(Decimal("0.00"), _money(settlement.net_amount) - _money(paid) - _money(reserved))
+    if amount > remaining:
+        raise HTTPException(409, f"قيمة التخصيص تتجاوز المتبقي غير المدفوع من المستخلص: {remaining}")
+    allocation = FinancialCheckSettlementAllocation(
+        check_id=cid, settlement_id=body.settlement_id,
+        allocated_amount=amount, created_by=user.user_id)
+    db.add(allocation)
+    write_audit(db, user.user_id, "AllocateSettlement", "FinancialChecks", cid, None, {
+        "settlement_id": body.settlement_id, "allocated_amount": str(amount)})
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "التخصيص موجود بالفعل أو تعارضت عملية تخصيص متزامنة")
+    return {"items": _allocations_out(db, cid), "allocated_total": str(_money(_money(check_allocated) + amount))}
