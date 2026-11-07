@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..deps import require_permission, write_audit, get_current_user, has_permission
 from ..models import (Contract, ContractAddendum, ContractChangeOrder, ContractItem, ContractDeductionRule,
-                      ContractAccountingConfig, ContractSettlement, ContractSettlementItem, ProgressBilling, Account, Company,
+                      ContractAccountingConfig, ContractSettlement, ContractSettlementItem, ContractSettlementSchedule, ProgressBilling, Account, Company,
                       FiscalYear, JournalEntry, JournalEntryDetail, User, TechnicalSettlementEstimate, TechnicalSettlementEstimateItem,
                       ItemCatalog, InventoryItem, TreasuryTransaction, Check)
 from ..contract_deletion import delete_settlement_tree, require_admin
@@ -907,8 +907,23 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
     contract=db.get(Contract,x.contract_id)
     for idx,(aid,dr,cr,desc,project_id) in enumerate(lines,1): db.add(JournalEntryDetail(journal_entry_id=entry.journal_entry_id,line_no=idx,account_id=aid,project_id=project_id or contract.project_id,debit_amount=dr,credit_amount=cr,description=desc))
     write_audit(db,user.user_id,"Create","JournalEntries",entry.journal_entry_id,new={"entry_no":entry.entry_no,"source":"ContractSettlement","settlement_id":x.settlement_id,"settlement_no":x.settlement_no,"contract_id":x.contract_id,"debit_total":str(debit),"credit_total":str(credit)})
-    x.journal_entry_id=entry.journal_entry_id;x.status="Posted";write_audit(db,user.user_id,"Post","ContractSettlements",x.settlement_id,new={**settlement_out(x, db),"journal_entry_id":entry.journal_entry_id});db.commit();db.refresh(x)
-    return {"settlement":settlement_out(x, db),"journal_entry_id":entry.journal_entry_id,"entry_no":entry.entry_no,"debit_total":str(debit),"credit_total":str(credit)}
+    x.journal_entry_id=entry.journal_entry_id;x.status="Posted"
+    # Close automatically only on the agreed final sequence and after all other
+    # contract settlements have been posted (no drafts or pending approvals).
+    final_sequence = contract.agreed_statement_count or db.scalar(select(func.max(ContractSettlementSchedule.sequence_no)).where(ContractSettlementSchedule.contract_id==contract.contract_id))
+    if final_sequence and x.sequence_no >= final_sequence:
+        unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
+            ContractSettlement.contract_id==contract.contract_id,
+            ContractSettlement.status!="Posted",
+            ContractSettlement.settlement_id!=x.settlement_id)) or 0
+        if unfinished == 0:
+            contract.status="Closed"
+            contract.closed_at=datetime.utcnow()
+            contract.closed_by=user.user_id
+            write_audit(db,user.user_id,"AutoClose","Contracts",contract.contract_id,
+                        old={"status":"Active"},new={"status":"Closed","closed_at":contract.closed_at.isoformat(),"reason":"Final agreed settlement posted"})
+    write_audit(db,user.user_id,"Post","ContractSettlements",x.settlement_id,new={**settlement_out(x, db),"journal_entry_id":entry.journal_entry_id});db.commit();db.refresh(x)
+    return {"settlement":settlement_out(x, db),"journal_entry_id":entry.journal_entry_id,"entry_no":entry.entry_no,"debit_total":str(debit),"credit_total":str(credit),"contract_status":contract.status,"contract_auto_closed":contract.status=="Closed"}
 
 
 @router.delete("/settlements/{settlement_id}", status_code=204)
