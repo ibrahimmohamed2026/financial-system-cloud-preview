@@ -998,3 +998,30 @@ class TechnicalSettlementEstimateItem(Base):
     reviewed_by: Mapped[Optional[int]] = C("ReviewedBy", ForeignKey("Users.UserId"), nullable=True)
     reviewed_at: Mapped[Optional[datetime]] = C("ReviewedAt", DateTime, nullable=True)
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
+
+
+class FinancialCheckSettlementAllocation(Base):
+    """Many-to-many allocation between financial cheques and posted settlements."""
+    __tablename__ = "FinancialCheckSettlementAllocations"
+    __table_args__ = (
+        UniqueConstraint("CheckId", "SettlementId", name="UQ_FinancialCheckSettlementAllocations"),
+        CheckConstraint('"AllocatedAmount" > 0', name="CK_FinancialCheckSettlementAllocations_Positive"),
+    )
+    allocation_id: Mapped[int] = C("AllocationId", BigPK, primary_key=True)
+    check_id: Mapped[int] = C("CheckId", ForeignKey("FinancialChecks.CheckId", ondelete="CASCADE"), index=True)
+    settlement_id: Mapped[int] = C("SettlementId", ForeignKey("ContractSettlements.SettlementId"), index=True)
+    allocated_amount: Mapped[Decimal] = C("AllocatedAmount", Numeric(18, 2))
+    created_by: Mapped[Optional[int]] = C("CreatedBy", ForeignKey("Users.UserId"), nullable=True)
+    created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
+
+
+class FinancialCheckStatusHistory(Base):
+    """Immutable status audit trail for the unified financial cheque register."""
+    __tablename__ = "FinancialCheckStatusHistory"
+    history_id: Mapped[int] = C("HistoryId", BigPK, primary_key=True)
+    check_id: Mapped[int] = C("CheckId", ForeignKey("FinancialChecks.CheckId", ondelete="CASCADE"), index=True)
+    old_status: Mapped[Optional[str]] = C("OldStatus", Unicode(30), nullable=True)
+    new_status: Mapped[str] = C("NewStatus", Unicode(30))
+    changed_by: Mapped[Optional[int]] = C("ChangedBy", ForeignKey("Users.UserId"), nullable=True)
+    note: Mapped[Optional[str]] = C("Note", Unicode(500), nullable=True)
+    changed_at: Mapped[datetime] = C("ChangedAt", DateTime, default=utcnow)
