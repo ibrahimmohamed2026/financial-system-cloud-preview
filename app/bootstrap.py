@@ -206,6 +206,26 @@ def seed_job_profiles(db: Session) -> None:
                 pid = available.get((screen, action))
                 if pid is not None:
                     db.add(JobProfilePermission(job_profile_id=profile.job_profile_id, permission_id=pid))
+
+    # One-time additive compatibility backfill for the new two-stage settlement
+    # workflow. Existing job profiles are administrator-editable, so do not reseed
+    # their full templates; only ensure the designated reviewer/manager roles have
+    # the newly required stage action when upgrading older installations.
+    approval_grants = {
+        "مراجع مالي": ("ContractSettlements", "FinancialApprove"),
+        "المدير المالي": ("ContractSettlements", "ManagerApprove"),
+        "المدير العام": ("ContractSettlements", "ManagerApprove"),
+    }
+    for profile_name, (screen, action) in approval_grants.items():
+        profile = db.scalar(select(JobProfile).where(JobProfile.name_ar == profile_name))
+        permission_id = available.get((screen, action))
+        if profile is not None and permission_id is not None:
+            already_granted = db.scalar(select(JobProfilePermission.permission_id).where(
+                JobProfilePermission.job_profile_id == profile.job_profile_id,
+                JobProfilePermission.permission_id == permission_id))
+            if already_granted is None:
+                db.add(JobProfilePermission(job_profile_id=profile.job_profile_id,
+                                            permission_id=permission_id))
     # مسؤول النظام IT هو ملف الصلاحيات الإداري الوحيد، ويحتاج إدارة جميع شاشات النظام.
     it_profile = db.scalar(select(JobProfile).where(JobProfile.name_ar == "مسؤول النظام IT"))
     if it_profile is not None:
