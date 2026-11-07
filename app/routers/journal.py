@@ -200,6 +200,7 @@ def lookup_settlements(_: User = Depends(require_permission(SCREEN, "View")), db
 @router.get("")
 def list_entries(q: str | None = None, status_: str | None = Query(None, alias="status"),
                  date_from: date | None = None, date_to: date | None = None,
+                 account_ids: list[int] = Query(default=[]),
                  skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),
                  _: User = Depends(require_permission(SCREEN, "View")), db: Session = Depends(get_db)):
     stmt = select(JournalEntry)
@@ -215,6 +216,11 @@ def list_entries(q: str | None = None, status_: str | None = Query(None, alias="
         stmt = stmt.where(JournalEntry.entry_date >= date_from)
     if date_to:
         stmt = stmt.where(JournalEntry.entry_date <= date_to)
+    if account_ids:
+        matching_account = exists(select(JournalEntryDetail.detail_id).where(
+            JournalEntryDetail.journal_entry_id == JournalEntry.journal_entry_id,
+            JournalEntryDetail.account_id.in_(set(account_ids))))
+        stmt = stmt.where(matching_account)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     items = db.scalars(stmt.order_by(JournalEntry.entry_date.desc(), JournalEntry.journal_entry_id.desc())
                        .offset(skip).limit(limit)).all()
