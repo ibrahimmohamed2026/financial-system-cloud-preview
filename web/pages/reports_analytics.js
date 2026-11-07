@@ -35,8 +35,8 @@ const csvDownload = (filename, keys, labels, rows) => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 const columns = {
-  account_ledger: [["date", "التاريخ"], ["entry_no", "رقم القيد"], ["description", "البيان"], ["project", "المشروع"], ["debit", "مدين"], ["credit", "دائن"], ["balance", "الرصيد" ]],
-  cash_flow: [["date", "التاريخ"], ["account", "الخزينة / البنك"], ["voucher_no", "رقم الإذن"], ["description", "البيان"], ["recipient", "المستفيد"], ["project", "المشروع"], ["inflow", "وارد"], ["outflow", "منصرف"], ["net", "الصافي"]],
+  account_ledger: [["account_code", "كود الحساب"], ["account_name", "الحساب"], ["date", "التاريخ"], ["entry_no", "رقم القيد"], ["description", "البيان"], ["project", "المشروع"], ["debit", "مدين"], ["credit", "دائن"], ["balance", "الرصيد" ]],
+  cash_flow: [["date", "التاريخ"], ["account", "الخزينة / البنك"], ["currency", "العملة"], ["voucher_no", "رقم الإذن"], ["description", "البيان"], ["recipient", "المستفيد"], ["project", "المشروع"], ["inflow", "وارد"], ["outflow", "منصرف"], ["net", "الصافي"]],
   project_financials: [["project", "المشروع"], ["revenue", "الإيرادات"], ["expenses", "المصروفات"], ["net", "صافي النتيجة"]],
   aging: [["kind", "النوع"], ["party", "الطرف"], ["document_no", "رقم المستند"], ["document_date", "التاريخ"], ["age_days", "العمر بالأيام"], ["bucket", "الفئة العمرية"], ["balance", "الرصيد المتبقي"], ["project", "المشروع"]],
   settlements: [["settlement_no", "رقم المستخلص"], ["settlement_date", "التاريخ"], ["settlement_side", "النوع"], ["contract_no", "رقم العقد"], ["contract_title", "العقد"], ["project", "المشروع"], ["counterparty_name", "الطرف كما سُجل"], ["work_value", "قيمة الأعمال"], ["deductions", "الخصومات"], ["vat_amount", "الضريبة"], ["net_amount", "الصافي"], ["paid_amount", "المدفوع"], ["remaining_amount", "المتبقي"], ["status", "الحالة"]],
@@ -89,8 +89,8 @@ export async function render(main, { api }) {
         <div class="w" id="project-wrap" hidden><label>${T("المشروع")}</label><select id="project"><option value="">${T("كل المشروعات")}</option></select></div>
         <div class="w" id="status-wrap" hidden><label>${T("الحالة")}</label><select id="status"><option value="">${T("كل الحالات")}</option></select></div>
         <div class="w" id="party-wrap" hidden><label>${T("الطرف — الاسم المسجل")}</label><select id="party"><option value="">${T("اختر الاسم")}</option></select></div>
-        <div class="w" id="account-wrap" hidden><label>${T("الحساب التفصيلي")}</label><div class="report-account-picker"><input id="account-search" type="search" placeholder="${T("اكتب كود الحساب أو اسمه")}" autocomplete="off" aria-label="${T("ابحث عن الحساب")}"><input id="account" type="hidden" value=""><div id="account-options" class="journal-account-options" role="listbox" hidden></div></div></div>
-        <div class="w" id="treasury-wrap" hidden><label>${T("الخزينة / البنك")}</label><select id="treasury"><option value="">${T("الكل")}</option></select></div>
+        <div class="w" id="account-wrap" hidden><label>${T("الحسابات")}</label><div class="report-account-picker"><input id="account-search" type="search" placeholder="${T("اكتب كود الحساب أو اسمه")}" autocomplete="off" aria-label="${T("ابحث عن الحساب")}"><div id="account-selected" class="report-multi-selected"></div><div id="account-options" class="journal-account-options report-multi-options" role="listbox" hidden></div></div></div>
+        <div class="w" id="treasury-wrap" hidden><label>${T("الخزائن والبنوك")}</label><div class="report-account-picker"><input id="treasury-search" type="search" placeholder="${T("ابحث عن الخزينة أو البنك")}" autocomplete="off"><div id="treasury-selected" class="report-multi-selected"></div><div id="treasury-options" class="journal-account-options report-multi-options" role="listbox" hidden></div></div></div>
         <button class="btn primary" id="run">${T("عرض التقرير")}</button><button class="btn" id="csv" disabled>${T("تصدير CSV")}</button><button class="btn" id="print" disabled>${T("طباعة / PDF")}</button></div></section>
       <div id="report-output"></div>`;
   const $ = selector => main.querySelector(selector), out = $("#report-output");
@@ -102,7 +102,7 @@ export async function render(main, { api }) {
     $("#project-wrap").hidden = !["settlements", "checks", "purchases", "account_ledger", "project_financials", "aging"].includes(kind);
     $("#status-wrap").hidden = !["checks", "purchases", "settlements"].includes(kind);
     $("#party-wrap").hidden = kind !== "contractor";
-    $("#account-wrap").hidden = kind !== "account_ledger";
+    $("#account-wrap").hidden = !["account_ledger", "project_financials"].includes(kind);
     $("#treasury-wrap").hidden = kind !== "cash_flow";
     main.querySelectorAll(".date-filter").forEach(e => e.hidden = kind === "inventory");
     if (kind === "aging") $("#from").closest(".date-filter").hidden = true;
@@ -132,20 +132,21 @@ export async function render(main, { api }) {
       $("#csv").disabled = $("#print").disabled = false; return;
     }
     if (kind === "account_ledger") {
-      if (!$("#account").value) throw new Error("اختر الحساب التفصيلي لعرض كشف الأستاذ");
-      const p = new URLSearchParams(dateParams);p.set("account_id", $("#account").value);if($("#project").value)p.set("project_id",$("#project").value);
-      const r=await api(`/api/reports/account-ledger?${p}`),a=r.account;
-      const summary=kpis([["الحساب",`${a.code} — ${a.name}`],["رصيد أول المدة",money(r.opening_balance)],["إجمالي المدين",money(r.total_debit)],["إجمالي الدائن",money(r.total_credit)],["رصيد آخر المدة",money(r.closing_balance)]]);
+      const ids = [...selectedAccounts];
+      if (!ids.length) throw new Error("اختر حسابًا واحدًا على الأقل لعرض كشف الأستاذ");
+      const p = new URLSearchParams(dateParams); ids.forEach(id => p.append("account_ids", id)); if($("#project").value)p.set("project_id",$("#project").value);
+      const r=await api(`/api/reports/account-ledger?${p}`);
+      const summary=kpis([["عدد الحسابات",r.accounts.length],["رصيد أول المدة",money(r.opening_balance)],["إجمالي المدين",money(r.total_debit)],["إجمالي الدائن",money(r.total_credit)],["رصيد آخر المدة",money(r.closing_balance)]]);
       return formatReport("كشف حساب الأستاذ",r.items||[],summary,columns.account_ledger);
     }
     if (kind === "cash_flow") {
-      const p=new URLSearchParams(dateParams);if($("#treasury").value)p.set("treasury_account_id",$("#treasury").value);
+      const p=new URLSearchParams(dateParams); [...selectedTreasuries].forEach(id => p.append("treasury_account_ids", id));
       const r=await api(`/api/reports/cash-flow?${p}`),s=r.summary;
-      const summary=kpis([["عدد الحركات",s.count],["إجمالي المقبوضات",money(s.inflow)],["إجمالي المدفوعات",money(s.outflow)],["صافي الحركة",money(s.net)]]);
+      const summary=kpis([["عدد الحركات",s.count], ...(s.currency_totals || []).flatMap(x => [[`المقبوضات — ${x.currency}`,money(x.inflow)],[`المدفوعات — ${x.currency}`,money(x.outflow)],[`الصافي — ${x.currency}`,money(x.net)]])]);
       return formatReport("تقرير التدفقات النقدية التفصيلي",r.items||[],summary,columns.cash_flow);
     }
     if (kind === "project_financials") {
-      const p=new URLSearchParams(dateParams);if($("#project").value)p.set("project_id",$("#project").value);
+      const p=new URLSearchParams(dateParams);if($("#project").value)p.set("project_id",$("#project").value); [...selectedAccounts].forEach(id => p.append("account_ids", id));
       const r=await api(`/api/reports/project-financials?${p}`),s=r.summary;
       const summary=kpis([["عدد المشروعات",s.project_count],["الإيرادات",money(s.revenue)],["المصروفات",money(s.expenses)],["صافي النتيجة",money(s.net)]]);
       return formatReport("التحليل المالي للمشروعات",r.items||[],summary,columns.project_financials);
@@ -186,32 +187,45 @@ export async function render(main, { api }) {
   $("#party").innerHTML += (parties.items || []).map(x => `<option value="${esc(x.name)}">${esc(x.name)}</option>`).join("");
   $("#project").innerHTML += (projects.items || []).map(x => `<option value="${x.project_id}">${esc(x.name)}</option>`).join("");
   const accounts = lookups.accounts || [];
+  const treasuries = lookups.treasury_accounts || [];
+  const selectedAccounts = new Set(), selectedTreasuries = new Set();
   const accountLabel = a => `${a.code} — ${a.name}`;
-  const selectAccount = id => { const a = accounts.find(x => x.account_id === id); if (!a) return; $("#account").value = a.account_id; $("#account-search").value = accountLabel(a); $("#account-options").hidden = true; };
-  const accountOptions = (term = "", showAll = false) => {
-    const box = $("#account-options"), input = $("#account-search"), needle = term.trim().toLocaleLowerCase();
-    if (!needle && !showAll) { box.hidden = true; box.innerHTML = ""; return; }
-    const matches = needle ? accounts.filter(a => accountLabel(a).toLocaleLowerCase().includes(needle)) : accounts;
-    box.innerHTML = (matches.length ? matches.map(a => `<button type="button" class="journal-account-option" role="option" data-report-account-id="${a.account_id}">${esc(accountLabel(a))}</button>`).join("") : `<div class="journal-account-empty">${T("لا يوجد حساب مطابق للاسم أو الكود")}</div>`);
-    box.hidden = false;
-    const rect = input.getBoundingClientRect(), width = Math.min(Math.max(rect.width, 360), window.innerWidth - 24);
-    box.style.width = `${width}px`; box.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`;
-    const height = Math.min(window.innerHeight * .42, 360), below = rect.bottom + height <= window.innerHeight - 12;
-    box.style.maxHeight = `${Math.max(54, Math.min(height, below ? window.innerHeight - rect.bottom - 16 : rect.top - 16))}px`;
-    box.style.top = `${below ? rect.bottom + 4 : Math.max(12, rect.top - height - 4)}px`;
+  const mountMultiPicker = (prefix, items, idField, labelOf, selected) => {
+    const input = `#${prefix}-search`, box = `#${prefix}-options`, chips = `#${prefix}-selected`;
+    const drawChips = () => {
+      $(chips).innerHTML = [...selected].map(id => {
+        const item = items.find(x => String(x[idField]) === String(id));
+        return item ? `<button type="button" class="tag" data-remove-id="${esc(id)}">${esc(labelOf(item))} ×</button>` : "";
+      }).join("");
+    };
+    const drawOptions = () => {
+      const needle = $(input).value.trim().toLocaleLowerCase();
+      const matches = items.filter(x => !needle || labelOf(x).toLocaleLowerCase().includes(needle));
+      $(box).innerHTML = `<div class="report-multi-actions"><button type="button" data-pick-all="1">${T("تحديد الكل")}</button><button type="button" data-pick-none="1">${T("إلغاء الكل")}</button></div>` +
+        (matches.length ? matches.map(x => `<label class="report-multi-option"><input type="checkbox" data-pick-id="${esc(x[idField])}" ${selected.has(String(x[idField])) ? "checked" : ""}><span>${esc(labelOf(x))}</span></label>`).join("") :
+          `<div class="journal-account-empty">${T("لا توجد نتائج")}</div>`);
+      $(box).hidden = false;
+      const rect = $(input).getBoundingClientRect(), width = Math.min(Math.max(rect.width, 360), window.innerWidth - 24);
+      $(box).style.width = `${width}px`; $(box).style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`;
+      $(box).style.maxHeight = `${Math.min(window.innerHeight * .42, 360)}px`;
+      $(box).style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 370)}px`;
+    };
+    $(input).oninput = drawOptions; $(input).onfocus = $(input).onclick = drawOptions;
+    $(box).onchange = ev => { const id = ev.target.dataset.pickId; if (!id) return; ev.target.checked ? selected.add(String(id)) : selected.delete(String(id)); drawChips(); drawOptions(); };
+    $(box).onclick = ev => {
+      if (ev.target.closest("[data-pick-all]")) { items.forEach(x => selected.add(String(x[idField]))); drawChips(); drawOptions(); }
+      if (ev.target.closest("[data-pick-none]")) { selected.clear(); drawChips(); drawOptions(); }
+    };
+    $(chips).onclick = ev => { const id = ev.target.closest("[data-remove-id]")?.dataset.removeId; if (id) { selected.delete(String(id)); drawChips(); } };
+    $(input).onkeydown = ev => { if (ev.key === "Escape") $(box).hidden = true; };
+    main.addEventListener("focusout", ev => {
+      if (ev.target === $(input) || ev.target.closest?.(box)) setTimeout(() => {
+        if (!$(`#${prefix}-wrap`).contains(document.activeElement)) $(box).hidden = true;
+      }, 0);
+    });
   };
-  $("#account-search").oninput = ev => { $("#account").value = ""; accountOptions(ev.target.value); };
-  $("#account-search").onfocus = () => accountOptions("", true);
-  $("#account-search").onclick = () => accountOptions("", true);
-  $("#account-search").onkeydown = ev => {
-    if (ev.key === "ArrowDown") { const first = $("#account-options .journal-account-option"); if (first) { ev.preventDefault(); first.focus(); } }
-    if (ev.key === "Enter") { const opts = [...$("#account-options").querySelectorAll(".journal-account-option")], exact = accounts.find(a => accountLabel(a).toLocaleLowerCase() === ev.target.value.trim().toLocaleLowerCase()); if (exact || opts.length === 1) { ev.preventDefault(); selectAccount(exact?.account_id || +opts[0].dataset.reportAccountId); } else if (opts.length) { ev.preventDefault(); opts[0].focus(); } }
-    if (ev.key === "Escape") $("#account-options").hidden = true;
-  };
-  $("#account-options").onmousedown = ev => { const option = ev.target.closest("[data-report-account-id]"); if (!option) return; ev.preventDefault(); selectAccount(+option.dataset.reportAccountId); };
-  $("#account-options").onkeydown = ev => { const option = ev.target.closest(".journal-account-option"); if (!option) return; if (ev.key === "ArrowDown" || ev.key === "ArrowUp") { ev.preventDefault(); const opts = [...$("#account-options").querySelectorAll(".journal-account-option")], n = opts.indexOf(option) + (ev.key === "ArrowDown" ? 1 : -1); (opts[n] || (ev.key === "ArrowUp" ? $("#account-search") : opts[0]))?.focus(); } else if (ev.key === "Enter") { ev.preventDefault(); selectAccount(+option.dataset.reportAccountId); $("#account-search").focus(); } else if (ev.key === "Escape") { $("#account-options").hidden = true; $("#account-search").focus(); } };
-  main.addEventListener("focusout", ev => { if (ev.target.id === "account-search" || ev.target.closest?.("#account-options")) setTimeout(() => { if (!$("#account-wrap").contains(document.activeElement)) $("#account-options").hidden = true; }, 0); });
-  $("#treasury").innerHTML += (lookups.treasury_accounts || []).map(x => `<option value="${x.treasury_account_id}">${esc(x.name)} — ${esc(x.currency)}</option>`).join("");
+  mountMultiPicker("account", accounts, "account_id", accountLabel, selectedAccounts);
+  mountMultiPicker("treasury", treasuries, "treasury_account_id", x => `${x.name} — ${x.currency}`, selectedTreasuries);
   $("#kind").onchange = updateFilters; updateFilters();
   main.querySelectorAll("[data-select]").forEach(button => button.onclick = () => { $("#kind").value = button.dataset.select; updateFilters(); if (button.dataset.select !== "contractor") safe(run)(); });
   $("#run").onclick = safe(run); $("#from").onchange = $("#to").onchange = () => {};
