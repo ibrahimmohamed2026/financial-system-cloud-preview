@@ -335,7 +335,7 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, *, a
             db.add(ContractSettlementItem(settlement_id=fin.settlement_id,contract_item_id=line.contract_item_id,quantity=approved_qty,unit_price=line.unit_price,amount=money(approved_qty*line.unit_price)))
     x.status="ForwardedToFinance";x.reviewed_by=None;x.reviewed_at=None;x.financial_settlement_id=fin.settlement_id
     linked_schedule=db.scalar(select(ContractSettlementSchedule).where(ContractSettlementSchedule.technical_estimate_id==x.estimate_id).with_for_update())
-    if linked_schedule is not None: linked_schedule.status="Completed"
+    if linked_schedule is not None: linked_schedule.status="Submitted"
     write_audit(db,user.user_id,"ForwardToFinance","TechnicalSettlementEstimates",x.estimate_id,new={"status":x.status,"financial_settlement_id":fin.settlement_id,"work_value":str(work),"engineering_approval":False})
     db.commit();db.refresh(fin)
     return {"estimate":estimate_out(x,db),"financial_settlement_id":fin.settlement_id,"financial_settlement_no":fin.settlement_no,"financial_status":fin.status,"net_amount":str(fin.net_amount),"message":"تم حفظ المستخلص وتحويله مباشرة إلى المالية دون اعتماد هندسي؛ المستخلص المالي الآن مسودة للمراجعة."}
