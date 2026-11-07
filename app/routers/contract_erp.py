@@ -104,7 +104,7 @@ def settlement_out(x, db: Session | None = None):
                 d.setdefault("calculation_type",rule.calculation_type)
                 d.setdefault("rate",str(rule.rate))
                 d.setdefault("base_type",rule.base_type)
-    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"contract_no":contract.contract_no if contract else None,"contract_title":contract.title if contract else None,"contract_title_en":contract.title_en if contract else None,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":deductions,"vat_amount":str(x.vat_amount),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"remaining_amount":str(money(remaining)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
+    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"contract_no":contract.contract_no if contract else None,"contract_title":contract.title if contract else None,"contract_title_en":contract.title_en if contract else None,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"is_final":bool(getattr(x,"is_final",False)),"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":deductions,"vat_amount":str(x.vat_amount),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"remaining_amount":str(money(remaining)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
 def settlement_line_out(line, item=None):
     item = item
     return {"settlement_item_id":line.settlement_item_id,"contract_item_id":line.contract_item_id,"item_no":item.item_no if item else "","description":item.description if item else "","unit":item.unit if item else "","contract_quantity":str(item.quantity) if item else "0","quantity":str(line.quantity),"unit_price":str(line.unit_price),"amount":str(line.amount),"account_id":getattr(line,"account_id",None) or (getattr(item,"account_id",None) if item else None)}
@@ -149,6 +149,7 @@ class SettlementLineIn(BaseModel):
     quantity: Decimal = Field(gt=0)
 class SettlementIn(BaseModel):
     settlement_side: Literal["Customer","Subcontractor"]; settlement_no: str | None = Field(default=None,max_length=50)
+    is_final: bool = False
     settlement_date: date; counterparty_name: str = Field(min_length=1,max_length=200); counterparty_name_en: str | None = Field(default=None,max_length=200)
     work_value: Optional[Decimal] = Field(default=None,gt=0)
     items: list[SettlementLineIn] = Field(default_factory=list)
@@ -448,6 +449,8 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     c=db.scalar(select(Contract).where(Contract.contract_id==contract_id).with_for_update())
     if not c: raise HTTPException(404,"العقد غير موجود")
     if c.status.lower() != "active": raise HTTPException(409,"لا يمكن إنشاء مستخلص إلا لعقد حالته Active")
+    if db.scalar(select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==contract_id,ContractSettlement.settlement_side==body.settlement_side,ContractSettlement.is_final.is_(True)).limit(1)):
+        raise HTTPException(409,"تم تحديد مستخلص ختامي لهذا العقد ونوع المستخلص؛ لا يمكن إنشاء مستخلصات إضافية بعده")
     side=body.settlement_side
     previous, contract_value = contract_financial_summary(db, contract_id, side)[1:]
     # Settlement numbers are generated internally; sequence is scoped by contract and settlement side.
@@ -499,7 +502,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     vat=money(work*vat_rate/Decimal("100")); net=money(work+vat-total)
     if net<0: raise HTTPException(422,"الخصومات والضريبة تجعل صافي المستخلص سالبًا")
     seq=(db.scalar(select(func.max(ContractSettlement.sequence_no)).where(ContractSettlement.contract_id==contract_id,ContractSettlement.settlement_side==side)) or 0)+1
-    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,settlement_no=f"ST-PENDING-{uuid4().hex}",settlement_date=body.settlement_date,counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
+    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,is_final=body.is_final,settlement_no=f"ST-PENDING-{uuid4().hex}",settlement_date=body.settlement_date,counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
     side_code = "CUS" if side == "Customer" else "SUB"
     x.settlement_no = f"ST-{side_code}-{body.settlement_date.year}-{x.settlement_id:06d}"
@@ -908,20 +911,22 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
     for idx,(aid,dr,cr,desc,project_id) in enumerate(lines,1): db.add(JournalEntryDetail(journal_entry_id=entry.journal_entry_id,line_no=idx,account_id=aid,project_id=project_id or contract.project_id,debit_amount=dr,credit_amount=cr,description=desc))
     write_audit(db,user.user_id,"Create","JournalEntries",entry.journal_entry_id,new={"entry_no":entry.entry_no,"source":"ContractSettlement","settlement_id":x.settlement_id,"settlement_no":x.settlement_no,"contract_id":x.contract_id,"debit_total":str(debit),"credit_total":str(credit)})
     x.journal_entry_id=entry.journal_entry_id;x.status="Posted"
-    # Close automatically only on the agreed final sequence and after all other
-    # contract settlements have been posted (no drafts or pending approvals).
-    final_sequence = contract.agreed_statement_count or db.scalar(select(func.max(ContractSettlementSchedule.sequence_no)).where(ContractSettlementSchedule.contract_id==contract.contract_id))
-    if final_sequence and x.sequence_no >= final_sequence:
+    # Close when the explicitly marked final settlement has been posted and
+    # every other settlement for this contract is posted as well.
+    posted_final = db.scalar(select(ContractSettlement.settlement_id).where(
+        ContractSettlement.contract_id==contract.contract_id,
+        ContractSettlement.is_final.is_(True),
+        ContractSettlement.status=="Posted").limit(1))
+    if posted_final:
         unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
             ContractSettlement.contract_id==contract.contract_id,
-            ContractSettlement.status!="Posted",
-            ContractSettlement.settlement_id!=x.settlement_id)) or 0
+            ContractSettlement.status!="Posted")) or 0
         if unfinished == 0:
             contract.status="Closed"
             contract.closed_at=datetime.utcnow()
             contract.closed_by=user.user_id
             write_audit(db,user.user_id,"AutoClose","Contracts",contract.contract_id,
-                        old={"status":"Active"},new={"status":"Closed","closed_at":contract.closed_at.isoformat(),"reason":"Final agreed settlement posted"})
+                        old={"status":"Active"},new={"status":"Closed","closed_at":contract.closed_at.isoformat(),"reason":"Final settlement posted and all contract settlements completed"})
     write_audit(db,user.user_id,"Post","ContractSettlements",x.settlement_id,new={**settlement_out(x, db),"journal_entry_id":entry.journal_entry_id});db.commit();db.refresh(x)
     return {"settlement":settlement_out(x, db),"journal_entry_id":entry.journal_entry_id,"entry_no":entry.entry_no,"debit_total":str(debit),"credit_total":str(credit),"contract_status":contract.status,"contract_auto_closed":contract.status=="Closed"}
 

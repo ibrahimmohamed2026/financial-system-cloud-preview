@@ -80,9 +80,6 @@ class ContractIn(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     original_value: Decimal = Field(default=D0, ge=0)
-    agreed_statement_count: int | None = Field(default=None, ge=0, le=500)
-    statement_distribution_method: Literal["Monthly", "Biweekly", "Milestones", "Manual"] | None = None
-    schedule_items: list[ContractScheduleItemIn] = Field(default_factory=list, max_length=500)
     status: str = Field(default="Draft", max_length=30)
     notes: Optional[str] = None
     items: list[ContractCreateItem] = Field(default_factory=list, max_length=500)
@@ -138,7 +135,6 @@ class BillingIn(BaseModel):
 def _contract(c):
     return {"contract_id":c.contract_id,"request_id":getattr(c,"request_id",None),"contract_no":c.contract_no,"title":c.title,"title_en":c.title_en,"client_name":c.client_name,"client_name_en":c.client_name_en,
             "project_id":c.project_id,"start_date":c.start_date,"end_date":c.end_date,"original_value":str(c.original_value),
-            "agreed_statement_count":getattr(c,"agreed_statement_count",None),"statement_distribution_method":getattr(c,"statement_distribution_method","Manual"),
             "status":c.status,"notes":c.notes,"created_at":c.created_at}
 def _addendum(a):
     return {"addendum_id":a.addendum_id,"contract_id":a.contract_id,"addendum_no":a.addendum_no,
@@ -152,51 +148,6 @@ def _billing(b):
             "work_value":str(b.work_value),"retention_amount":str(b.retention_amount),"advance_deduction":str(b.advance_deduction),
             "other_deductions":str(b.other_deductions),"net_amount":str(b.net_amount),"status":b.status,"notes":b.notes}
 
-
-def _build_contract_schedule(body: ContractIn):
-    count = body.agreed_statement_count or 0
-    if count < 1:
-        raise HTTPException(422, "حدد عدد المستخلصات أولاً")
-    method = body.statement_distribution_method or "Manual"
-    if method in ("Manual", "Milestones"):
-        if len(body.schedule_items) != count:
-            raise HTTPException(422, f"أدخل {count} صفًا في جدول المواعيد اليدوي")
-        if method == "Milestones" and any(not (row.label or "").strip() for row in body.schedule_items):
-            raise HTTPException(422, "اكتب اسم مرحلة التنفيذ لكل مستخلص مخطط")
-        rows = body.schedule_items
-    else:
-        if not body.start_date or not body.end_date:
-            raise HTTPException(422, "حدد تاريخ بداية ونهاية العقد لإنشاء جدول المستخلصات تلقائيًا")
-        if body.end_date < body.start_date:
-            raise HTTPException(422, "نهاية العقد تسبق بدايته")
-        rows = []
-        total_days = (body.end_date - body.start_date).days + 1
-        cursor = body.start_date
-        for n in range(1, count + 1):
-            if method == "Monthly":
-                if cursor > body.end_date:
-                    raise HTTPException(422, "مدة العقد لا تكفي لعدد المستخلصات الشهرية المحدد")
-                next_month = date(cursor.year + (1 if cursor.month == 12 else 0), 1 if cursor.month == 12 else cursor.month + 1, 1)
-                period_end = min(next_month - timedelta(days=1), body.end_date)
-            elif method == "Biweekly":
-                if cursor > body.end_date:
-                    raise HTTPException(422, "مدة العقد لا تكفي لعدد المستخلصات كل أسبوعين المحدد")
-                period_end = min(cursor + timedelta(days=13), body.end_date)
-            rows.append(ContractScheduleItemIn(label="المستخلص " + str(n),
-                period_start=cursor, period_end=period_end, planned_submission_date=period_end + timedelta(days=5),
-                due_date=period_end + timedelta(days=35),
-                expected_amount=(body.original_value / count).quantize(Decimal("0.01")) if body.original_value else None))
-            cursor = period_end + timedelta(days=1)
-    if method in ("Monthly", "Biweekly") and rows and body.end_date and rows[-1].period_end < body.end_date:
-        raise HTTPException(422, "عدد المستخلصات لا يغطي مدة العقد بالكامل؛ زوّد العدد أو اختر طريقة أخرى")
-    previous_end = None
-    for n, row in enumerate(rows, start=1):
-        if body.start_date and row.period_start < body.start_date or body.end_date and row.period_end > body.end_date:
-            raise HTTPException(422, f"فترة المستخلص رقم {n} خارج مدة العقد")
-        if previous_end is not None and row.period_start <= previous_end:
-            raise HTTPException(422, "فترات المستخلصات اليدوية يجب أن تكون مرتبة وغير متداخلة")
-        previous_end = row.period_end
-    return rows
 
 def _schedule_out(row):
     return {"schedule_id": row.schedule_id, "contract_id": row.contract_id, "sequence_no": row.sequence_no,
@@ -219,8 +170,6 @@ def list_contracts(q: str | None = None, skip: int = Query(0, ge=0), limit: int 
 
 @router.post("", status_code=201)
 def create_contract(body: ContractIn, user: User = Depends(require_permission("Contracts", "Add")), db: Session = Depends(get_db)):
-    if body.agreed_statement_count is None or body.agreed_statement_count < 1:
-        raise HTTPException(422, "يجب تحديد عدد المستخلصات المتفق عليها من 1 إلى 500")
     prepared_items = []
     for line in body.items:
         catalog = db.get(ItemCatalog, line.catalog_item_id)
@@ -241,16 +190,12 @@ def create_contract(body: ContractIn, user: User = Depends(require_permission("C
         data["code"] = rule.code.strip()
         data["name_ar"] = rule.name_ar.strip()
         prepared_rules.append(data)
-    schedule_rows = _build_contract_schedule(body)
-    values = body.model_dump(exclude={"items", "deduction_rules", "schedule_items"})
-    values["statement_distribution_method"] = body.statement_distribution_method or "Manual"
+    values = body.model_dump(exclude={"items", "deduction_rules"})
     # New contracts go directly to accounting review; there is no engineering approval stage.
     values["status"] = "PendingFinancial"
     values["contract_no"] = f"CT-PENDING-{uuid4().hex}"
     c = Contract(**values, created_by=user.user_id)
     db.add(c); db.flush(); c.contract_no = f"CT-{date.today().year}-{c.contract_id:06d}"
-    for n, row in enumerate(schedule_rows, start=1):
-        db.add(ContractSettlementSchedule(contract_id=c.contract_id, sequence_no=n, label=row.label, period_start=row.period_start, period_end=row.period_end, planned_submission_date=row.planned_submission_date, due_date=row.due_date, expected_amount=row.expected_amount, status="Planned"))
     write_audit(db,user.user_id,"Create","Contracts",c.contract_id,new=_contract(c))
     for number, (line, catalog, account) in enumerate(prepared_items, start=1):
         item = ContractItem(contract_id=c.contract_id, catalog_item_id=catalog.catalog_item_id,
@@ -291,12 +236,8 @@ def update_contract(contract_id: int, body: ContractIn, user: User = Depends(req
     if body.contract_no is not None and body.contract_no != c.contract_no:
         raise HTTPException(409, "رقم العقد يُنشأ تلقائيًا ولا يمكن تغييره")
     old = _contract(c)
-    values = body.model_dump(exclude={"items", "deduction_rules", "schedule_items"})
+    values = body.model_dump(exclude={"items", "deduction_rules"})
     values.pop("contract_no", None)
-    if values.get("statement_distribution_method") is None:
-        values.pop("statement_distribution_method", None)
-    if "agreed_statement_count" not in body.model_fields_set:
-        values.pop("agreed_statement_count", None)
     requested_status = values.pop("status", None)
     if "status" in body.model_fields_set and requested_status != c.status:
         raise HTTPException(409, "تغيير حالة العقد يتم فقط من خلال إجراءات دورة الاعتماد")
