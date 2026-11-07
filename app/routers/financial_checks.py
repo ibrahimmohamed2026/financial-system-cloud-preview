@@ -172,12 +172,31 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
                 account_id=aid, debit_amount=debit, credit_amount=credit, description=f"شيك {c.check_number}"))
         db.flush()
         c.journal_entry_id = entry.journal_entry_id
-        db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=today,
-            inflow=amount if c.check_type == "INCOMING" else Decimal("0"),
-            outflow=amount if c.check_type == "OUTGOING" else Decimal("0"),
-            description=f"تسوية شيك {c.check_number}", voucher_no=voucher_no,
-            status="تم التحصيل" if c.check_type == "INCOMING" else "تم الصرف",
-            journal_entry_id=entry.journal_entry_id))
+        if c.check_type == "INCOMING":
+            db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=today,
+                inflow=amount, outflow=Decimal("0"), description=f"تحصيل شيك {c.check_number}",
+                voucher_no=voucher_no, status="تم التحصيل", journal_entry_id=entry.journal_entry_id))
+        else:
+            # Preserve the cheque's single balanced journal entry while distributing
+            # its bank payment across the linked settlement balances.
+            allocations = db.scalars(select(FinancialCheckSettlementAllocation).where(
+                FinancialCheckSettlementAllocation.check_id == c.check_id).order_by(
+                    FinancialCheckSettlementAllocation.allocation_id)).all()
+            allocated_total = sum((_money(a.allocated_amount) for a in allocations), Decimal("0.00"))
+            if allocated_total > amount:
+                raise HTTPException(409, "إجمالي تخصيصات الشيك تجاوز قيمته؛ أوقفنا الصرف")
+            for allocation in allocations:
+                db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=today,
+                    inflow=Decimal("0"), outflow=_money(allocation.allocated_amount),
+                    description=f"صرف شيك {c.check_number} للمستخلص {allocation.settlement_id}",
+                    voucher_no=f"{voucher_no}-A{allocation.allocation_id}", status="تم الصرف",
+                    settlement_id=allocation.settlement_id, journal_entry_id=entry.journal_entry_id))
+            unallocated = _money(amount - allocated_total)
+            if unallocated > 0:
+                db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=today,
+                    inflow=Decimal("0"), outflow=unallocated,
+                    description=f"صرف غير موزع من شيك {c.check_number}", voucher_no=voucher_no,
+                    status="تم الصرف", journal_entry_id=entry.journal_entry_id))
     old_status = c.status
     c.status = body.status
     db.add(FinancialCheckStatusHistory(check_id=cid, old_status=old_status, new_status=body.status, changed_by=user.user_id))
