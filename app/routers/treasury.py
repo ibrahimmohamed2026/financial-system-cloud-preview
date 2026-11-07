@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..common import money, require_dynamic
 from ..database import get_db
 from ..deps import require_permission, write_audit
-from ..models import (Account, AccountClassification, JournalEntry, JournalEntryDetail, Project, TreasuryAccount, TreasuryTransaction, User)
+from ..models import (Account, AccountClassification, Counterparty, JournalEntry, JournalEntryDetail, Project, TreasuryAccount, TreasuryTransaction, User)
 
 # شاشة → (نوع الحساب الافتراضي، العملة الافتراضية)
 BANK_SCREENS = {
@@ -67,6 +67,7 @@ class TxIn(BaseModel):
     project_id: int | None = None
     exchange_rate: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=6)
     counterpart_account_id: int | None = Field(default=None, gt=0)
+    counterparty_id: int | None = Field(default=None, gt=0)
     transaction_type: str | None = Field(default=None, max_length=40)
 
     @model_validator(mode="after")
@@ -582,6 +583,17 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
     a = _bound(db, screen_code)
     _check_project(db, body.project_id)
     values = body.model_dump()
+    # Resolve the counterpart GL automatically from the selected customer/supplier master.
+    if body.counterparty_id:
+        party = db.get(Counterparty, body.counterparty_id)
+        if not party or not party.is_active:
+            raise HTTPException(422, "العميل/المورد المحدد غير موجود أو غير نشط")
+        linked = party.linked_account_id or party.account_id
+        if not linked:
+            raise HTTPException(422, "اربط الطرف بحساب فرعي في شجرة الحسابات أولًا")
+        if body.counterpart_account_id and body.counterpart_account_id != linked:
+            raise HTTPException(422, "حساب الطرف لا يطابق الحساب المرتبط به في بطاقة العميل/المورد")
+        values["counterpart_account_id"] = linked
     t = TreasuryTransaction(treasury_account_id=a.treasury_account_id, **values)
     db.add(t)
     db.flush()
