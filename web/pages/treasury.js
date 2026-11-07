@@ -13,7 +13,7 @@ export async function render(main, { api, auth, route }) {
     <div class="toolbar"><div class="w" style="width:150px"><label>${tr("من","From")}</label><input type="date" id="df"></div><div class="w" style="width:150px"><label>${tr("إلى","To")}</label><input type="date" id="dt"></div>
     <div class="grow"><label>${tr("بحث","Search")}</label><input id="q"></div>${can("Add") ? `<button class="btn primary" id="add">+ ${tr("حركة","Transaction")}</button>` : ""}</div>
     <div id="sum" class="muted" style="margin-bottom:8px"></div>
-    <div class="tbl-wrap"><table><thead><tr><th>${tr("التاريخ","Date")}</th><th>${tr("وارد","Inflow")}</th><th>${tr("منصرف","Outflow")}</th><th>${tr("الرصيد","Balance")}</th><th>${tr("البيان","Description")}</th>${acc.currency_code === "USD" ? `<th>${tr("نوع الحركة","Transaction type")}</th><th>${tr("سعر الصرف","Exchange rate")}</th>` : ""}<th>${tr("رقم الإذن","Voucher No.")}</th><th>${tr("الحالة","Status")}</th><th>${tr("المستلم","Recipient")}</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
+    <div class="tbl-wrap"><table><thead><tr><th>${tr("التاريخ","Date")}</th><th>${tr("وارد","Inflow")}</th><th>${tr("منصرف","Outflow")}</th><th>${tr("الرصيد","Balance")}</th><th>${tr("البيان","Description")}</th>${`<th>${tr("نوع الحركة","Transaction type")}</th>`}${acc.currency_code === "USD" ? `<th>${tr("سعر الصرف","Exchange rate")}</th>` : ""}<th>${tr("رقم الإذن","Voucher No.")}</th><th>${tr("الحالة","Status")}</th><th>${tr("المستلم","Recipient")}</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
   const $ = s => main.querySelector(s); let items = [];
   $("#edit-gl-link")?.addEventListener("click", safe(() => setup(info, true)));
   const load = async () => {
@@ -21,20 +21,19 @@ export async function render(main, { api, auth, route }) {
     const r = await api(base + "/transactions?" + p); items = r.items;
     $("#sum").innerHTML = `${tr("رصيد أول الفترة:","Opening balance:")} <b>${money(r.opening_balance) === "-" ? "0.00" : money(r.opening_balance)}</b> — ${tr("وارد:","Inflow:")} <b>${money(r.total_inflow)}</b> — ${tr("منصرف:","Outflow:")} <b>${money(r.total_outflow)}</b> — ${tr("الرصيد الحالي:","Current balance:")} <b>${money(r.closing_balance) === "-" ? "0.00" : money(r.closing_balance)}</b>${r.total > 500 ? ` — (${tr("معروض أول 500 حركة","First 500 transactions shown")})` : ""}`;
     $("#rows").innerHTML = items.map(t => `<tr><td>${t.transaction_date}</td><td class="num">${money(t.inflow)}</td><td class="num">${money(t.outflow)}</td><td class="num">${money(t.balance) === "-" ? "0.00" : money(t.balance)}</td>
-      <td>${esc(t.description)}</td>${acc.currency_code === "USD" ? `<td>${esc(USD_TX_LABELS[t.transaction_type] || "—")}</td><td class="num">${t.exchange_rate ? Number(t.exchange_rate).toFixed(6) : "—"}</td>` : ""}<td>${esc(t.voucher_no)}</td><td>${esc(t.status)}</td><td>${esc(t.recipient_name)}</td>
-      <td>${t.locked ? `<span class="tag">${tr("مرتبط بقيد","Linked to journal entry")}</span>` : `${can("Edit") ? `<button class="btn sm" data-e="${t.transaction_id}">${tr("تعديل","Edit")}</button> ` : ""}${can("Delete") ? `<button class="btn sm danger" data-d="${t.transaction_id}">${tr("حذف","Delete")}</button>` : ""}`}</td></tr>`).join("")
-      || `<tr><td colspan="${acc.currency_code === "USD" ? 11 : 9}" class="muted">${tr("لا توجد حركات","No transactions")}</td></tr>`;
+      <td>${esc(t.description)}</td>${`<td>${esc(USD_TX_LABELS[t.transaction_type] || "—")}</td>`}${acc.currency_code === "USD" ? `<td class="num">${t.exchange_rate ? Number(t.exchange_rate).toFixed(6) : "—"}</td>` : ""}<td>${esc(t.voucher_no)}</td><td>${esc(t.status)}</td><td>${esc(t.recipient_name)}</td>
+      <td>${t.locked ? `<span class="tag">${tr("مرتبط بقيد","Linked to journal entry")}</span>` : acc.currency_code === "EGP" ? `<span class="tag muted">${tr("حركة قديمة غير مرتبطة — للمراجعة","Legacy movement — reconciliation required")}</span>` : `${can("Edit") ? `<button class="btn sm" data-e="${t.transaction_id}">${tr("تعديل","Edit")}</button> ` : ""}${can("Delete") ? `<button class="btn sm danger" data-d="${t.transaction_id}">${tr("حذف","Delete")}</button>` : ""}`}</td></tr>`).join("")
+      || `<tr><td colspan="${acc.currency_code === "USD" ? 11 : 10}" class="muted">${tr("لا توجد حركات","No transactions")}</td></tr>`;
   };
   const form = async t => {
     const initialDirection = t ? (+t.inflow > 0 ? "inflow" : "outflow") : "inflow";
     const initialType = t?.transaction_type || "";
-    const initialCounterparts = acc.currency_code === "USD" && initialType
+    const initialCounterparts = initialType
       ? await api(base + "/counterpart-accounts?direction=" + initialDirection + "&transaction_type=" + encodeURIComponent(initialType)).catch(() => []) : [];
     return formDialog({
     title: t ? tr("تعديل حركة","Edit transaction") : tr("حركة جديدة","New transaction"), values: t ? { ...t, inflow: +t.inflow || "", outflow: +t.outflow || "", project_id: t.project_id ?? "", transaction_type: t.transaction_type || "" } : { transaction_date: today(), transaction_type: "" },
     fields: [{ name: "transaction_date", label: tr("التاريخ","Date"), type: "date", required: true },
-      ...(acc.currency_code === "USD" ? [
-        { name: "transaction_type", label: tr("نوع الحركة","Transaction type"), type: "select", options: [
+      { name: "transaction_type", label: tr("نوع الحركة","Transaction type"), type: "select", options: [
           ["funding", tr("تمويل من المساهمين أو الأطراف ذات العلاقة","Shareholder/related-party funding")],
           ["customer_collection", tr("تحصيل مستحقات من عميل","Customer receivable collection")],
           ["customer_advance", tr("تحصيل دفعة مقدمة من عميل","Customer advance receipt")],
@@ -45,9 +44,8 @@ export async function render(main, { api, auth, route }) {
           ["asset_purchase", tr("شراء أصل أو مخزون أو أعمال تحت التنفيذ","Asset, inventory or work-in-progress purchase")],
           ["cash_transfer", tr("تحويل بين حسابات نقدية","Transfer between cash/bank accounts")]
         ], required: true, full: true },
-        { name: "exchange_rate", label: tr("سعر الدولار مقابل الجنيه","USD exchange rate to EGP"), type: "number", step: "0.000001", min: "0.000001", required: true },
-        { name: "counterpart_account_id", label: tr("حساب الطرف المقابل","Counterpart account"), type: "select", searchable: true, options: initialCounterparts.map(a => [String(a.account_id), a.label]), required: true, full: true }
-      ] : []),
+      ...(acc.currency_code === "USD" ? [{ name: "exchange_rate", label: tr("سعر الدولار مقابل الجنيه","USD exchange rate to EGP"), type: "number", step: "0.000001", min: "0.000001", required: true }] : []),
+      { name: "counterpart_account_id", label: tr("حساب الطرف المقابل","Counterpart account"), type: "select", searchable: true, options: initialCounterparts.map(a => [String(a.account_id), a.label]), required: true, full: true },
       { name: "voucher_no", label: tr("رقم الإذن","Voucher No.") }, { name: "inflow", label: tr("وارد","Inflow"), type: "number", step: "0.01", min: 0 }, { name: "outflow", label: tr("منصرف","Outflow"), type: "number", step: "0.01", min: 0 },
       { name: "description", label: tr("البيان","Description"), full: true }, { name: "status", label: tr("الحالة (مثال: تمويل)","Status (e.g. Funding)") }, { name: "recipient_name", label: tr("المستلم","Recipient") },
       { name: "project_id", label: tr("مركز التكلفة","Cost center"), type: "select", optional: true, options: projs.map(p => [p.project_id, p.name_ar]), full: true }],
@@ -56,12 +54,11 @@ export async function render(main, { api, auth, route }) {
         transaction_date: v.transaction_date, inflow: v.inflow || "0", outflow: v.outflow || "0", description: v.description || null, voucher_no: v.voucher_no || null,
         status: v.status || null, recipient_name: v.recipient_name || null, project_id: v.project_id ? +v.project_id : null,
         exchange_rate: acc.currency_code === "USD" ? v.exchange_rate : null,
-        counterpart_account_id: acc.currency_code === "USD" ? Number(v.counterpart_account_id) : null,
-        transaction_type: acc.currency_code === "USD" ? v.transaction_type : null } });
-      toast(acc.currency_code === "USD" ? `${tr("تم الحفظ وإنشاء القيد كمسودة","Saved; draft journal created")}: ${saved.journal_entry_no || "—"}` : tr("تم الحفظ","Saved")); await load();
+        counterpart_account_id: Number(v.counterpart_account_id),
+        transaction_type: v.transaction_type } });
+      toast(`${tr("تم الحفظ وإنشاء القيد كمسودة","Saved; draft journal created")}: ${saved.journal_entry_no || "—"}`); await load();
     },
     onOpen: (dlg, formEl) => {
-      if (acc.currency_code !== "USD") return;
       const directionSelect = formEl.elements.namedItem("counterpart_account_id");
       const typeSelect = formEl.elements.namedItem("transaction_type");
       const inflow = formEl.elements.namedItem("inflow"), outflow = formEl.elements.namedItem("outflow");

@@ -36,7 +36,7 @@ def test_egp_journal_creates_one_draft_entry_and_links_transaction(monkeypatch):
     import app.routers.journal as journal_module
 
     fy = SimpleNamespace(company_id=1, fiscal_year_id=2026)
-    monkeypatch.setattr(treasury_module, "_fy_for", lambda db, entry_date: fy)
+    monkeypatch.setattr(journal_module, "_fy_for", lambda db, entry_date: fy)
     monkeypatch.setattr(journal_module, "_next_no", lambda db, fiscal_year: "JE-2026-000001")
 
     db = MagicMock()
