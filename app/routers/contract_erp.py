@@ -92,7 +92,19 @@ def settlement_out(x, db: Session | None = None):
             TreasuryTransaction.status == "تم الصرف")) or 0)
     remaining = max(ZERO, Decimal(x.net_amount or 0) - paid)
     contract = db.get(Contract, x.contract_id) if db is not None else None
-    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"contract_no":contract.contract_no if contract else None,"contract_title":contract.title if contract else None,"contract_title_en":contract.title_en if contract else None,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":normalized_deductions(x),"vat_amount":str(x.vat_amount),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"remaining_amount":str(money(remaining)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
+    deductions=normalized_deductions(x)
+    if db is not None:
+        rules={r.code:r for r in db.scalars(select(ContractDeductionRule).where(
+            ContractDeductionRule.contract_id==x.contract_id,
+            ContractDeductionRule.settlement_side==x.settlement_side)).all()}
+        for code,d in deductions.items():
+            rule=rules.get(code)
+            if rule:
+                d.setdefault("source","contract")
+                d.setdefault("calculation_type",rule.calculation_type)
+                d.setdefault("rate",str(rule.rate))
+                d.setdefault("base_type",rule.base_type)
+    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"contract_no":contract.contract_no if contract else None,"contract_title":contract.title if contract else None,"contract_title_en":contract.title_en if contract else None,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":deductions,"vat_amount":str(x.vat_amount),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"remaining_amount":str(money(remaining)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
 def settlement_line_out(line, item=None):
     item = item
     return {"settlement_item_id":line.settlement_item_id,"contract_item_id":line.contract_item_id,"item_no":item.item_no if item else "","description":item.description if item else "","unit":item.unit if item else "","contract_quantity":str(item.quantity) if item else "0","quantity":str(line.quantity),"unit_price":str(line.unit_price),"amount":str(line.amount),"account_id":getattr(line,"account_id",None) or (getattr(item,"account_id",None) if item else None)}
@@ -148,8 +160,22 @@ class SettlementIn(BaseModel):
         if any(v < 0 for v in self.deduction_overrides.values()): raise ValueError("الخصومات لا يمكن أن تكون سالبة")
         return self
 
+class ManualSettlementDeductionIn(BaseModel):
+    name: str = Field(min_length=2, max_length=150)
+    calculation_type: Literal["Percent","Fixed"] = "Fixed"
+    rate: Decimal = Field(gt=0)
+    base_type: Optional[Literal["CurrentWork","CumulativeWork","RemainingContract"]] = None
+    account_id: int = Field(gt=0)
+    reason: str = Field(min_length=3, max_length=1000)
+    @model_validator(mode="after")
+    def validate_base(self):
+        if self.calculation_type == "Percent" and not self.base_type:
+            raise ValueError("يجب تحديد أساس حساب الخصم النسبي")
+        return self
+
 class SettlementDeductionsUpdate(BaseModel):
     amounts: dict[str, Decimal] = Field(default_factory=dict)
+    additions: list[ManualSettlementDeductionIn] = Field(default_factory=list)
     vat_amount: Decimal = Field(default=ZERO, ge=0)
     @model_validator(mode="after")
     def valid_amounts(self):
@@ -466,7 +492,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
                 raise HTTPException(422,f"قيمة الخصم {r.name_ar} تتجاوز الحد الأقصى المسموح {money(r.cap_amount)}")
         rule_account=resolve_rule_account(r.code,r.name_ar,r.gl_account_id,cfg)
         if amount>0 and not rule_account: raise HTTPException(422,f"قاعدة الخصم «{r.name_ar}» غير مربوطة بحساب في شجرة الحسابات. افتح تفاصيل العقد ← بنود الخصومات ← «ربط تلقائي بالشجرة» أو اختر الحساب يدويًا.")
-        deductions[r.code]={"name":r.name_ar,"amount":str(amount),"account_id":rule_account,"posting_side":r.posting_side};total+=amount
+        deductions[r.code]={"name":r.name_ar,"amount":str(amount),"account_id":rule_account,"posting_side":r.posting_side,"source":"contract","calculation_type":r.calculation_type,"rate":str(r.rate),"base_type":r.base_type,"base_value":str(money(base))};total+=amount
     unknown=set(body.deduction_overrides)-{r.code for r in rules}
     if unknown: raise HTTPException(422,"أكواد خصم غير معرفة: "+", ".join(sorted(unknown)))
     vat_rate=body.vat_rate if body.vat_rate is not None else (cfg.default_vat_rate if cfg else Decimal("0"))
@@ -535,6 +561,15 @@ def get_settlement_items(settlement_id:int, _:User=Depends(require_permission("C
     lines=db.scalars(select(ContractSettlementItem).where(ContractSettlementItem.settlement_id==settlement_id)).all()
     return {"items":[settlement_line_out(line,db.get(ContractItem,line.contract_item_id)) for line in lines]}
 
+@router.get("/deduction-accounts")
+def list_deduction_accounts(_:User=Depends(require_permission("ContractSettlements","Edit")),db:Session=Depends(get_db)):
+    """Return active posting leaf accounts for settlement-specific deductions."""
+    parent_ids=set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))).all())
+    rows=db.scalars(select(Account).where(Account.is_active.is_(True)).order_by(Account.account_code)).all()
+    return {"items":[{"account_id":a.account_id,"account_code":a.account_code,"account_name_ar":a.account_name_ar}
+                     for a in rows if a.account_id not in parent_ids]}
+
+
 @router.put("/settlements/{settlement_id}/deductions")
 def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpdate,
         user:User=Depends(require_permission("ContractSettlements","Edit")), db:Session=Depends(get_db)):
@@ -556,13 +591,40 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
         rule=live.get(code)
         if rule and rule.cap_amount is not None and amount > money(rule.cap_amount):
             raise HTTPException(422,f"قيمة الخصم {d.get('name',code)} تتجاوز الحد الأقصى المسموح {money(rule.cap_amount)}")
+        # Contract calculation type and rate are immutable from the settlement screen.
+        if rule:
+            d["source"]="contract"; d["calculation_type"]=rule.calculation_type
+            d["rate"]=str(rule.rate); d["base_type"]=rule.base_type
         d["amount"]=str(amount)
         total+=amount
+    added_codes=[]
+    previous,contract_value=contract_financial_summary(db,x.contract_id,x.settlement_side)[1:]
+    for addition in body.additions:
+        account=leaf_account_or_422(db, addition.account_id, "حساب الخصم الإضافي: ")
+        base=ZERO
+        if addition.calculation_type=="Percent":
+            base=(Decimal(str(x.work_value)) if addition.base_type=="CurrentWork" else
+                  Decimal(str(x.cumulative_work_value)) if addition.base_type=="CumulativeWork" else
+                  max(ZERO,contract_value-Decimal(str(x.cumulative_work_value))))
+            amount=money(base*addition.rate/Decimal("100"))
+        else:
+            amount=money(addition.rate)
+        if amount<=ZERO:
+            raise HTTPException(422,"قيمة الخصم الإضافي المحسوبة يجب أن تكون أكبر من صفر")
+        code=f"manual_{uuid4().hex}"
+        posting_side="Debit" if x.settlement_side=="Customer" else "Credit"
+        deductions[code]={"name":addition.name.strip(),"amount":str(amount),
+            "account_id":account.account_id,"posting_side":posting_side,"source":"manual",
+            "calculation_type":addition.calculation_type,"rate":str(addition.rate),
+            "base_type":addition.base_type,"base_value":str(money(base)),
+            "reason":addition.reason.strip(),"created_by":user.user_id,
+            "created_at":datetime.utcnow().isoformat()}
+        total+=amount; added_codes.append(code)
     vat=money(body.vat_amount)
     net=money(Decimal(str(x.work_value))+vat-total)
     if net<0: raise HTTPException(422,"إجمالي الخصومات أكبر من قيمة الأعمال والضريبة")
     x.deductions_json=deductions; x.vat_amount=vat; x.net_amount=net
-    write_audit(db,user.user_id,"UpdateDeductions","ContractSettlements",x.settlement_id,old=old,new={"deductions":deductions,"vat_amount":str(vat),"net_amount":str(net)})
+    write_audit(db,user.user_id,"UpdateDeductions","ContractSettlements",x.settlement_id,old=old,new={"deductions":deductions,"added_manual_codes":added_codes,"vat_amount":str(vat),"net_amount":str(net)})
     db.commit();db.refresh(x)
     return settlement_out(x, db)
 
