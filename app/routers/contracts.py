@@ -244,8 +244,8 @@ def create_contract(body: ContractIn, user: User = Depends(require_permission("C
     schedule_rows = _build_contract_schedule(body)
     values = body.model_dump(exclude={"items", "deduction_rules", "schedule_items"})
     values["statement_distribution_method"] = body.statement_distribution_method or "Manual"
-    # New contracts await accounting review; the reviewer activates them after checking deductions.
-    values["status"] = "PendingEngineering"
+    # New contracts go directly to accounting review; there is no engineering approval stage.
+    values["status"] = "PendingFinancial"
     values["contract_no"] = f"CT-PENDING-{uuid4().hex}"
     c = Contract(**values, created_by=user.user_id)
     db.add(c); db.flush(); c.contract_no = f"CT-{date.today().year}-{c.contract_id:06d}"
@@ -318,7 +318,7 @@ def submit_contract(contract_id: int, user: User = Depends(require_permission("C
     if not c: raise HTTPException(404, "العقد غير موجود")
     if c.status.lower() not in ("draft", "returned"):
         raise HTTPException(409, "لا يمكن إرسال العقد للمراجعة بهذه الحالة")
-    old = _contract(c); c.status = "PendingEngineering"
+    old = _contract(c); c.status = "PendingFinancial"
     write_audit(db, user.user_id, "SubmitForApproval", "Contracts", c.contract_id, old=old, new=_contract(c))
     db.commit(); db.refresh(c); return _contract(c)
 
@@ -342,7 +342,7 @@ def approve_contract(contract_id: int, body: ContractActivationIn | None = None,
     c = db.get(Contract, contract_id)
     if not c: raise HTTPException(404, "العقد غير موجود")
     if c.status.lower() != "pendingfinancial":
-        raise HTTPException(409, "يجب إتمام الاعتماد الهندسي أولًا قبل الاعتماد المالي")
+        raise HTTPException(409, "العقد ليس بانتظار المراجعة المالية")
     if body and body.deduction_rules is not None:
         current = db.scalars(select(ContractDeductionRule).where(ContractDeductionRule.contract_id == contract_id)).all()
         current_by_key = {(r.settlement_side, r.code.casefold()): r for r in current}
@@ -381,11 +381,11 @@ def approve_contract(contract_id: int, body: ContractActivationIn | None = None,
 def return_contract(contract_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     c = db.get(Contract, contract_id)
     if not c: raise HTTPException(404, "العقد غير موجود")
-    action = "FinancialApprove" if c.status.lower() == "pendingfinancial" else "EngineeringApprove"
+    action = "FinancialApprove"
     if not has_permission(db, user.user_id, "Contracts", action):
         raise HTTPException(403, "ليس لديك صلاحية إعادة العقد للتعديل")
-    if c.status.lower() not in ("pendingengineering", "pendingfinancial", "pendingapproval"):
-        raise HTTPException(409, "العقد ليس بانتظار الاعتماد")
+    if c.status.lower() != "pendingfinancial":
+        raise HTTPException(409, "العقد ليس بانتظار المراجعة المالية")
     old = _contract(c); c.status = "Returned"
     write_audit(db, user.user_id, "ReturnForChanges", "Contracts", c.contract_id, old=old, new=_contract(c))
     db.commit(); db.refresh(c); return _contract(c)
