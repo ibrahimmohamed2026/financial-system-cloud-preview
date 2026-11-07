@@ -24,7 +24,9 @@ jobs:
       - name: Compile Python
         run: python -m compileall -q app
       - name: Run tests
-        run: pytest -q
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m pytest -q
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
