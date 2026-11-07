@@ -554,6 +554,15 @@ def get_settlement_items(settlement_id:int, _:User=Depends(require_permission("C
     lines=db.scalars(select(ContractSettlementItem).where(ContractSettlementItem.settlement_id==settlement_id)).all()
     return {"items":[settlement_line_out(line,db.get(ContractItem,line.contract_item_id)) for line in lines]}
 
+@router.get("/deduction-accounts")
+def list_deduction_accounts(_:User=Depends(require_permission("ContractSettlements","Edit")),db:Session=Depends(get_db)):
+    """Return active posting leaf accounts for settlement-specific deductions."""
+    parent_ids=set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))).all())
+    rows=db.scalars(select(Account).where(Account.is_active.is_(True)).order_by(Account.account_code)).all()
+    return {"items":[{"account_id":a.account_id,"account_code":a.account_code,"account_name_ar":a.account_name_ar}
+                     for a in rows if a.account_id not in parent_ids]}
+
+
 @router.put("/settlements/{settlement_id}/deductions")
 def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpdate,
         user:User=Depends(require_permission("ContractSettlements","Edit")), db:Session=Depends(get_db)):
