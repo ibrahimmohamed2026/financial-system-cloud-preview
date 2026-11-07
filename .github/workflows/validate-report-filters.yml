@@ -11,6 +11,8 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      JWT_SECRET: ci-only-test-secret-not-used-in-deployment
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
