@@ -1,18 +1,30 @@
 """Audited administrator-only cascade deletion for contract settlement records."""
-from sqlalchemy import select, func
+from sqlalchemy import select
 from fastapi import HTTPException
 
 from .deps import write_audit
-from .models import (Role, UserRole, Check, FinancialCheck, TreasuryTransaction, JournalEntry, JournalEntryDetail,
+from .models import (User, JobProfile, Check, FinancialCheck, TreasuryTransaction, JournalEntry, JournalEntryDetail,
     ContractSettlement, ContractSettlementItem, ContractAttachment,
     TechnicalSettlementEstimate, TechnicalSettlementEstimateItem)
 
 
 def require_admin(db, user_id: int) -> None:
-    is_admin = db.scalar(select(Role.role_id).join(UserRole, UserRole.role_id == Role.role_id)
-        .where(UserRole.user_id == user_id, func.lower(Role.role_name).like("%admin%")).limit(1))
-    if not is_admin:
-        raise HTTPException(403, "الحذف العام متاح لمسؤول النظام فقط")
+    # The legacy Admin role is intentionally no longer the authority source.
+    # System-wide access is assigned through the protected IT job profile.
+    is_admin = db.scalar(
+        select(User.user_id)
+        .join(JobProfile, JobProfile.job_profile_id == User.job_profile_id)
+        .where(
+            User.user_id == user_id,
+            User.is_active.is_(True),
+            User.is_deleted.is_(False),
+            JobProfile.name_ar == "مسؤول النظام IT",
+            JobProfile.is_active.is_(True),
+        )
+        .limit(1)
+    )
+    if is_admin is None:
+        raise HTTPException(403, "الحذف العام متاح لمدير النظام فقط")
 
 
 def delete_settlement_tree(db, settlement: ContractSettlement, user_id: int) -> None:
