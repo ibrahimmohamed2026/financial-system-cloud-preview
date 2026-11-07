@@ -140,17 +140,22 @@ def reports_analytics(date_from: date | None = None, date_to: date | None = None
     months.reverse()
     labels = [f"{y:04d}-{m:02d}" for y, m in months]
     cash_stmt = (select(extract("year", TreasuryTransaction.transaction_date),
-                        extract("month", TreasuryTransaction.transaction_date),
+                        extract("month", TreasuryTransaction.transaction_date), TreasuryAccount.currency_code,
                         func.coalesce(func.sum(TreasuryTransaction.inflow), 0),
                         func.coalesce(func.sum(TreasuryTransaction.outflow), 0))
                  .select_from(TreasuryTransaction)
                  .join(TreasuryAccount, TreasuryAccount.treasury_account_id == TreasuryTransaction.treasury_account_id)
                  .where(TreasuryTransaction.transaction_date >= date_from, TreasuryTransaction.transaction_date <= date_to,
                         TreasuryAccount.is_active == True)
-                 .group_by(extract("year", TreasuryTransaction.transaction_date), extract("month", TreasuryTransaction.transaction_date)))
-    cash_rows = {(int(y), int(m)): (Decimal(i or 0), Decimal(o or 0)) for y, m, i, o in db.execute(cash_stmt).all()}
-    cash_flow = [{"month": label, "inflow": money(cash_rows.get((y, m), (D0, D0))[0]),
-                  "outflow": money(cash_rows.get((y, m), (D0, D0))[1])} for (y, m), label in zip(months, labels)]
+                 .group_by(extract("year", TreasuryTransaction.transaction_date), extract("month", TreasuryTransaction.transaction_date),
+                           TreasuryAccount.currency_code))
+    cash_rows = {(int(y), int(m), (currency or "غير محدد").upper()): (Decimal(i or 0), Decimal(o or 0))
+                 for y, m, currency, i, o in db.execute(cash_stmt).all()}
+    currencies = sorted({key[2] for key in cash_rows}) or ["EGP"]
+    cash_flow = [{"month": label, "currency": currency,
+                  "inflow": money(cash_rows.get((y, m, currency), (D0, D0))[0]),
+                  "outflow": money(cash_rows.get((y, m, currency), (D0, D0))[1])}
+                 for currency in currencies for (y, m), label in zip(months, labels)]
 
     # أفضل خمسة حسابات حسب إجمالي الحركة المدينة/الدائنة في الفترة؛ الرصيد الختامي شامل الافتتاحي.
     rows = compute_tb(db, None, date_to)
