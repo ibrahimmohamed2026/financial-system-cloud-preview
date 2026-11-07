@@ -11,7 +11,7 @@ def test_journal_account_filter_uses_exists_and_does_not_duplicate_entries():
     db.scalar.return_value = 0
     db.scalars.return_value.all.return_value = []
 
-    result = journal.list_entries(account_ids=[11, 22], db=db, _=None)
+    result = journal.list_entries(account_ids=[11, 22], status_=None, date_from=None, date_to=None, skip=0, limit=50, db=db, _=None)
 
     assert result == {"total": 0, "items": []}
     statement = str(db.scalar.call_args.args[0])
