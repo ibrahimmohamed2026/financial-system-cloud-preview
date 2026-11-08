@@ -210,10 +210,16 @@ def available_accounts(screen_code: str, _: User = Depends(require_dynamic("View
 @router.get("/{screen_code}/counterpart-accounts")
 def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="^(inflow|outflow)$"),
                          transaction_type: str = Query(..., min_length=1, max_length=40),
-                         _: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
+                         treasury_account_id: int | None = Query(None, gt=0),
+                         user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
                          db: Session = Depends(get_db)):
     """Return only accounts allowed for the selected transaction type and direction."""
-    treasury = _bound(db, screen_code)
+    screen_account = _bound(db, screen_code)
+    treasury = db.get(TreasuryAccount, treasury_account_id) if treasury_account_id else screen_account
+    if treasury is None or not treasury.is_active or treasury.currency_code != screen_account.currency_code:
+        raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
+    if not has_permission(db, user.user_id, treasury.screen_code, "Add"):
+        raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
     config = USD_TRANSACTION_TYPES.get(transaction_type)
     if config is None or config["direction"] not in (direction, "either"):
         raise HTTPException(400, "نوع الحركة لا يتوافق مع اتجاه الوارد أو المنصرف")
