@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..common import money, require_dynamic
 from ..database import get_db
-from ..deps import require_permission, write_audit
+from ..deps import has_permission, require_permission, write_audit
 from ..models import (Account, AccountClassification, Counterparty, JournalEntry, JournalEntryDetail, Project, TreasuryAccount, TreasuryTransaction, User)
 
 # شاشة → (نوع الحساب الافتراضي، العملة الافتراضية)
@@ -67,6 +67,7 @@ class TxIn(BaseModel):
     project_id: int | None = None
     exchange_rate: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=6)
     counterpart_account_id: int | None = Field(default=None, gt=0)
+    treasury_account_id: int | None = Field(default=None, gt=0)
     counterparty_id: int | None = Field(default=None, gt=0)
     transaction_type: str | None = Field(default=None, max_length=40)
 
@@ -184,13 +185,41 @@ def gl_list(screen_code: str, q: str | None = None, _: User = Depends(require_dy
             for a in db.scalars(stmt.order_by(Account.account_code).limit(300))]
 
 
+@router.get("/{screen_code}/available-accounts")
+def available_accounts(screen_code: str, _: User = Depends(require_dynamic("View", set(BANK_SCREENS))),
+                       db: Session = Depends(get_db)):
+    """List active cash/bank accounts in the screen currency for movement selection."""
+    current = _bound(db, screen_code)
+    rows = db.scalars(select(TreasuryAccount).where(
+        TreasuryAccount.is_active == True,
+        TreasuryAccount.currency_code == current.currency_code,
+    ).order_by(TreasuryAccount.account_type, TreasuryAccount.name_ar)).all()
+    rows = [row for row in rows if row.screen_code == current.screen_code or (
+        has_permission(db, _.user_id, row.screen_code, "View")
+        and has_permission(db, _.user_id, row.screen_code, "Add"))]
+    return [{
+        "treasury_account_id": row.treasury_account_id,
+        "name_ar": row.name_ar,
+        "account_type": row.account_type,
+        "currency_code": row.currency_code,
+        "label": f"{row.name_ar} — {'بنك' if row.account_type == 'Bank' else 'خزينة'} — {row.currency_code}",
+        "is_current": row.treasury_account_id == current.treasury_account_id,
+    } for row in rows]
+
+
 @router.get("/{screen_code}/counterpart-accounts")
 def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="^(inflow|outflow)$"),
                          transaction_type: str = Query(..., min_length=1, max_length=40),
-                         _: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
+                         treasury_account_id: int | None = Query(None, gt=0),
+                         user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
                          db: Session = Depends(get_db)):
     """Return only accounts allowed for the selected transaction type and direction."""
-    treasury = _bound(db, screen_code)
+    screen_account = _bound(db, screen_code)
+    treasury = db.get(TreasuryAccount, treasury_account_id) if treasury_account_id else screen_account
+    if treasury is None or not treasury.is_active or treasury.currency_code != screen_account.currency_code:
+        raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
+    if not has_permission(db, user.user_id, treasury.screen_code, "Add"):
+        raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
     config = USD_TRANSACTION_TYPES.get(transaction_type)
     if config is None or config["direction"] not in (direction, "either"):
         raise HTTPException(400, "نوع الحركة لا يتوافق مع اتجاه الوارد أو المنصرف")
@@ -267,9 +296,15 @@ def update_account_gl(screen_code: str, body: GLAccountLinkIn,
 
 @router.get("/{screen_code}/transactions")
 def transactions(screen_code: str, date_from: date | None = None, date_to: date | None = None, q: str | None = None,
+                 treasury_account_id: int | None = Query(None, gt=0),
                  skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500),
-                 _: User = Depends(require_dynamic("View", set(BANK_SCREENS))), db: Session = Depends(get_db)):
-    a = _bound(db, screen_code)
+                 user: User = Depends(require_dynamic("View", set(BANK_SCREENS))), db: Session = Depends(get_db)):
+    screen_account = _bound(db, screen_code)
+    a = db.get(TreasuryAccount, treasury_account_id) if treasury_account_id else screen_account
+    if a is None or not a.is_active or a.currency_code != screen_account.currency_code:
+        raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
+    if not has_permission(db, user.user_id, a.screen_code, "View"):
+        raise HTTPException(403, "ليس لديك صلاحية عرض حساب البنك أو الخزينة المحدد")
     tid = a.treasury_account_id
     T = TreasuryTransaction
     opening = D0
@@ -291,6 +326,8 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
         tin += t.inflow
         tout += t.outflow
         out.append({"transaction_id": t.transaction_id, "transaction_date": t.transaction_date,
+                    "treasury_account_id": a.treasury_account_id, "treasury_account_name": a.name_ar,
+                    "treasury_account_type": a.account_type,
                     "inflow": money(t.inflow), "outflow": money(t.outflow), "balance": money(run),
                     "description": t.description, "voucher_no": t.voucher_no, "status": t.status,
                     "recipient_name": t.recipient_name, "project_id": t.project_id,
@@ -580,9 +617,14 @@ def _create_egp_transfer_mirror(db: Session, source: TreasuryAccount, original: 
 @router.post("/{screen_code}/transactions", status_code=201)
 def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
            db: Session = Depends(get_db)):
-    a = _bound(db, screen_code)
+    screen_account = _bound(db, screen_code)
+    a = db.get(TreasuryAccount, body.treasury_account_id) if body.treasury_account_id else screen_account
+    if a is None or not a.is_active or a.currency_code != screen_account.currency_code:
+        raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
+    if not has_permission(db, user.user_id, a.screen_code, "Add"):
+        raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
-    values = body.model_dump()
+    values = body.model_dump(exclude={"treasury_account_id"})
     # Resolve the counterpart GL automatically from the selected customer/supplier master.
     if body.counterparty_id:
         party = db.get(Counterparty, body.counterparty_id)
@@ -609,9 +651,11 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
 
 
 def _tx(db: Session, screen_code: str, tid: int) -> TreasuryTransaction:
-    a = _bound(db, screen_code)
+    screen_account = _bound(db, screen_code)
     t = db.get(TreasuryTransaction, tid)
-    if t is None or t.treasury_account_id != a.treasury_account_id:
+    movement_account = db.get(TreasuryAccount, t.treasury_account_id) if t else None
+    if (t is None or movement_account is None or not movement_account.is_active
+            or movement_account.currency_code != screen_account.currency_code):
         raise HTTPException(404, "الحركة غير موجودة")
     if t.journal_entry_id is not None:
         raise HTTPException(409, "الحركة مرتبطة بقيد يومية — مينفعش تتعدّل أو تتحذف")
@@ -622,11 +666,19 @@ def _tx(db: Session, screen_code: str, tid: int) -> TreasuryTransaction:
 def edit_tx(screen_code: str, tid: int, body: TxIn,
             user: User = Depends(require_dynamic("Edit", set(BANK_SCREENS))), db: Session = Depends(get_db)):
     t = _tx(db, screen_code, tid)
+    screen_account = _bound(db, screen_code)
+    target_account = db.get(TreasuryAccount, body.treasury_account_id) if body.treasury_account_id else screen_account
+    if target_account is None or not target_account.is_active or target_account.currency_code != screen_account.currency_code:
+        raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
+    if not has_permission(db, user.user_id, target_account.screen_code, "Edit"):
+        raise HTTPException(403, "ليس لديك صلاحية تعديل حركات حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
-    old = {"inflow": str(t.inflow), "outflow": str(t.outflow), "description": t.description}
-    for k, v in body.model_dump().items():
+    old = {"inflow": str(t.inflow), "outflow": str(t.outflow), "description": t.description,
+           "treasury_account_id": t.treasury_account_id}
+    for k, v in body.model_dump(exclude={"treasury_account_id"}).items():
         setattr(t, k, v)
-    journal_no = _create_usd_journal(db, _bound(db, screen_code), t, body, user, allow_legacy=True) if _bound(db, screen_code).currency_code == "USD" else None
+    t.treasury_account_id = target_account.treasury_account_id
+    journal_no = _create_usd_journal(db, target_account, t, body, user, allow_legacy=True) if target_account.currency_code == "USD" else None
     write_audit(db, user.user_id, "Update", "TreasuryTransactions", tid, old, body.model_dump())
     db.commit()
     return {"transaction_id": tid, "journal_entry_no": journal_no, "journal_status": "Draft" if journal_no else None}
@@ -636,6 +688,9 @@ def edit_tx(screen_code: str, tid: int, body: TxIn,
 def del_tx(screen_code: str, tid: int, user: User = Depends(require_dynamic("Delete", set(BANK_SCREENS))),
            db: Session = Depends(get_db)):
     t = _tx(db, screen_code, tid)
+    movement_account = db.get(TreasuryAccount, t.treasury_account_id)
+    if not movement_account or not has_permission(db, user.user_id, movement_account.screen_code, "Delete"):
+        raise HTTPException(403, "ليس لديك صلاحية حذف حركات حساب البنك أو الخزينة المحدد")
     write_audit(db, user.user_id, "Delete", "TreasuryTransactions", tid,
                 {"inflow": str(t.inflow), "outflow": str(t.outflow)}, None)
     db.delete(t)
