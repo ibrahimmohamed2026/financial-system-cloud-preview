@@ -82,7 +82,7 @@ def test_usd_transfer_journal_uses_source_carrying_value_without_realized_fx(
                                   is_active=True, classification_id=1)
     db = MagicMock()
     db.get.side_effect = lambda model, key: counterpart if model is Account else None
-    db.scalar.side_effect = [target, 0, 0, source]
+    db.scalar.side_effect = [target, 0, 0, source, 0, 0]
     db.scalars.return_value = []
     db.execute.return_value.all.return_value = [
         SimpleNamespace(fcy_amount=Decimal("1000"), debit_amount=Decimal("10000"),
@@ -287,6 +287,8 @@ def test_usd_journal_builder_creates_balanced_entry_for_every_movement_type(
             0,
             0,
             treasury_source,
+            0,
+            0,
         ]
     else:
         db.scalar.side_effect = [0, 0]
@@ -317,3 +319,45 @@ def test_usd_journal_builder_creates_balanced_entry_for_every_movement_type(
     assert sum(line.debit_amount for line in lines) == sum(
         line.credit_amount for line in lines
     )
+
+
+def test_usd_inflow_transfer_rejects_pending_source_account_movements(monkeypatch):
+    import app.routers.treasury as treasury_module
+
+    counterpart = SimpleNamespace(account_id=10, account_code="15301001",
+                                  is_active=True, classification_id=1)
+    classification = SimpleNamespace(name_ar="نقدية بالصندوق و البنوك")
+    source = SimpleNamespace(treasury_account_id=3, gl_account_id=10,
+                             currency_code="USD", is_active=True)
+    destination = SimpleNamespace(treasury_account_id=8, gl_account_id=20,
+                                  currency_code="USD", is_active=True, name_ar="البنك المستلم")
+    db = MagicMock()
+    db.get.side_effect = lambda model, key: (
+        counterpart if model is Account else
+        classification if model is AccountClassification else None
+    )
+    db.scalars.return_value = []
+    # Destination has no pending rows; source lookup succeeds; source has one
+    # unlinked movement, so the carrying value must not be used for this transfer.
+    db.scalar.side_effect = [0, 0, source, 1]
+
+    body = TxIn(
+        transaction_date=date(2026, 11, 8),
+        inflow=Decimal("100"),
+        outflow=Decimal("0"),
+        exchange_rate=Decimal("50"),
+        counterpart_account_id=10,
+        transaction_type="cash_transfer",
+    )
+    movement = SimpleNamespace(transaction_id=41, journal_entry_id=None)
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        treasury_module._create_usd_journal(
+            db, destination, movement, body, SimpleNamespace(user_id=7)
+        )
+
+    assert exc.value.status_code == 409
+    assert "مصدر التحويل" in exc.value.detail
+    db.add.assert_not_called()
