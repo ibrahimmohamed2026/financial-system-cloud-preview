@@ -58,7 +58,8 @@ export async function render(main, { api, auth, route }) {
   const form = c => formDialog({ title: c ? tr("تعديل شيك","Edit cheque") : tr("شيك جديد","New cheque"), values: c ? { ...c, amount: c.amount ?? "", project_id: c.project_id ?? "" } : { check_date: today() },
     fields: [{ name: "check_book_no", label: tr("رقم الدفتر","Book number"), required: true }, { name: "sequence_no", label: tr("التسلسل","Sequence"), type: "number", required: true, min: 1 },
       { name: "check_no", label: tr("رقم الشيك","Cheque number") }, { name: "check_date", label: tr("تاريخ الشيك","Cheque date"), type: "date" },
-      { name: "beneficiary_id", label: tr("المستفيد","Beneficiary"), type: "select", required: true, full: true, options: bens.map(b => [b.beneficiary_id, b.name_ar]) },
+      { name: "beneficiary_id", label: tr("المستفيد","Beneficiary"), type: "select", required: true, full: true, options: bens.map(b => [b.beneficiary_id, `${b.name_ar} — ${b.linked_account_label || "حساب غير مربوط"}`]) },
+      { name: "flow_description", label: tr("مسار الأموال عند الصرف","Money route on clearing"), readonly: true, full: true },
       { name: "settlement_id", label: tr("ربط بمستخلص مالي مرحّل (اختياري)","Link to posted financial statement (optional)"), type: "select", optional: true, full: true,
         options: payableSettlements.map(s => [s.settlement_id, `${s.settlement_no} — ${s.contract_no} — ${s.counterparty_name} — ${tr("متبقي","Remaining")} ${money(s.remaining_amount)}`]) },
       { name: "amount", label: tr("المبلغ","Amount"), type: "number", step: "0.01", min: 0 }, { name: "purchase_order_no", label: tr("رقم أمر الشراء","Purchase order number") },
@@ -66,6 +67,15 @@ export async function render(main, { api, auth, route }) {
       { name: "project_id", label: tr("المشروع","Project"), type: "select", optional: true, options: projs.map(p => [p.project_id, p.name_ar]), full: true }, { name: "description", label: tr("البيان","Description"), full: true }],
     onOpen: (dlg, f) => {
       const amt = f.elements.amount, out = f.elements.amount_words, cur = c ? curOf[c.treasury_account_id] : info.account.currency_code; let t, seq = 0;
+      const beneficiarySelect = f.elements.beneficiary_id, flow = f.elements.flow_description;
+      const updateFlow = () => {
+        const beneficiary = bens.find(b => String(b.beneficiary_id) === String(beneficiarySelect.value));
+        flow.value = tr("من حساب البنك","From bank account") + ": " + info.account.name_ar + " → " +
+          tr("إلى حساب المستفيد","To beneficiary account") + ": " +
+          (beneficiary?.linked_account_label || tr("حساب المستفيد غير مربوط بعد","Beneficiary ledger account not linked yet"));
+      };
+      beneficiarySelect.addEventListener("change", updateFlow);
+      updateFlow();
       const upd = () => { clearTimeout(t); t = setTimeout(async () => {
         const v = amt.value.trim(), my = ++seq; if (v === "") { out.value = ""; return; }
         try { const r = await api("/checks/amount-words?" + new URLSearchParams({ amount: v, currency: cur })); if (my === seq) out.value = r.amount_words; }
