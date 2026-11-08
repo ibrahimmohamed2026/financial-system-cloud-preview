@@ -38,7 +38,7 @@ USD_TRANSACTION_TYPES = {
                 "classifications": ("مصروفات عمومية و ادارية", "مصروفات عمومية و إدارية", "تكلفة المبيعات", "فوائد التاجير التمويلى")},
     "asset_purchase": {"label": "شراء أصل أو مخزون أو أعمال تحت التنفيذ", "direction": "outflow",
                 "classifications": ("اصول ثابتة بالصافي", "اصول غير ملموسه", "مخزون", "اعمال تحت التنفيذ")},
-    "cash_transfer": {"label": "تحويل بين حسابات نقدية", "direction": "either",
+    "cash_transfer": {"label": "تحويل بين حسابات نقدية", "direction": "outflow",
                 "classifications": ("نقدية بالصندوق و البنوك",)},
 }
 
@@ -240,6 +240,7 @@ def treasury_counterparties(screen_code: str, transaction_type: str = Query(...,
 def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="^(inflow|outflow)$"),
                          transaction_type: str = Query(..., min_length=1, max_length=40),
                          treasury_account_id: int | None = Query(None, gt=0),
+                         counterparty_id: int | None = Query(None, gt=0),
                          user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
                          db: Session = Depends(get_db)):
     """Return only accounts allowed for the selected transaction type and direction."""
@@ -252,6 +253,38 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
     config = USD_TRANSACTION_TYPES.get(transaction_type)
     if config is None or config["direction"] not in (direction, "either"):
         raise HTTPException(400, "نوع الحركة لا يتوافق مع اتجاه الوارد أو المنصرف")
+    party_required_types = {
+        "customer_collection", "customer_advance", "supplier_payment", "supplier_advance",
+    }
+    if transaction_type in party_required_types:
+        if counterparty_id is None:
+            return []
+        party = db.get(Counterparty, counterparty_id)
+        expected_party_types = (
+            ("Customer", "Mixed")
+            if transaction_type in ("customer_collection", "customer_advance")
+            else ("Supplier", "Contractor", "Mixed")
+        )
+        if party is None or not party.is_active or party.party_type not in expected_party_types:
+            raise HTTPException(422, "بطاقة العميل أو المورد/المقاول غير صحيحة لنوع الحركة")
+        linked_id = party.linked_account_id or party.account_id
+        linked = db.get(Account, linked_id) if linked_id else None
+        classification = db.get(AccountClassification, linked.classification_id) if linked else None
+        if (linked is None or not linked.is_active or classification is None
+                or classification.name_ar not in config["classifications"]):
+            raise HTTPException(422, "بطاقة الطرف غير مرتبطة بحساب فرعي مناسب لنوع الحركة")
+        if db.scalar(select(Account.account_id).where(Account.parent_account_id == linked.account_id).limit(1)):
+            raise HTTPException(422, "حساب الطرف المرتبط يجب أن يكون حسابًا فرعيًا")
+        posting_side = "credit" if direction == "inflow" else "debit"
+        side_ar = "دائن بالقيد" if direction == "inflow" else "مدين بالقيد"
+        return [{
+            "account_id": linked.account_id,
+            "label": f"{linked.account_code} — {linked.account_name_ar} ({side_ar})",
+            "classification": classification.name_ar,
+            "statement_type": classification.statement_type,
+            "normal_balance": linked.normal_balance,
+            "posting_side": posting_side,
+        }]
     parents = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
     if transaction_type == "cash_transfer":
         # Transfers must target another configured USD treasury/bank account,
@@ -276,7 +309,7 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
             .order_by(Account.account_code).limit(500)
         ).all()
     posting_side = "credit" if direction == "inflow" else "debit"
-    side_ar = "دائن" if direction == "inflow" else "مدين"
+    side_ar = "دائن بالقيد" if direction == "inflow" else "مدين بالقيد"
     return [{"account_id": a.account_id, "label": f"{a.account_code} — {a.account_name_ar} ({side_ar})",
              "classification": cl.name_ar, "statement_type": cl.statement_type,
              "normal_balance": a.normal_balance, "posting_side": posting_side} for a, cl in rows]
