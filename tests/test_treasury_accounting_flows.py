@@ -22,7 +22,10 @@ class FakeDB:
         return None
 
     def scalars(self, statement):
-        return SimpleNamespace(all=lambda: [])
+        class ScalarRows(list):
+            def all(self):
+                return list(self)
+        return ScalarRows()
 
     def scalar(self, statement):
         return self.transfer_target
