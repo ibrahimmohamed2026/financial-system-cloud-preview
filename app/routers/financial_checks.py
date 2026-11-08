@@ -83,7 +83,7 @@ class AllocationIn(BaseModel):
 
 
 
-def _flow_account_ids(check_type: str, party_account_id: int, bank_gl_account_id: int) -> tuple[int, int]:
+def _flow_account_ids(check_type: str, party_account_id: int, bank_gl_account_id: int | None) -> tuple[int | None, int | None]:
     """Return (source, destination) GL accounts for the cheque's actual settlement."""
     if check_type == "INCOMING":
         return party_account_id, bank_gl_account_id
@@ -97,7 +97,7 @@ def out(c, db=None):
     party = db.get(Account, c.party_account_id) if db is not None else None
     bank_gl = db.get(Account, bank.gl_account_id) if bank is not None else None
     source_id, destination_id = _flow_account_ids(
-        c.check_type, c.party_account_id, bank.gl_account_id if bank is not None else 0)
+        c.check_type, c.party_account_id, bank.gl_account_id if bank is not None else None)
     def label(account):
         return (f"{account.account_code} — {account.account_name_ar}"
                 if account is not None else "حساب غير مربوط")
