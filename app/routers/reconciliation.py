@@ -3,14 +3,16 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from ..common import money
 from ..database import get_db
 from ..deps import require_permission, write_audit
-from ..models import BankReconciliation, BankReconciliationLine, TreasuryAccount, User
-from .treasury import balance_of
+from ..models import (
+    Account, BankReconciliation, BankReconciliationLine, JournalEntry,
+    JournalEntryDetail, TreasuryAccount, User,
+)
 
 SCREEN = "BankReconciliation"
 router = APIRouter(prefix="/reconciliations", tags=["BankReconciliation"])
@@ -42,6 +44,46 @@ class LineIn(BaseModel):
 
 class MatchIn(BaseModel):
     is_matched: bool
+
+
+def posted_book_balance(db: Session, treasury: TreasuryAccount, upto: date | None = None) -> Decimal:
+    """Return the linked GL balance from Posted entries only, in the bank account currency.
+
+    EGP accounts use the functional-currency debit/credit amounts plus the GL opening
+    balance. Foreign-currency accounts use JournalEntryDetail.FcyAmount and deliberately
+    do not mix EGP opening balances into the foreign-currency statement balance.
+    """
+    detail = JournalEntryDetail
+    entry = JournalEntry
+    filters = [
+        detail.account_id == treasury.gl_account_id,
+        entry.status == "Posted",
+    ]
+    if upto is not None:
+        filters.append(entry.entry_date <= upto)
+
+    if treasury.currency_code == "EGP":
+        amount = func.coalesce(func.sum(detail.debit_amount - detail.credit_amount), 0)
+    else:
+        signed_fcy = case(
+            (detail.debit_amount > 0, func.coalesce(detail.fcy_amount, 0)),
+            (detail.credit_amount > 0, -func.coalesce(detail.fcy_amount, 0)),
+            else_=0,
+        )
+        amount = func.coalesce(func.sum(signed_fcy), 0)
+
+    posted = db.scalar(
+        select(amount)
+        .select_from(detail)
+        .join(entry, entry.journal_entry_id == detail.journal_entry_id)
+        .where(*filters)
+    )
+    balance = Decimal(posted or 0)
+    if treasury.currency_code == "EGP":
+        gl = db.get(Account, treasury.gl_account_id)
+        if gl is not None:
+            balance += Decimal(gl.opening_debit or 0) - Decimal(gl.opening_credit or 0)
+    return balance
 
 
 def _rec(db: Session, rid: int) -> BankReconciliation:
@@ -97,7 +139,7 @@ def create(body: RecIn, user: User = Depends(require_permission(SCREEN, "Add")),
     if a is None or a.account_type != "Bank":
         raise HTTPException(400, "حساب البنك غير صحيح")
     r = BankReconciliation(treasury_account_id=a.treasury_account_id, reconciliation_date=body.reconciliation_date,
-                           book_balance=balance_of(db, a.treasury_account_id, body.reconciliation_date),
+                           book_balance=posted_book_balance(db, a, body.reconciliation_date),
                            statement_balance=body.statement_balance, prepared_by=user.user_id, notes=body.notes)
     db.add(r)
     db.flush()
