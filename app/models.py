@@ -278,8 +278,12 @@ class Check(Base):
 class FinancialCheck(Base):
     """سجل شيكات محاسبي إضافي؛ لا يغيّر جدول Checks القديم."""
     __tablename__ = "FinancialChecks"
+    __table_args__ = (
+        UniqueConstraint("CheckType", "TreasuryAccountId", "CheckNumber",
+                         name="UQ_FinancialChecks_Type_Bank_Number"),
+    )
     check_id: Mapped[int] = C("CheckId", BigPK, primary_key=True)
-    check_number: Mapped[str] = C("CheckNumber", Unicode(50), unique=True)
+    check_number: Mapped[str] = C("CheckNumber", Unicode(50))
     check_type: Mapped[str] = C("CheckType", Unicode(20))  # INCOMING / OUTGOING
     amount: Mapped[Decimal] = C("Amount", Numeric(18, 2))
     due_date: Mapped[date] = C("DueDate", Date)
