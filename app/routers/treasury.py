@@ -377,6 +377,8 @@ def _check_project(db: Session, pid: int | None):
 
 def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
                         body: TxIn, user: User, *, allow_legacy: bool = False) -> str:
+    if t.journal_entry_id is not None:
+        raise HTTPException(409, "حركة الخزينة مرتبطة بقيد بالفعل؛ لا يمكن إنشاء قيد مكرر")
     if body.exchange_rate is None or body.counterpart_account_id is None:
         raise HTTPException(422, "حركة الدولار تتطلب سعر الصرف وحساب الطرف المقابل")
     if body.counterpart_account_id == a.gl_account_id:
@@ -439,12 +441,68 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
         raise HTTPException(422, "القيمة المقابلة بالجنيه لازم تكون أكبر من صفر")
 
     cash_egp = spot_egp
+    counterpart_egp = spot_egp
     cash_rate = body.exchange_rate
     fx_difference = Decimal("0")
     fx_account = None
     cash_is_debit = body.inflow > 0
 
-    if not cash_is_debit:
+    if body.transaction_type == "cash_transfer":
+        # A transfer carries the source account's historical book value.
+        # It is not a realized FX gain/loss merely because the spot rate changed.
+        source_gl_id = a.gl_account_id if not cash_is_debit else counterpart.account_id
+        source_treasury = db.scalar(select(TreasuryAccount).where(
+            TreasuryAccount.gl_account_id == source_gl_id,
+            TreasuryAccount.currency_code == "USD",
+            TreasuryAccount.is_active == True,
+        ))
+        if source_treasury is None:
+            raise HTTPException(400, "حساب مصدر التحويل لازم يكون بنكًا أو خزينة نشطة بالدولار")
+        # The source may be the counterpart account when the selected movement is an inflow.
+        # Block transfers while that source has unlinked legacy movements or draft journals;
+        # otherwise the carrying value below would ignore pending withdrawals.
+        if source_treasury.treasury_account_id != a.treasury_account_id:
+            source_unlinked = db.scalar(
+                select(func.count()).select_from(TreasuryTransaction).where(
+                    TreasuryTransaction.treasury_account_id == source_treasury.treasury_account_id,
+                    TreasuryTransaction.journal_entry_id.is_(None),
+                )
+            ) or 0
+            source_pending = db.scalar(
+                select(func.count()).select_from(TreasuryTransaction).join(
+                    JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id
+                ).where(
+                    TreasuryTransaction.treasury_account_id == source_treasury.treasury_account_id,
+                    JournalEntry.status == "Draft",
+                )
+            ) or 0
+            if source_unlinked:
+                raise HTTPException(409, "يوجد حركات دولار قديمة غير مرتبطة بقيود في حساب مصدر التحويل؛ راجعها أولًا")
+            if source_pending:
+                raise HTTPException(409, "يوجد قيد دولار مسودة على حساب مصدر التحويل؛ رحّله أو ألغِه قبل التحويل")
+        posted_rows = db.execute(
+            select(JournalEntryDetail.fcy_amount, JournalEntryDetail.debit_amount,
+                   JournalEntryDetail.credit_amount)
+            .join(JournalEntry, JournalEntry.journal_entry_id == JournalEntryDetail.journal_entry_id)
+            .where(JournalEntryDetail.account_id == source_gl_id,
+                   JournalEntry.status == "Posted",
+                   JournalEntryDetail.fcy_amount.is_not(None))
+        ).all()
+        usd_carrying = sum(
+            (r.fcy_amount if r.debit_amount > 0 else -r.fcy_amount for r in posted_rows),
+            Decimal("0"),
+        )
+        egp_carrying = sum(
+            (r.debit_amount - r.credit_amount for r in posted_rows),
+            Decimal("0"),
+        )
+        if usd_carrying < amount_usd or usd_carrying <= 0 or egp_carrying <= 0:
+            raise HTTPException(409, "الرصيد الدولاري المرحّل في حساب مصدر التحويل غير كافٍ أو لا توجد تكلفة دفترية موثقة")
+        carrying_rate = egp_carrying / usd_carrying
+        cash_egp = (amount_usd * carrying_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        cash_rate = (cash_egp / amount_usd).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+        counterpart_egp = cash_egp
+    elif not cash_is_debit:
         posted_rows = db.execute(
             select(JournalEntryDetail.fcy_amount, JournalEntryDetail.debit_amount,
                    JournalEntryDetail.credit_amount)
@@ -495,9 +553,9 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
         JournalEntryDetail(
             journal_entry_id=entry.journal_entry_id, line_no=2,
             account_id=counterpart.account_id, project_id=body.project_id,
-            debit_amount=Decimal("0") if cash_is_debit else spot_egp,
-            credit_amount=spot_egp if cash_is_debit else Decimal("0"),
-            fcy_amount=amount_usd, exchange_rate=body.exchange_rate,
+            debit_amount=Decimal("0") if cash_is_debit else counterpart_egp,
+            credit_amount=counterpart_egp if cash_is_debit else Decimal("0"),
+            fcy_amount=amount_usd, exchange_rate=cash_rate if body.transaction_type == "cash_transfer" else body.exchange_rate,
             description=body.description or "الطرف المقابل لحركة الخزينة",
         ),
     ])
@@ -597,6 +655,50 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     return entry.entry_no
 
 
+def _create_usd_transfer_mirror(db: Session, source: TreasuryAccount, original: TreasuryTransaction,
+                                   body: TxIn, user: User) -> TreasuryTransaction | None:
+    """Create the opposite operational USD movement; both rows share one balanced journal."""
+    if body.transaction_type != "cash_transfer":
+        return None
+    target = db.scalar(select(TreasuryAccount).where(
+        TreasuryAccount.gl_account_id == body.counterpart_account_id,
+        TreasuryAccount.currency_code == "USD",
+        TreasuryAccount.is_active == True,
+        TreasuryAccount.treasury_account_id != source.treasury_account_id,
+    ))
+    if target is None:
+        raise HTTPException(400, "حساب التحويل المقابل غير مربوط ببنك أو خزينة نشطة بالدولار")
+    if original.journal_entry_id is None:
+        raise HTTPException(409, "لا يمكن إنشاء الحركة المقابلة قبل إنشاء قيد اليومية")
+    mirror = TreasuryTransaction(
+        treasury_account_id=target.treasury_account_id,
+        transaction_date=body.transaction_date,
+        inflow=body.outflow,
+        outflow=body.inflow,
+        description=body.description or f"تحويل مقابل من {source.name_ar}",
+        voucher_no=body.voucher_no,
+        status=body.status,
+        recipient_name=body.recipient_name,
+        project_id=body.project_id,
+        exchange_rate=body.exchange_rate,
+        counterpart_account_id=source.gl_account_id,
+        counterparty_id=None,
+        transaction_type="cash_transfer",
+        journal_entry_id=original.journal_entry_id,
+    )
+    db.add(mirror)
+    db.flush()
+    write_audit(db, user.user_id, "Create", "TreasuryTransactions", mirror.transaction_id, None, {
+        "source": "USDTransferMirror",
+        "source_transaction_id": original.transaction_id,
+        "journal_entry_id": original.journal_entry_id,
+        "treasury_account_id": target.treasury_account_id,
+        "inflow": str(mirror.inflow),
+        "outflow": str(mirror.outflow),
+    })
+    return mirror
+
+
 def _create_egp_transfer_mirror(db: Session, source: TreasuryAccount, original: TreasuryTransaction,
                                   body: TxIn, user: User) -> TreasuryTransaction | None:
     """Create the opposite operational bank/cash movement for an EGP transfer.
@@ -693,7 +795,9 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
     db.flush()
     journal_no = (_create_usd_journal(db, a, t, body, user) if a.currency_code == "USD"
                   else _create_egp_journal(db, a, t, body, user))
-    if a.currency_code == "EGP":
+    if a.currency_code == "USD":
+        _create_usd_transfer_mirror(db, a, t, body, user)
+    else:
         _create_egp_transfer_mirror(db, a, t, body, user)
     write_audit(db, user.user_id, "Create", "TreasuryTransactions", t.transaction_id, None, body.model_dump())
     db.commit()
@@ -755,7 +859,12 @@ def edit_tx(screen_code: str, tid: int, body: TxIn,
     for k, v in body.model_dump(exclude={"treasury_account_id"}).items():
         setattr(t, k, v)
     t.treasury_account_id = target_account.treasury_account_id
-    journal_no = _create_usd_journal(db, target_account, t, body, user, allow_legacy=True) if target_account.currency_code == "USD" else None
+    if target_account.currency_code == "USD":
+        journal_no = _create_usd_journal(db, target_account, t, body, user, allow_legacy=True)
+        _create_usd_transfer_mirror(db, target_account, t, body, user)
+    else:
+        journal_no = _create_egp_journal(db, target_account, t, body, user)
+        _create_egp_transfer_mirror(db, target_account, t, body, user)
     write_audit(db, user.user_id, "Update", "TreasuryTransactions", tid, old, body.model_dump())
     db.commit()
     return {"transaction_id": tid, "journal_entry_no": journal_no, "journal_status": "Draft" if journal_no else None}
