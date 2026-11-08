@@ -67,6 +67,7 @@ class TxIn(BaseModel):
     project_id: int | None = None
     exchange_rate: Decimal | None = Field(default=None, gt=0, max_digits=18, decimal_places=6)
     counterpart_account_id: int | None = Field(default=None, gt=0)
+    treasury_account_id: int | None = Field(default=None, gt=0)
     counterparty_id: int | None = Field(default=None, gt=0)
     transaction_type: str | None = Field(default=None, max_length=40)
 
@@ -184,6 +185,25 @@ def gl_list(screen_code: str, q: str | None = None, _: User = Depends(require_dy
             for a in db.scalars(stmt.order_by(Account.account_code).limit(300))]
 
 
+@router.get("/{screen_code}/available-accounts")
+def available_accounts(screen_code: str, _: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
+                       db: Session = Depends(get_db)):
+    """List active cash/bank accounts in the screen currency for movement selection."""
+    current = _bound(db, screen_code)
+    rows = db.scalars(select(TreasuryAccount).where(
+        TreasuryAccount.is_active == True,
+        TreasuryAccount.currency_code == current.currency_code,
+    ).order_by(TreasuryAccount.account_type, TreasuryAccount.name_ar)).all()
+    return [{
+        "treasury_account_id": row.treasury_account_id,
+        "name_ar": row.name_ar,
+        "account_type": row.account_type,
+        "currency_code": row.currency_code,
+        "label": f"{row.name_ar} — {'بنك' if row.account_type == 'Bank' else 'خزينة'} — {row.currency_code}",
+        "is_current": row.treasury_account_id == current.treasury_account_id,
+    } for row in rows]
+
+
 @router.get("/{screen_code}/counterpart-accounts")
 def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="^(inflow|outflow)$"),
                          transaction_type: str = Query(..., min_length=1, max_length=40),
@@ -267,9 +287,13 @@ def update_account_gl(screen_code: str, body: GLAccountLinkIn,
 
 @router.get("/{screen_code}/transactions")
 def transactions(screen_code: str, date_from: date | None = None, date_to: date | None = None, q: str | None = None,
+                 treasury_account_id: int | None = Query(None, gt=0),
                  skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500),
                  _: User = Depends(require_dynamic("View", set(BANK_SCREENS))), db: Session = Depends(get_db)):
-    a = _bound(db, screen_code)
+    screen_account = _bound(db, screen_code)
+    a = db.get(TreasuryAccount, treasury_account_id) if treasury_account_id else screen_account
+    if a is None or not a.is_active or a.currency_code != screen_account.currency_code:
+        raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
     tid = a.treasury_account_id
     T = TreasuryTransaction
     opening = D0
@@ -291,6 +315,8 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
         tin += t.inflow
         tout += t.outflow
         out.append({"transaction_id": t.transaction_id, "transaction_date": t.transaction_date,
+                    "treasury_account_id": a.treasury_account_id, "treasury_account_name": a.name_ar,
+                    "treasury_account_type": a.account_type,
                     "inflow": money(t.inflow), "outflow": money(t.outflow), "balance": money(run),
                     "description": t.description, "voucher_no": t.voucher_no, "status": t.status,
                     "recipient_name": t.recipient_name, "project_id": t.project_id,
@@ -580,9 +606,12 @@ def _create_egp_transfer_mirror(db: Session, source: TreasuryAccount, original: 
 @router.post("/{screen_code}/transactions", status_code=201)
 def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
            db: Session = Depends(get_db)):
-    a = _bound(db, screen_code)
+    screen_account = _bound(db, screen_code)
+    a = db.get(TreasuryAccount, body.treasury_account_id) if body.treasury_account_id else screen_account
+    if a is None or not a.is_active or a.currency_code != screen_account.currency_code:
+        raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
     _check_project(db, body.project_id)
-    values = body.model_dump()
+    values = body.model_dump(exclude={"treasury_account_id"})
     # Resolve the counterpart GL automatically from the selected customer/supplier master.
     if body.counterparty_id:
         party = db.get(Counterparty, body.counterparty_id)
