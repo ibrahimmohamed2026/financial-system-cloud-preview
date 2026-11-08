@@ -638,9 +638,11 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
 
 
 def _tx(db: Session, screen_code: str, tid: int) -> TreasuryTransaction:
-    a = _bound(db, screen_code)
+    screen_account = _bound(db, screen_code)
     t = db.get(TreasuryTransaction, tid)
-    if t is None or t.treasury_account_id != a.treasury_account_id:
+    movement_account = db.get(TreasuryAccount, t.treasury_account_id) if t else None
+    if (t is None or movement_account is None or not movement_account.is_active
+            or movement_account.currency_code != screen_account.currency_code):
         raise HTTPException(404, "الحركة غير موجودة")
     if t.journal_entry_id is not None:
         raise HTTPException(409, "الحركة مرتبطة بقيد يومية — مينفعش تتعدّل أو تتحذف")
