@@ -152,7 +152,7 @@ def create(body: CheckIn, user: User = Depends(require_any(SCREENS, "Add")), db:
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, "رقم الشيك مستخدم بالفعل")
-    return out(c)
+    return out(c, db)
 
 @router.post("/{cid}/status")
 def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREENS, "Edit")), db: Session = Depends(get_db)):
@@ -231,19 +231,19 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
                     inflow=Decimal("0"), outflow=_money(allocation.allocated_amount),
                     description=f"صرف شيك {c.check_number} للمستخلص {allocation.settlement_id}",
                     voucher_no=f"{voucher_no}-A{allocation.allocation_id}", status="تم الصرف",
-                    settlement_id=allocation.settlement_id, journal_entry_id=entry.journal_entry_id))
+                    counterpart_account_id=party.account_id, settlement_id=allocation.settlement_id, journal_entry_id=entry.journal_entry_id))
             unallocated = _money(amount - allocated_total)
             if unallocated > 0:
                 db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=entry_date,
                     inflow=Decimal("0"), outflow=unallocated,
                     description=f"صرف غير موزع من شيك {c.check_number}", voucher_no=voucher_no,
-                    status="تم الصرف", journal_entry_id=entry.journal_entry_id))
+                    status="تم الصرف", counterpart_account_id=party.account_id, journal_entry_id=entry.journal_entry_id))
     old_status = c.status
     c.status = new_status
     db.add(FinancialCheckStatusHistory(check_id=cid, old_status=old_status, new_status=new_status, changed_by=user.user_id))
     write_audit(db, user.user_id, "Update", "FinancialChecks", cid, {"status": old_status}, {"status": new_status})
     db.commit()
-    return out(c)
+    return out(c, db)
 
 @router.post("/{cid}/project")
 def set_project(cid: int, body: ProjectLinkIn, user: User = Depends(require_any(SCREENS, "Edit")), db: Session = Depends(get_db)):
@@ -258,7 +258,7 @@ def set_project(cid: int, body: ProjectLinkIn, user: User = Depends(require_any(
     write_audit(db, user.user_id, "UpdateProject", "FinancialChecks", cid,
                 {"project_id": old}, {"project_id": c.project_id})
     db.commit()
-    return out(c)
+    return out(c, db)
 
 @router.get("/export.csv")
 def export_csv(_: User = Depends(require_any(SCREENS, "View")), db: Session = Depends(get_db)):
