@@ -15,7 +15,7 @@ export async function render(main, { api, auth, route }) {
     <div class="toolbar"><div class="w" style="width:150px"><label>${tr("من","From")}</label><input type="date" id="df"></div><div class="w" style="width:150px"><label>${tr("إلى","To")}</label><input type="date" id="dt"></div>
     <div class="grow"><label>${tr("بحث","Search")}</label><input id="q"></div>${can("Add") ? `<button class="btn primary" id="add">+ ${tr("حركة","Transaction")}</button>` : ""}</div>
     <div id="sum" class="muted" style="margin-bottom:8px"></div>
-    <div class="tbl-wrap"><table><thead><tr><th>${tr("التاريخ","Date")}</th><th>${tr("البنك / الخزينة","Bank / Cash")}</th><th>${tr("وارد","Inflow")}</th><th>${tr("منصرف","Outflow")}</th><th>${tr("الرصيد","Balance")}</th><th>${tr("البيان","Description")}</th>${`<th>${tr("نوع الحركة","Transaction type")}</th>`}${acc.currency_code === "USD" ? `<th>${tr("سعر الصرف","Exchange rate")}</th>` : ""}<th>${tr("رقم الإذن","Voucher No.")}</th><th>${tr("الحالة","Status")}</th><th>${tr("المستلم","Recipient")}</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
+    <div class="tbl-wrap"><table><thead><tr><th>${tr("التاريخ","Date")}</th><th>${tr("من حساب","From account")}</th><th>${tr("إلى حساب","To account")}</th><th>${tr("وارد","Inflow")}</th><th>${tr("منصرف","Outflow")}</th><th>${tr("الرصيد","Balance")}</th><th>${tr("البيان","Description")}</th>${`<th>${tr("نوع الحركة","Transaction type")}</th>`}${acc.currency_code === "USD" ? `<th>${tr("سعر الصرف","Exchange rate")}</th>` : ""}<th>${tr("رقم الإذن","Voucher No.")}</th><th>${tr("الحالة","Status")}</th><th>${tr("المستلم","Recipient")}</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
   const $ = s => main.querySelector(s); let items = [];
   $("#edit-gl-link")?.addEventListener("click", safe(() => setup(info, true)));
   const load = async () => {
@@ -23,10 +23,10 @@ export async function render(main, { api, auth, route }) {
     p.set("treasury_account_id", selectedTreasuryId);
     const r = await api(base + "/transactions?" + p); items = r.items;
     $("#sum").innerHTML = `${tr("رصيد أول الفترة:","Opening balance:")} <b>${money(r.opening_balance) === "-" ? "0.00" : money(r.opening_balance)}</b> — ${tr("وارد:","Inflow:")} <b>${money(r.total_inflow)}</b> — ${tr("منصرف:","Outflow:")} <b>${money(r.total_outflow)}</b> — ${tr("الرصيد الحالي:","Current balance:")} <b>${money(r.closing_balance) === "-" ? "0.00" : money(r.closing_balance)}</b>${r.total > 500 ? ` — (${tr("معروض أول 500 حركة","First 500 transactions shown")})` : ""}`;
-    $("#rows").innerHTML = items.map(t => `<tr><td>${t.transaction_date}</td><td>${esc(t.treasury_account_name || acc.name_ar)}</td><td class="num">${money(t.inflow)}</td><td class="num">${money(t.outflow)}</td><td class="num">${money(t.balance) === "-" ? "0.00" : money(t.balance)}</td>
+    $("#rows").innerHTML = items.map(t => `<tr><td>${t.transaction_date}</td><td>${esc(+t.inflow > 0 ? (t.counterpart_account_label || "—") : (t.treasury_account_name || acc.name_ar))}</td><td>${esc(+t.inflow > 0 ? (t.treasury_account_name || acc.name_ar) : (t.counterpart_account_label || "—"))}</td><td class="num">${money(t.inflow)}</td><td class="num">${money(t.outflow)}</td><td class="num">${money(t.balance) === "-" ? "0.00" : money(t.balance)}</td>
       <td>${esc(t.description)}</td>${`<td>${esc(USD_TX_LABELS[t.transaction_type] || "—")}</td>`}${acc.currency_code === "USD" ? `<td class="num">${t.exchange_rate ? Number(t.exchange_rate).toFixed(6) : "—"}</td>` : ""}<td>${esc(t.voucher_no)}</td><td>${esc(t.status)}</td><td>${esc(t.recipient_name)}</td>
       <td>${t.locked ? `<span class="tag">${tr("مرتبط بقيد","Linked to journal entry")}</span>` : acc.currency_code === "EGP" ? `<span class="tag muted">${tr("حركة قديمة غير مرتبطة — للمراجعة","Legacy movement — reconciliation required")}</span>` : `${can("Edit") ? `<button class="btn sm" data-e="${t.transaction_id}">${tr("تعديل","Edit")}</button> ` : ""}${can("Delete") ? `<button class="btn sm danger" data-d="${t.transaction_id}">${tr("حذف","Delete")}</button>` : ""}`}</td></tr>`).join("")
-      || `<tr><td colspan="${acc.currency_code === "USD" ? 12 : 11}" class="muted">${tr("لا توجد حركات","No transactions")}</td></tr>`;
+      || `<tr><td colspan="${acc.currency_code === "USD" ? 13 : 12}" class="muted">${tr("لا توجد حركات","No transactions")}</td></tr>`;
   };
   const form = async t => {
     const initialDirection = t ? (+t.inflow > 0 ? "inflow" : "outflow") : "inflow";
@@ -52,7 +52,7 @@ export async function render(main, { api, auth, route }) {
         ], required: true, full: true },
       ...(acc.currency_code === "USD" ? [{ name: "exchange_rate", label: tr("سعر الدولار مقابل الجنيه","USD exchange rate to EGP"), type: "number", step: "0.000001", min: "0.000001", required: true }] : []),
       { name: "counterparty_id", label: tr("بطاقة العميل / المورد / المقاول (للحركات المرتبطة بطرف)","Customer / supplier / contractor record (for party transactions)"), type: "select", searchable: true, options: initialParties.map(p => [String(p.counterparty_id), p.label]), required: ["customer_collection","customer_advance","supplier_payment","supplier_advance"].includes(initialType), full: true },
-      { name: "counterpart_account_id", label: tr("حساب الطرف المقابل","Counterpart account"), type: "select", searchable: true, options: initialCounterparts.map(a => [String(a.account_id), a.label]), required: true, full: true },
+      { name: "counterpart_account_id", label: tr("الحساب المقابل (من حساب / إلى حساب)","Counterpart account (From / To)"), type: "select", searchable: true, options: initialCounterparts.map(a => [String(a.account_id), a.label]), required: true, full: true },
       { name: "voucher_no", label: tr("رقم الإذن","Voucher No.") }, { name: "inflow", label: tr("وارد","Inflow"), type: "number", step: "0.01", min: 0 }, { name: "outflow", label: tr("منصرف","Outflow"), type: "number", step: "0.01", min: 0 },
       { name: "description", label: tr("البيان","Description"), full: true }, { name: "status", label: tr("الحالة (مثال: تمويل)","Status (e.g. Funding)") }, { name: "recipient_name", label: tr("المستلم","Recipient") },
       { name: "project_id", label: tr("مركز التكلفة (اختياري عند ارتباط الحركة بمشروع)","Cost center (optional; select when the movement relates to a project)"), type: "select", optional: true, options: projs.map(p => [p.project_id, p.name_ar]), full: true }],
@@ -170,12 +170,22 @@ export async function render(main, { api, auth, route }) {
       const updateHint = () => {
         const d = currentDirection(), type = typeSelect.value;
         const compatible = type && (typeDirections[type] === d || typeDirections[type] === "either");
+        const cashLabel = accountSelect.options[accountSelect.selectedIndex]?.text || "حساب البنك / الخزينة";
+        const counterpartLabel = directionSelect.options[directionSelect.selectedIndex]?.text || "الحساب المقابل";
+        const routeLabel = d === "inflow"
+          ? "من حساب " + counterpartLabel + " إلى حساب " + cashLabel
+          : "من حساب " + cashLabel + " إلى حساب " + counterpartLabel;
+        const accountingHint = d === "inflow"
+          ? "الوارد: البنك/الخزينة مدين والحساب المقابل دائن."
+          : "المنصرف: الحساب المقابل مدين والبنك/الخزينة دائن.";
         sideHint.textContent = !type ? "اختَر نوع الحركة أولًا لعرض الحسابات المناسبة."
           : !compatible ? "نوع الحركة لا يتوافق مع اتجاه الوارد أو المنصرف؛ غيّر نوع الحركة."
-          : d === "inflow" ? "الوارد: حساب الطرف المقابل يظهر في الجانب الدائن من القيد."
-          : "المنصرف: حساب الطرف المقابل يظهر في الجانب المدين من القيد.";
+          : routeLabel + " — " + accountingHint;
       };
       typeSelect.addEventListener("change", updateHint);
+      directionSelect.addEventListener("change", updateHint);
+      accountSelect.addEventListener("change", updateHint);
+      partySelect.addEventListener("change", updateHint);
       inflow.addEventListener("input", updateHint); outflow.addEventListener("input", updateHint);
       updateHint();
     } });
