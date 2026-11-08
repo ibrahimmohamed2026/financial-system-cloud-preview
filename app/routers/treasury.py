@@ -425,9 +425,10 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
         counterpart = db.get(Account, t.counterpart_account_id) if t.counterpart_account_id else None
         counterpart_label = (f"{counterpart.account_code} — {counterpart.account_name_ar}"
                              if counterpart else "حساب غير محدد")
-        treasury_label = f"{a.gl_account_id} — {a.name_ar}"
-        from_label, to_label = ((counterpart_label, treasury_label) if t.inflow > 0
-                                else (treasury_label, counterpart_label))
+        treasury_gl = db.get(Account, a.gl_account_id)
+        treasury_label = (f"{treasury_gl.account_code} — {treasury_gl.account_name_ar}"
+                          if treasury_gl else a.name_ar)
+        from_label, to_label = _movement_route(treasury_label, counterpart_label, t.inflow > 0)
         out.append({"transaction_id": t.transaction_id, "transaction_date": t.transaction_date,
                     "treasury_account_id": a.treasury_account_id, "treasury_account_name": a.name_ar,
                     "treasury_account_type": a.account_type,
