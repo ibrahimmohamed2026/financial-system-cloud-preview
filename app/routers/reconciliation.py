@@ -95,8 +95,20 @@ def _rec(db: Session, rid: int) -> BankReconciliation:
 
 def _out(db: Session, r: BankReconciliation, lines: bool = False) -> dict:
     a = db.get(TreasuryAccount, r.treasury_account_id)
+    gl = db.get(Account, a.gl_account_id) if a else None
+    opening_balance_warning = None
+    if a and a.currency_code != "EGP" and gl and (gl.opening_debit or 0) != 0 or (
+        a and a.currency_code != "EGP" and gl and (gl.opening_credit or 0) != 0
+    ):
+        opening_balance_warning = (
+            "يوجد رصيد افتتاحي مسجل بالجنيه في شجرة الحسابات، ولا يمكن تحويله تلقائيًا إلى "
+            f"{a.currency_code}؛ يلزم إدخال/تسوية الرصيد الافتتاحي بالعملة الأصلية قبل الاعتماد."
+        )
     out = {"reconciliation_id": r.reconciliation_id, "treasury_account_id": r.treasury_account_id,
            "account_name": a.name_ar if a else None, "currency_code": a.currency_code if a else None,
+           "book_balance_currency": a.currency_code if a else None,
+           "book_balance_basis": "FcyAmount" if a and a.currency_code != "EGP" else "DebitAmount-CreditAmount",
+           "opening_balance_warning": opening_balance_warning,
            "reconciliation_date": r.reconciliation_date, "book_balance": money(r.book_balance),
            "statement_balance": money(r.statement_balance),
            "difference": money(Decimal(r.statement_balance) - Decimal(r.book_balance)), "notes": r.notes}
