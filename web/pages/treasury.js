@@ -32,7 +32,7 @@ export async function render(main, { api, auth, route }) {
     const initialDirection = t ? (+t.inflow > 0 ? "inflow" : "outflow") : "inflow";
     const initialType = t?.transaction_type || "";
     const initialCounterparts = initialType
-      ? await api(base + "/counterpart-accounts?direction=" + initialDirection + "&transaction_type=" + encodeURIComponent(initialType)).catch(() => []) : [];
+      ? await api(base + "/counterpart-accounts?direction=" + initialDirection + "&transaction_type=" + encodeURIComponent(initialType) + "&treasury_account_id=" + encodeURIComponent(t?.treasury_account_id || selectedTreasuryId)).catch(() => []) : [];
     return formDialog({
     title: t ? tr("تعديل حركة","Edit transaction") : tr("حركة جديدة","New transaction"), values: t ? { ...t, inflow: +t.inflow || "", outflow: +t.outflow || "", project_id: t.project_id ?? "", transaction_type: t.transaction_type || "", treasury_account_id: String(t.treasury_account_id || selectedTreasuryId) } : { transaction_date: today(), transaction_type: "", treasury_account_id: selectedTreasuryId },
     fields: [{ name: "transaction_date", label: tr("التاريخ","Date"), type: "date", required: true },
@@ -65,6 +65,7 @@ export async function render(main, { api, auth, route }) {
     },
     onOpen: (dlg, formEl) => {
       const directionSelect = formEl.elements.namedItem("counterpart_account_id");
+      const accountSelect = formEl.elements.namedItem("treasury_account_id");
       const typeSelect = formEl.elements.namedItem("transaction_type");
       const inflow = formEl.elements.namedItem("inflow"), outflow = formEl.elements.namedItem("outflow");
       const typeDirections = { funding: "inflow", customer_collection: "inflow", customer_advance: "inflow", direct_income: "inflow",
@@ -80,7 +81,8 @@ export async function render(main, { api, auth, route }) {
             directionSelect.innerHTML = '<option value="">—</option>';
             return;
           }
-          const options = await api(base + "/counterpart-accounts?direction=" + direction + "&transaction_type=" + encodeURIComponent(transactionType));
+          const accountSelect = formEl.elements.namedItem("treasury_account_id");
+          const options = await api(base + "/counterpart-accounts?direction=" + direction + "&transaction_type=" + encodeURIComponent(transactionType) + "&treasury_account_id=" + encodeURIComponent(accountSelect.value));
           directionSelect.innerHTML = '<option value="">—</option>' + options.map(a =>
             `<option value="${String(a.account_id)}">${esc(a.label)}</option>`).join("");
           if (options.some(a => String(a.account_id) === selected)) directionSelect.value = selected;
@@ -96,6 +98,7 @@ export async function render(main, { api, auth, route }) {
         else { inflow.disabled = false; outflow.disabled = false; }
       };
       typeSelect.addEventListener("change", () => { applyDirectionFromType(); refreshCounterparts(currentDirection()).catch(e => toast(errText(e))); });
+      accountSelect.addEventListener("change", () => refreshCounterparts(currentDirection()).catch(e => toast(errText(e))));
       applyDirectionFromType();
       inflow.addEventListener("input", () => { if (+inflow.value > 0) refreshCounterparts("inflow").catch(e => toast(errText(e))); });
       outflow.addEventListener("input", () => { if (+outflow.value > 0) refreshCounterparts("outflow").catch(e => toast(errText(e))); });
