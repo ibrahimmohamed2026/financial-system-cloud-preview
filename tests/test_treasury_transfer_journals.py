@@ -10,6 +10,7 @@ from app.routers.treasury import (
     BANK_SCREENS,
     USD_TRANSACTION_TYPES,
     TxIn,
+    _create_egp_journal,
     _create_usd_journal,
     _create_usd_transfer_mirror,
 )
@@ -93,7 +94,7 @@ def test_usd_transfer_journal_uses_source_carrying_value_without_realized_fx(
             value.journal_entry_id = 77
 
     db.add.side_effect = assign_entry_id
-    movement = SimpleNamespace(journal_entry_id=None)
+    movement = SimpleNamespace(transaction_id=41, journal_entry_id=None)
     body = TxIn(
         transaction_date=date(2026, 11, 8),
         inflow=inflow,
