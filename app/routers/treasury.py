@@ -377,6 +377,8 @@ def _check_project(db: Session, pid: int | None):
 
 def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
                         body: TxIn, user: User, *, allow_legacy: bool = False) -> str:
+    if t.journal_entry_id is not None:
+        raise HTTPException(409, "حركة الخزينة مرتبطة بقيد بالفعل؛ لا يمكن إنشاء قيد مكرر")
     if body.exchange_rate is None or body.counterpart_account_id is None:
         raise HTTPException(422, "حركة الدولار تتطلب سعر الصرف وحساب الطرف المقابل")
     if body.counterpart_account_id == a.gl_account_id:
