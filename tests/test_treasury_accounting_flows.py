@@ -149,5 +149,7 @@ def test_egp_bank_to_cash_transfer_posts_one_journal_and_two_cash_movements(monk
     assert mirror.journal_entry_id == movement.journal_entry_id
 
 
-def test_cash_transfer_is_always_recorded_from_source_to_receiving_account():
-    assert treasury.USD_TRANSACTION_TYPES["cash_transfer"]["direction"] == "outflow"
+def test_cash_transfer_api_direction_is_source_outflow_only():
+    assert treasury.USD_TRANSACTION_TYPES["cash_transfer"]["direction"] == "either"
+    assert treasury._movement_direction_allowed("cash_transfer", "outflow")
+    assert not treasury._movement_direction_allowed("cash_transfer", "inflow")
