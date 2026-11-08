@@ -363,6 +363,11 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
                     "transaction_type": t.transaction_type,
                     "exchange_rate": str(t.exchange_rate) if t.exchange_rate is not None else None,
                     "counterpart_account_id": t.counterpart_account_id,
+                    "counterpart_account_label": (
+                        f"{db.get(Account, t.counterpart_account_id).account_code} — "
+                        f"{db.get(Account, t.counterpart_account_id).account_name_ar}"
+                        if t.counterpart_account_id and db.get(Account, t.counterpart_account_id) else None
+                    ),
                     "counterparty_id": t.counterparty_id,
                     "journal_entry_id": t.journal_entry_id,
                     "locked": t.journal_entry_id is not None})
