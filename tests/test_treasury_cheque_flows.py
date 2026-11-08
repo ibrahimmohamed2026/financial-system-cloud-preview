@@ -59,3 +59,16 @@ def test_invalid_financial_cheque_type_has_no_implicit_route():
     with pytest.raises(HTTPException) as exc:
         _flow_account_ids("UNKNOWN", 101, 201)
     assert exc.value.status_code == 422
+
+
+def test_cheque_status_lookup_uses_row_lock(monkeypatch):
+    cheque = SimpleNamespace(check_id=5, treasury_account_id=9)
+    db = MagicMock()
+    db.scalar.return_value = cheque
+    monkeypatch.setattr(checks, "_need", lambda _db, _screen: SimpleNamespace(treasury_account_id=9))
+
+    result = checks._chk(db, "ChecksCib", 5, for_update=True)
+
+    assert result is cheque
+    statement = db.scalar.call_args.args[0]
+    assert statement._for_update_arg is not None
