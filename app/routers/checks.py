@@ -178,7 +178,15 @@ def _words(amount, currency) -> str | None:
 
 
 def _out(c: Check, bname: str | None, pname: str | None, t: TreasuryAccount | None = None,
-         bacc: str | None = None, settlement_no: str | None = None) -> dict:
+         bacc: str | None = None, settlement_no: str | None = None, db: Session | None = None) -> dict:
+    beneficiary = db.get(Beneficiary, c.beneficiary_id) if db is not None else None
+    beneficiary_gl = db.get(Account, beneficiary.linked_account_id) if beneficiary and beneficiary.linked_account_id else None
+    bank_gl = db.get(Account, t.gl_account_id) if db is not None and t is not None else None
+    def account_label(account):
+        return (f"{account.account_code} — {account.account_name_ar}"
+                if account is not None else "حساب غير مربوط")
+    from_account = account_label(bank_gl)
+    to_account = account_label(beneficiary_gl)
     out = {"check_id": c.check_id, "check_book_no": c.check_book_no, "sequence_no": c.sequence_no,
            "check_no": c.check_no, "check_date": c.check_date, "beneficiary_id": c.beneficiary_id,
            "beneficiary": bname, "amount": money(c.amount) if c.amount is not None else None,
@@ -186,7 +194,11 @@ def _out(c: Check, bname: str | None, pname: str | None, t: TreasuryAccount | No
            "purchase_order_no": c.purchase_order_no, "project_id": c.project_id, "project": pname,
            "settlement_id": c.settlement_id, "settlement_no": settlement_no,
            "description": c.description, "print_date": c.print_date, "delivery_date": c.delivery_date,
-           "cash_date": c.cash_date, "status": c.status, "next_statuses": sorted(NEXT.get(c.status, set()))}
+           "cash_date": c.cash_date, "status": c.status, "next_statuses": sorted(NEXT.get(c.status, set())),
+           "from_account_id": bank_gl.account_id if bank_gl else None,
+           "to_account_id": beneficiary_gl.account_id if beneficiary_gl else None,
+           "from_account_label": from_account, "to_account_label": to_account,
+           "flow_stage": "عند الصرف"}
     if t is not None:
         out.update({"bank": t.name_ar, "bank_account_no": t.bank_account_number, "currency_code": t.currency_code,
                     "beneficiary_account_no": bacc, "treasury_account_id": t.treasury_account_id})
@@ -258,7 +270,7 @@ def _run(db: Session, account_ids: list[int], f: Filters, skip: int, limit: int)
                              account_ids, f).group_by(Check.status, TreasuryAccount.currency_code)).all()
     return {"total": total, "statuses": STATUSES,
             "summary": [{"status": s, "currency_code": cur, "count": n, "amount": money(v)} for s, cur, n, v in sums],
-            "items": [_out(c, b, p, t, ba, settlement_numbers.get(c.settlement_id)) for c, b, p, t, ba in rows]}
+            "items": [_out(c, b, p, t, ba, settlement_numbers.get(c.settlement_id), db) for c, b, p, t, ba in rows]}
 
 
 def _filters(status: str | None = None, q: str | None = None, account_no: str | None = None,
@@ -474,9 +486,12 @@ def put_print_template(screen_code: str, body: PrintTemplateIn,
     return _template_out(db, a.treasury_account_id)
 
 
-def _chk(db: Session, screen_code: str, cid: int) -> Check:
+def _chk(db: Session, screen_code: str, cid: int, for_update: bool = False) -> Check:
     a = _need(db, screen_code)
-    c = db.get(Check, cid)
+    stmt = select(Check).where(Check.check_id == cid)
+    if for_update:
+        stmt = stmt.with_for_update()
+    c = db.scalar(stmt)
     if c is None or c.treasury_account_id != a.treasury_account_id:
         raise HTTPException(404, "الشيك غير موجود")
     return c
@@ -536,7 +551,7 @@ def update(screen_code: str, cid: int, body: CheckIn, user: User = Depends(requi
 @router.post("/{screen_code}/items/{cid}/status")
 def change_status(screen_code: str, cid: int, body: StatusIn,
                   user: User = Depends(require_dynamic("Edit", CHECK_SCREENS)), db: Session = Depends(get_db)):
-    c = _chk(db, screen_code, cid)
+    c = _chk(db, screen_code, cid, for_update=True)
     if body.status not in NEXT.get(c.status, set()):
         raise HTTPException(409, f"مينفعش الانتقال من «{c.status}» إلى «{body.status}»")
     if body.status in ("مطبوع", "تم التسليم", "تم الصرف") and not (c.amount and c.amount > 0):
@@ -620,6 +635,7 @@ def change_status(screen_code: str, cid: int, body: StatusIn,
                                  project_id=c.project_id or (contract.project_id if c.settlement_id and contract else None),
                                  settlement_id=c.settlement_id,
                                  counterparty_id=linked_settlement.counterparty_id if linked_settlement else None,
+                                 counterpart_account_id=beneficiary_account.account_id,
                                  journal_entry_id=entry.journal_entry_id)
         db.add(tx)
         db.flush()
