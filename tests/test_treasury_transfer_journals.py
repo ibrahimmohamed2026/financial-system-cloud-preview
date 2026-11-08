@@ -300,7 +300,7 @@ def test_usd_journal_builder_creates_balanced_entry_for_every_movement_type(
             value.journal_entry_id = 89
 
     db.add.side_effect = assign_entry_id
-    movement = SimpleNamespace(journal_entry_id=None)
+    movement = SimpleNamespace(transaction_id=41, journal_entry_id=None)
     body = TxIn(
         transaction_date=date(2026, 11, 8),
         inflow=inflow,
