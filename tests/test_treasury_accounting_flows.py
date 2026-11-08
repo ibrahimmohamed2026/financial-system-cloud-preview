@@ -143,7 +143,7 @@ def test_egp_bank_to_cash_transfer_posts_one_journal_and_two_cash_movements(monk
     ]
     _assert_balanced(details)
     assert mirror.treasury_account_id == 2
-    assert mirror.inflow == Decimal("0")
-    assert mirror.outflow == Decimal("30000")
+    assert mirror.inflow == Decimal("30000")
+    assert mirror.outflow == Decimal("0")
     assert mirror.counterpart_account_id == 10
     assert mirror.journal_entry_id == movement.journal_entry_id
