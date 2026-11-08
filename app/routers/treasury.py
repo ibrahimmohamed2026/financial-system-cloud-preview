@@ -417,6 +417,12 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
         run += t.inflow - t.outflow
         tin += t.inflow
         tout += t.outflow
+        counterpart = db.get(Account, t.counterpart_account_id) if t.counterpart_account_id else None
+        counterpart_label = (f"{counterpart.account_code} — {counterpart.account_name_ar}"
+                             if counterpart else "حساب غير محدد")
+        treasury_label = f"{a.gl_account_id} — {a.name_ar}"
+        from_label, to_label = ((counterpart_label, treasury_label) if t.inflow > 0
+                                else (treasury_label, counterpart_label))
         out.append({"transaction_id": t.transaction_id, "transaction_date": t.transaction_date,
                     "treasury_account_id": a.treasury_account_id, "treasury_account_name": a.name_ar,
                     "treasury_account_type": a.account_type,
@@ -426,11 +432,8 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
                     "transaction_type": t.transaction_type,
                     "exchange_rate": str(t.exchange_rate) if t.exchange_rate is not None else None,
                     "counterpart_account_id": t.counterpart_account_id,
-                    "counterpart_account_label": (
-                        f"{db.get(Account, t.counterpart_account_id).account_code} — "
-                        f"{db.get(Account, t.counterpart_account_id).account_name_ar}"
-                        if t.counterpart_account_id and db.get(Account, t.counterpart_account_id) else None
-                    ),
+                    "counterpart_account_label": counterpart_label,
+                    "from_account_label": from_label, "to_account_label": to_label,
                     "counterparty_id": t.counterparty_id,
                     "journal_entry_id": t.journal_entry_id,
                     "locked": t.journal_entry_id is not None})
