@@ -323,6 +323,11 @@ def test_usd_journal_builder_creates_balanced_entry_for_every_movement_type(
 
 def test_usd_inflow_transfer_rejects_pending_source_account_movements(monkeypatch):
     import app.routers.treasury as treasury_module
+    import app.routers.journal as journal_module
+
+    monkeypatch.setattr(journal_module, "_fy_for", lambda db, entry_date:
+                        SimpleNamespace(company_id=1, fiscal_year_id=2026, is_closed=False))
+    monkeypatch.setattr(journal_module, "_next_no", lambda db, fiscal_year: "JE-USD-GUARD")
 
     counterpart = SimpleNamespace(account_id=10, account_code="15301001",
                                   is_active=True, classification_id=1)
