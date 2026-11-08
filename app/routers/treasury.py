@@ -186,7 +186,7 @@ def gl_list(screen_code: str, q: str | None = None, _: User = Depends(require_dy
 
 
 @router.get("/{screen_code}/available-accounts")
-def available_accounts(screen_code: str, _: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
+def available_accounts(screen_code: str, _: User = Depends(require_dynamic("View", set(BANK_SCREENS))),
                        db: Session = Depends(get_db)):
     """List active cash/bank accounts in the screen currency for movement selection."""
     current = _bound(db, screen_code)
@@ -651,11 +651,17 @@ def _tx(db: Session, screen_code: str, tid: int) -> TreasuryTransaction:
 def edit_tx(screen_code: str, tid: int, body: TxIn,
             user: User = Depends(require_dynamic("Edit", set(BANK_SCREENS))), db: Session = Depends(get_db)):
     t = _tx(db, screen_code, tid)
+    screen_account = _bound(db, screen_code)
+    target_account = db.get(TreasuryAccount, body.treasury_account_id) if body.treasury_account_id else screen_account
+    if target_account is None or not target_account.is_active or target_account.currency_code != screen_account.currency_code:
+        raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
     _check_project(db, body.project_id)
-    old = {"inflow": str(t.inflow), "outflow": str(t.outflow), "description": t.description}
-    for k, v in body.model_dump().items():
+    old = {"inflow": str(t.inflow), "outflow": str(t.outflow), "description": t.description,
+           "treasury_account_id": t.treasury_account_id}
+    for k, v in body.model_dump(exclude={"treasury_account_id"}).items():
         setattr(t, k, v)
-    journal_no = _create_usd_journal(db, _bound(db, screen_code), t, body, user, allow_legacy=True) if _bound(db, screen_code).currency_code == "USD" else None
+    t.treasury_account_id = target_account.treasury_account_id
+    journal_no = _create_usd_journal(db, target_account, t, body, user, allow_legacy=True) if target_account.currency_code == "USD" else None
     write_audit(db, user.user_id, "Update", "TreasuryTransactions", tid, old, body.model_dump())
     db.commit()
     return {"transaction_id": tid, "journal_entry_no": journal_no, "journal_status": "Draft" if journal_no else None}
