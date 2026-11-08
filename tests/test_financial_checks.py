@@ -120,8 +120,8 @@ def test_outgoing_payment_posts_one_journal_and_allocated_bank_movements(monkeyp
         end_date=date(2026, 12, 31), is_closed=False,
     )
     bank = SimpleNamespace(account_type="Bank", currency_code="EGP", gl_account_id=10)
-    bank_gl = SimpleNamespace(account_id=10, is_active=True)
-    party = SimpleNamespace(account_id=20, is_active=True)
+    bank_gl = SimpleNamespace(account_id=10, is_active=True, account_code="1101", account_name_ar="حساب البنك")
+    party = SimpleNamespace(account_id=20, is_active=True, account_code="2101", account_name_ar="حساب المورد")
     allocations = [
         SimpleNamespace(allocation_id=1, settlement_id=31, allocated_amount=Decimal("200.00")),
         SimpleNamespace(allocation_id=2, settlement_id=32, allocated_amount=Decimal("100.00")),
