@@ -97,9 +97,8 @@ def _out(db: Session, r: BankReconciliation, lines: bool = False) -> dict:
     a = db.get(TreasuryAccount, r.treasury_account_id)
     gl = db.get(Account, a.gl_account_id) if a else None
     opening_balance_warning = None
-    if a and a.currency_code != "EGP" and gl and (gl.opening_debit or 0) != 0 or (
-        a and a.currency_code != "EGP" and gl and (gl.opening_credit or 0) != 0
-    ):
+    if (a and a.currency_code != "EGP" and gl and
+            ((gl.opening_debit or 0) != 0 or (gl.opening_credit or 0) != 0)):
         opening_balance_warning = (
             "يوجد رصيد افتتاحي مسجل بالجنيه في شجرة الحسابات، ولا يمكن تحويله تلقائيًا إلى "
             f"{a.currency_code}؛ يلزم إدخال/تسوية الرصيد الافتتاحي بالعملة الأصلية قبل الاعتماد."
