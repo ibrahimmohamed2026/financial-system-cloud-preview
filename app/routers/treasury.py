@@ -18,6 +18,11 @@ BANK_SCREENS = {
 }
 router = APIRouter(prefix="/treasury", tags=["Treasury"])
 D0 = Decimal("0")
+
+
+def _movement_route(treasury_label: str, counterpart_label: str, inflow: bool) -> tuple[str, str]:
+    """Return the real money path (source, destination) for a bank/cash movement."""
+    return (counterpart_label, treasury_label) if inflow else (treasury_label, counterpart_label)
 Amt = Field(default=D0, ge=0, max_digits=18, decimal_places=2)
 
 # Transaction type determines the only valid counterpart classifications.
