@@ -105,7 +105,7 @@ def _totals(lines):
 
 def test_usd_supplier_payment_recognizes_realized_fx_gain(monkeypatch):
     db, source, _target, user = _usd_setup(monkeypatch, carrying_egp="5000")
-    movement = SimpleNamespace(journal_entry_id=None)
+    movement = SimpleNamespace(transaction_id=99, journal_entry_id=None)
 
     treasury._create_usd_journal(
         db, source, movement, _usd_body("supplier_payment", outflow="10", rate="52"), user,
@@ -124,7 +124,7 @@ def test_usd_supplier_payment_recognizes_realized_fx_gain(monkeypatch):
 
 def test_usd_supplier_payment_recognizes_realized_fx_loss(monkeypatch):
     db, source, _target, user = _usd_setup(monkeypatch, carrying_egp="5400")
-    movement = SimpleNamespace(journal_entry_id=None)
+    movement = SimpleNamespace(transaction_id=99, journal_entry_id=None)
 
     treasury._create_usd_journal(
         db, source, movement, _usd_body("supplier_payment", outflow="10", rate="52"), user,
@@ -142,7 +142,7 @@ def test_usd_supplier_payment_recognizes_realized_fx_loss(monkeypatch):
 
 def test_usd_cash_transfer_carries_book_value_without_realized_fx(monkeypatch):
     db, source, _target, user = _usd_setup(monkeypatch, carrying_egp="5000", transfer=True)
-    movement = SimpleNamespace(journal_entry_id=None)
+    movement = SimpleNamespace(transaction_id=99, journal_entry_id=None)
 
     treasury._create_usd_journal(
         db, source, movement, _usd_body("cash_transfer", outflow="10", rate="60"), user,
