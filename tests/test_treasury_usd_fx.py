@@ -68,11 +68,7 @@ def _usd_setup(monkeypatch, *, carrying_egp, transfer=False):
         fcy_amount=Decimal("100"), debit_amount=Decimal(str(carrying_egp)),
         credit_amount=Decimal("0"),
     )]
-    scalar_values = [0, 0]
-    if transfer:
-        scalar_values.extend([target, source])
-    else:
-        scalar_values.append(fx_account)
+    scalar_values = [target, 0, 0, source] if transfer else [0, 0, fx_account]
     db = USDJournalDB(scalar_values, rows)
     db.accounts = {20: counterpart}
     db.classification = supplier_class if not transfer else cash_class
@@ -111,7 +107,7 @@ def test_usd_supplier_payment_recognizes_realized_fx_gain(monkeypatch):
         db, source, movement, _usd_body("supplier_payment", outflow="10", rate="52"), user,
     )
 
-    lines = db.added_many
+    lines = [line for line in db.added + db.added_many if isinstance(line, treasury.JournalEntryDetail)]
     assert len(lines) == 3
     assert [(line.account_id, line.debit_amount, line.credit_amount) for line in lines] == [
         (10, Decimal("0"), Decimal("500.00")),
@@ -148,7 +144,7 @@ def test_usd_cash_transfer_carries_book_value_without_realized_fx(monkeypatch):
         db, source, movement, _usd_body("cash_transfer", outflow="10", rate="60"), user,
     )
 
-    lines = db.added_many
+    lines = [line for line in db.added + db.added_many if isinstance(line, treasury.JournalEntryDetail)]
     assert len(lines) == 2
     assert [(line.account_id, line.debit_amount, line.credit_amount) for line in lines] == [
         (10, Decimal("0"), Decimal("500.00")),
