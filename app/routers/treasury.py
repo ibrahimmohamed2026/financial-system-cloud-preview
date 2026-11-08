@@ -458,6 +458,28 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
         ))
         if source_treasury is None:
             raise HTTPException(400, "حساب مصدر التحويل لازم يكون بنكًا أو خزينة نشطة بالدولار")
+        # The source may be the counterpart account when the selected movement is an inflow.
+        # Block transfers while that source has unlinked legacy movements or draft journals;
+        # otherwise the carrying value below would ignore pending withdrawals.
+        if source_treasury.treasury_account_id != a.treasury_account_id:
+            source_unlinked = db.scalar(
+                select(func.count()).select_from(TreasuryTransaction).where(
+                    TreasuryTransaction.treasury_account_id == source_treasury.treasury_account_id,
+                    TreasuryTransaction.journal_entry_id.is_(None),
+                )
+            ) or 0
+            source_pending = db.scalar(
+                select(func.count()).select_from(TreasuryTransaction).join(
+                    JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id
+                ).where(
+                    TreasuryTransaction.treasury_account_id == source_treasury.treasury_account_id,
+                    JournalEntry.status == "Draft",
+                )
+            ) or 0
+            if source_unlinked:
+                raise HTTPException(409, "يوجد حركات دولار قديمة غير مرتبطة بقيود في حساب مصدر التحويل؛ راجعها أولًا")
+            if source_pending:
+                raise HTTPException(409, "يوجد قيد دولار مسودة على حساب مصدر التحويل؛ رحّله أو ألغِه قبل التحويل")
         posted_rows = db.execute(
             select(JournalEntryDetail.fcy_amount, JournalEntryDetail.debit_amount,
                    JournalEntryDetail.credit_amount)
