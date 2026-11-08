@@ -150,11 +150,21 @@ async def import_data(resource: str, file: UploadFile=File(...), user: User=Depe
                 party=int(row.get("party_account_id")); treasury=int(row.get("treasury_account_id"))
                 project_id=int(row["project_id"]) if row.get("project_id") not in (None, "") else None
                 if not number or typ not in ("INCOMING","OUTGOING") or amount<=0: raise ValueError(f"صف {n}: رقم/نوع/مبلغ غير صحيح")
-                if not db.get(Account,party) or not db.get(TreasuryAccount,treasury): raise ValueError(f"صف {n}: حساب العميل أو البنك غير موجود")
+                party_account = db.get(Account, party)
+                treasury_account = db.get(TreasuryAccount, treasury)
+                if not party_account or not party_account.is_active or not treasury_account or not treasury_account.is_active or treasury_account.account_type != "Bank" or treasury_account.currency_code != "EGP":
+                    raise ValueError(f"صف {n}: حساب العميل أو البنك غير موجود أو غير صالح")
+                from .financial_checks import _validate_party_account
+                _validate_party_account(db, typ, party_account)
                 if project_id is not None:
                     project = db.get(Project, project_id)
                     if not project or not project.is_active: raise ValueError(f"صف {n}: المشروع غير موجود أو غير نشط")
-                if db.scalar(select(FinancialCheck.check_id).where(FinancialCheck.check_number==number)): raise ValueError(f"صف {n}: رقم الشيك موجود: {number}")
+                if db.scalar(select(FinancialCheck.check_id).where(
+                    FinancialCheck.check_number == number,
+                    FinancialCheck.check_type == typ,
+                    FinancialCheck.treasury_account_id == treasury
+                )):
+                    raise ValueError(f"صف {n}: رقم الشيك موجود لنفس النوع والحساب البنكي: {number}")
                 made.append(FinancialCheck(check_number=number,check_type=typ,amount=amount,due_date=due,party_account_id=party,treasury_account_id=treasury,drawee_bank=(row.get("drawee_bank") or None),project_id=project_id,project_brand="عام",description=(row.get("description") or None),status="مسودة",created_by=user.user_id))
             for c in made: db.add(c)
             write_audit(db,user.user_id,"Import","FinancialChecks",None,new={"rows":len(made)}); db.commit()

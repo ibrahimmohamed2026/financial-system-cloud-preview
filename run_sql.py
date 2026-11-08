@@ -21,6 +21,7 @@ MIGRATION_005 = BASE_DIR / "sql" / "005_audit_analytics.sql"
 MIGRATION_006 = BASE_DIR / "sql" / "006_contracts.sql"
 MIGRATION_007 = BASE_DIR / "sql" / "007_contract_technical_settlements.sql"
 MIGRATION_008 = BASE_DIR / "sql" / "008_contract_settlement_item_details.sql"
+MIGRATION_015 = BASE_DIR / "sql" / "015_checks_hardening_postgres.sql"
 
 
 def run_postgres_migration_005() -> None:
@@ -114,6 +115,21 @@ def run_postgres_migration_010() -> None:
     print("تم تنفيذ sql/010_cheques_project_brand.sql على PostgreSQL.")
 
 
+
+def run_postgres_migration_015() -> None:
+    """Normalize legacy cheque states and replace global cheque-number uniqueness."""
+    if engine.dialect.name != "postgresql":
+        print(f"تخطّي {MIGRATION_015.name}: ترحيل PostgreSQL فقط.")
+        return
+    if not MIGRATION_015.is_file():
+        raise FileNotFoundError(f"ملف التهيئة غير موجود: {MIGRATION_015}")
+    # This migration contains a PostgreSQL DO block; execute it as one statement.
+    sql = MIGRATION_015.read_text(encoding="utf-8-sig")
+    with engine.begin() as conn:
+        conn.execute(text(sql))
+    print("تم تنفيذ sql/015_checks_hardening_postgres.sql على PostgreSQL.")
+
+
 def main() -> int:
     try:
         print(f"قاعدة البيانات النشطة: {engine.dialect.name}")
@@ -127,6 +143,7 @@ def main() -> int:
         run_postgres_migration_007()
         run_postgres_migration_008()
         run_postgres_migration_010()
+        run_postgres_migration_015()
         print("مزامنة الشاشات والصلاحيات...")
         with SessionLocal() as db:
             seed_screens(db)

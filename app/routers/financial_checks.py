@@ -7,10 +7,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from .journal import _next_no
+from .treasury import USD_TRANSACTION_TYPES
 from ..common import require_any
 from ..database import get_db
 from ..deps import write_audit
-from ..models import (Account, Company, FiscalYear, FinancialCheck, JournalEntry,
+from ..models import (Account, AccountClassification, Company, FiscalYear, FinancialCheck, JournalEntry,
                       JournalEntryDetail, Project, TreasuryAccount, TreasuryTransaction, User, utcnow,
                       FinancialCheckStatusHistory, FinancialCheckSettlementAllocation, ContractSettlement,
                       Contract, Counterparty)
@@ -31,6 +33,45 @@ class CheckIn(BaseModel):
 
 class StatusIn(BaseModel):
     status: str
+    # Actual clearing date. Defaults to today and may not be in the future.
+    settlement_date: date | None = None
+
+
+STATUS_ALIASES = {"مُرتجع": "مرتد", "مرتجع": "مرتد"}
+KNOWN_STATUSES = {
+    "مسودة", "معتمد", "صادر", "تم التسليم", "تحت التحصيل",
+    "تم التحصيل", "مُحصّل", "منصرف", "موقوف", "مرتد", "ملغي",
+}
+
+
+def canon_status(status: str | None) -> str | None:
+    return STATUS_ALIASES.get(status, status)
+
+
+def _party_classifications(check_type: str) -> set[str]:
+    direction = "inflow" if check_type == "INCOMING" else "outflow"
+    names: set[str] = set()
+    for transaction in USD_TRANSACTION_TYPES.values():
+        if transaction["direction"] == direction:
+            names.update(transaction["classifications"])
+    return names
+
+
+def _validate_party_account(db: Session, check_type: str, party: Account | None) -> None:
+    if party is None or not party.is_active:
+        raise HTTPException(422, "حساب العميل/المورد غير صحيح أو غير نشط")
+    if db.scalar(
+        select(Account.account_id)
+        .where(Account.parent_account_id == party.account_id)
+        .limit(1)
+    ) is not None:
+        raise HTTPException(422, "حساب الطرف حساب رئيسي؛ اختر حسابًا فرعيًا من شجرة الحسابات")
+    classification = db.get(AccountClassification, party.classification_id)
+    if classification is None or classification.name_ar not in _party_classifications(check_type):
+        kind = "الوارد" if check_type == "INCOMING" else "الصادر"
+        name = classification.name_ar if classification else "—"
+        raise HTTPException(422, f"تصنيف حساب الطرف ({name}) لا يناسب الشيك {kind}")
+
 
 class ProjectLinkIn(BaseModel):
     project_id: int | None = Field(default=None, gt=0)
@@ -75,6 +116,7 @@ def create(body: CheckIn, user: User = Depends(require_any(SCREENS, "Add")), db:
     if body.check_type not in ("INCOMING", "OUTGOING"): raise HTTPException(422, "نوع الشيك غير صحيح")
     party = db.get(Account, body.party_account_id); bank = db.get(TreasuryAccount, body.treasury_account_id)
     if not party or not party.is_active: raise HTTPException(422, "حساب العميل/المورد غير صحيح")
+    _validate_party_account(db, body.check_type, party)
     if not bank or not bank.is_active or bank.account_type != "Bank" or bank.currency_code != "EGP": raise HTTPException(422, "اختر حسابًا بنكيًا نشطًا بالجنيه المصري؛ سجل الشيكات الحالي مقوّم بالجنيه")
     if body.project_id is not None:
         project = db.get(Project, body.project_id)
@@ -97,35 +139,34 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
     if not c:
         raise HTTPException(404, "الشيك غير موجود")
 
-    allowed_next = _allowed_next_statuses(c.check_type, c.status)
-    if body.status not in allowed_next:
+    new_status = canon_status(body.status)
+    if new_status not in KNOWN_STATUSES:
         raise HTTPException(422, "الحالة غير صحيحة")
-    if body.status not in allowed_next:
-        raise HTTPException(409, f"انتقال الحالة من {c.status} إلى {body.status} غير مسموح")
-    if c.check_type == "INCOMING" and body.status in {"معتمد", "صادر", "تم التسليم", "منصرف", "موقوف"}:
-        raise HTTPException(422, "هذه الحالة مخصصة للشيكات الصادرة")
-    if c.check_type == "OUTGOING" and body.status in {"تحت التحصيل", "تم التحصيل", "مُحصّل", "مُرتجع"}:
-        raise HTTPException(422, "هذه الحالة مخصصة للشيكات الواردة")
+    if new_status == canon_status(c.status):
+        raise HTTPException(409, "الشيك بالفعل في هذه الحالة")
+    allowed_next = _allowed_next_statuses(c.check_type, c.status)
+    if new_status not in allowed_next:
+        raise HTTPException(409, f"انتقال الحالة من {c.status} إلى {new_status} غير مسموح")
 
     settlement_statuses = {"تم التحصيل", "مُحصّل"} if c.check_type == "INCOMING" else {"منصرف"}
-    if body.status in settlement_statuses:
+    if new_status in settlement_statuses:
         required_sources = {"تحت التحصيل"} if c.check_type == "INCOMING" else {"تم التسليم"}
-        # Legacy outgoing imports used the old direct settlement status.
-        # Preserve the historical incoming-cheque label only. Outgoing cheques
-        # must complete approval, issuance, and delivery before payment.
-        legacy_incoming_direct = c.check_type == "INCOMING" and body.status == "مُحصّل" and c.status == "مسودة"
+        legacy_incoming_direct = c.check_type == "INCOMING" and new_status == "مُحصّل" and c.status == "مسودة"
         if c.status not in required_sources and not legacy_incoming_direct:
             raise HTTPException(409, "لا يمكن تسوية الشيك قبل اكتمال دورة الاستلام أو التسليم")
-    if c.journal_entry_id and body.status != c.status:
+    if c.journal_entry_id and new_status != c.status:
         raise HTTPException(409, "الشيك له قيد مرحّل؛ لا تغيّر حالته قبل إجراء عكس محاسبي معتمد")
 
-    if body.status in settlement_statuses:
+    if new_status in settlement_statuses:
         if c.journal_entry_id:
             raise HTTPException(409, "تم إنشاء القيد لهذا الشيك مسبقاً")
         today = date.today()
-        fy = db.scalar(select(FiscalYear).where(FiscalYear.start_date <= today, FiscalYear.end_date >= today))
+        entry_date = body.settlement_date or today
+        if entry_date > today:
+            raise HTTPException(422, "تاريخ التسوية لا يمكن أن يكون في المستقبل")
+        fy = db.scalar(select(FiscalYear).where(FiscalYear.start_date <= entry_date, FiscalYear.end_date >= entry_date))
         if not fy or fy.is_closed:
-            raise HTTPException(409, "لا توجد سنة مالية مفتوحة للتاريخ الحالي")
+            raise HTTPException(409, "لا توجد سنة مالية مفتوحة لتاريخ التسوية")
         bank = db.get(TreasuryAccount, c.treasury_account_id)
         party = db.get(Account, c.party_account_id)
         bank_gl = db.get(Account, bank.gl_account_id) if bank else None
@@ -138,10 +179,7 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
         voucher_no = f"FCHK-{c.check_id}"
         if db.scalar(select(TreasuryTransaction.transaction_id).where(TreasuryTransaction.voucher_no == voucher_no)):
             raise HTTPException(409, "حركة البنك مسجلة لهذا الشيك بالفعل؛ تم إيقاف الترحيل لمنع التكرار")
-        prefix = f"JE-{fy.start_date.year}-"
-        last = db.scalar(select(func.max(JournalEntry.entry_no)).where(JournalEntry.entry_no.like(prefix + "%")))
-        seq = int(last[len(prefix):]) + 1 if last and last[len(prefix):].isdigit() else 1
-        entry = JournalEntry(entry_no=f"{prefix}{seq:06d}", entry_date=today, company_id=fy.company_id,
+        entry = JournalEntry(entry_no=_next_no(db, fy), entry_date=entry_date, company_id=fy.company_id,
             fiscal_year_id=fy.fiscal_year_id, description=f"تسوية شيك {c.check_number}", status="Posted",
             created_by=user.user_id, posted_by=user.user_id, posted_at=utcnow())
         db.add(entry)
@@ -155,7 +193,7 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
         db.flush()
         c.journal_entry_id = entry.journal_entry_id
         if c.check_type == "INCOMING":
-            db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=today,
+            db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=entry_date,
                 inflow=amount, outflow=Decimal("0"), description=f"تحصيل شيك {c.check_number}",
                 voucher_no=voucher_no, status="تم التحصيل", journal_entry_id=entry.journal_entry_id))
         else:
@@ -168,21 +206,21 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
             if allocated_total > amount:
                 raise HTTPException(409, "إجمالي تخصيصات الشيك تجاوز قيمته؛ أوقفنا الصرف")
             for allocation in allocations:
-                db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=today,
+                db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=entry_date,
                     inflow=Decimal("0"), outflow=_money(allocation.allocated_amount),
                     description=f"صرف شيك {c.check_number} للمستخلص {allocation.settlement_id}",
                     voucher_no=f"{voucher_no}-A{allocation.allocation_id}", status="تم الصرف",
                     settlement_id=allocation.settlement_id, journal_entry_id=entry.journal_entry_id))
             unallocated = _money(amount - allocated_total)
             if unallocated > 0:
-                db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=today,
+                db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=entry_date,
                     inflow=Decimal("0"), outflow=unallocated,
                     description=f"صرف غير موزع من شيك {c.check_number}", voucher_no=voucher_no,
                     status="تم الصرف", journal_entry_id=entry.journal_entry_id))
     old_status = c.status
-    c.status = body.status
-    db.add(FinancialCheckStatusHistory(check_id=cid, old_status=old_status, new_status=body.status, changed_by=user.user_id))
-    write_audit(db, user.user_id, "Update", "FinancialChecks", cid, {"status": old_status}, {"status": body.status})
+    c.status = new_status
+    db.add(FinancialCheckStatusHistory(check_id=cid, old_status=old_status, new_status=new_status, changed_by=user.user_id))
+    write_audit(db, user.user_id, "Update", "FinancialChecks", cid, {"status": old_status}, {"status": new_status})
     db.commit()
     return out(c)
 
@@ -224,6 +262,7 @@ def import_csv(file: UploadFile = File(...), user: User = Depends(require_any(SC
             bank = db.get(TreasuryAccount, body.treasury_account_id)
             if body.check_type not in ("INCOMING", "OUTGOING") or not party or not party.is_active or not bank or not bank.is_active or bank.account_type != "Bank" or bank.currency_code != "EGP":
                 raise ValueError("نوع الشيك أو حساب الطرف أو حساب البنك بالجنيه غير صحيح")
+            _validate_party_account(db, body.check_type, party)
             if body.project_id is not None:
                 project = db.get(Project, body.project_id)
                 if not project or not project.is_active: raise ValueError("المشروع غير صحيح أو غير نشط")
@@ -258,9 +297,10 @@ def _allowed_next_statuses(check_type: str, current_status: str) -> set[str]:
     # Legacy labels remain readable without allowing a new outgoing cheque
     # to bypass approval, issuance, and delivery.
     legacy_incoming = {
-        "مسودة": {"مُحصّل", "مُرتجع"},
-        "تحت التحصيل": {"مُحصّل", "مُرتجع"},
+        "مسودة": {"مُحصّل", "مرتد"},
+        "تحت التحصيل": {"مُحصّل", "مرتد"},
     }
+    current_status = canon_status(current_status)
     transitions = incoming if check_type == "INCOMING" else outgoing
     legacy = legacy_incoming.get(current_status, set()) if check_type == "INCOMING" else set()
     return set(transitions.get(current_status, set())) | set(legacy)
@@ -278,7 +318,7 @@ def _reserved_allocations_stmt(settlement_id: int):
         .join(FinancialCheck, FinancialCheck.check_id == FinancialCheckSettlementAllocation.check_id)
         .where(
             FinancialCheckSettlementAllocation.settlement_id == settlement_id,
-            FinancialCheck.status.notin_(("منصرف", "مرتد", "ملغي")),
+            FinancialCheck.status.notin_(("منصرف", "مرتد", "مُرتجع", "مرتجع", "ملغي")),
         )
     )
 
