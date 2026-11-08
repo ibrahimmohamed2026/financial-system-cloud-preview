@@ -107,7 +107,7 @@ def test_usd_supplier_payment_recognizes_realized_fx_gain(monkeypatch):
         db, source, movement, _usd_body("supplier_payment", outflow="10", rate="52"), user,
     )
 
-    lines = [line for line in db.added + db.added_many if isinstance(line, treasury.JournalEntryDetail)]
+    lines = sorted((line for line in db.added + db.added_many if isinstance(line, treasury.JournalEntryDetail)), key=lambda line: line.line_no)
     assert len(lines) == 3
     assert [(line.account_id, line.debit_amount, line.credit_amount) for line in lines] == [
         (10, Decimal("0"), Decimal("500.00")),
@@ -126,7 +126,7 @@ def test_usd_supplier_payment_recognizes_realized_fx_loss(monkeypatch):
         db, source, movement, _usd_body("supplier_payment", outflow="10", rate="52"), user,
     )
 
-    lines = db.added_many
+    lines = sorted((line for line in db.added + db.added_many if isinstance(line, treasury.JournalEntryDetail)), key=lambda line: line.line_no)
     assert len(lines) == 3
     assert [(line.account_id, line.debit_amount, line.credit_amount) for line in lines] == [
         (10, Decimal("0"), Decimal("540.00")),
@@ -144,7 +144,7 @@ def test_usd_cash_transfer_carries_book_value_without_realized_fx(monkeypatch):
         db, source, movement, _usd_body("cash_transfer", outflow="10", rate="60"), user,
     )
 
-    lines = [line for line in db.added + db.added_many if isinstance(line, treasury.JournalEntryDetail)]
+    lines = sorted((line for line in db.added + db.added_many if isinstance(line, treasury.JournalEntryDetail)), key=lambda line: line.line_no)
     assert len(lines) == 2
     assert [(line.account_id, line.debit_amount, line.credit_amount) for line in lines] == [
         (10, Decimal("0"), Decimal("500.00")),
