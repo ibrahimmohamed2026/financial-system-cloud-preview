@@ -153,3 +153,54 @@ def test_cash_transfer_api_direction_is_source_outflow_only():
     assert treasury.USD_TRANSACTION_TYPES["cash_transfer"]["direction"] == "either"
     assert treasury._movement_direction_allowed("cash_transfer", "outflow")
     assert not treasury._movement_direction_allowed("cash_transfer", "inflow")
+
+
+def test_party_counterpart_options_require_selected_party_and_return_only_its_linked_account(monkeypatch):
+    party = SimpleNamespace(
+        counterparty_id=7, party_type="Customer", is_active=True,
+        linked_account_id=20, account_id=21,
+    )
+    linked = SimpleNamespace(
+        account_id=20, account_code="15401001", account_name_ar="عميل محدد",
+        classification_id=8, is_active=True, normal_balance="DR",
+    )
+    classification = SimpleNamespace(
+        name_ar="عملاء وأوراق قبض", statement_type="BalanceSheet",
+    )
+    screen = SimpleNamespace(
+        treasury_account_id=1, gl_account_id=10, currency_code="EGP",
+        is_active=True, screen_code="BankCibEgp",
+    )
+
+    class DB:
+        def get(self, model, key):
+            if model is treasury.TreasuryAccount:
+                return screen
+            if model is treasury.Counterparty:
+                return party if key == 7 else None
+            if model is treasury.Account:
+                return linked if key == 20 else None
+            if model is treasury.AccountClassification:
+                return classification if key == 8 else None
+            return None
+
+        def scalar(self, statement):
+            return None
+
+    db = DB()
+    user = SimpleNamespace(user_id=5)
+    monkeypatch.setattr(treasury, "_bound", lambda *_: screen)
+    monkeypatch.setattr(treasury, "has_permission", lambda *_: True)
+
+    assert treasury.counterpart_accounts(
+        "BankCibEgp", direction="inflow", transaction_type="customer_collection",
+        counterparty_id=None, user=user, db=db,
+    ) == []
+    rows = treasury.counterpart_accounts(
+        "BankCibEgp", direction="inflow", transaction_type="customer_collection",
+        counterparty_id=7, user=user, db=db,
+    )
+    assert len(rows) == 1
+    assert rows[0]["account_id"] == 20
+    assert "15401001" in rows[0]["label"]
+    assert "دائن بالقيد" in rows[0]["label"]
