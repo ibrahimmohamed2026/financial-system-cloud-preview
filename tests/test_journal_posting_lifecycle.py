@@ -14,13 +14,20 @@ class Rows(list):
 
 
 class PostingDB:
-    def __init__(self, entry, details):
+    def __init__(self, entry, details, accounts):
         self.entry = entry
         self.details = details
+        self.accounts = accounts
+        self.scalar_calls = 0
         self.commits = 0
 
     def scalars(self, statement):
-        return Rows(self.details)
+        self.scalar_calls += 1
+        if self.scalar_calls == 1:
+            return Rows(self.details)
+        if self.scalar_calls == 2:
+            return Rows(self.accounts)
+        return Rows()
 
     def commit(self):
         self.commits += 1
@@ -39,7 +46,11 @@ def _posting_fixture(monkeypatch, *, status="Draft", balanced=True):
                         debit_amount=Decimal("0"),
                         credit_amount=Decimal("100") if balanced else Decimal("90")),
     ]
-    db = PostingDB(entry, details)
+    accounts = [
+        SimpleNamespace(account_id=10, is_active=True, account_code="10101001"),
+        SimpleNamespace(account_id=20, is_active=True, account_code="20101001"),
+    ]
+    db = PostingDB(entry, details, accounts)
     user = SimpleNamespace(user_id=5)
     fy = SimpleNamespace(is_closed=False)
     monkeypatch.setattr(journal, "_get", lambda _db, _eid: entry)
@@ -51,14 +62,11 @@ def _posting_fixture(monkeypatch, *, status="Draft", balanced=True):
         "posted_by": e.posted_by, "posted_at": e.posted_at,
     })
     monkeypatch.setattr(journal, "utcnow", lambda: datetime(2026, 11, 8, 10, 0, 0))
-    return db, entry, user, details
+    return db, entry, user
 
 
 def test_posting_moves_balanced_draft_to_posted_and_records_actor(monkeypatch):
-    db, entry, user, _details = _posting_fixture(monkeypatch)
-    monkeypatch.setattr(journal, "_validate_lines", lambda _db, _lines: (
-        Decimal("100"), Decimal("100"),
-    ))
+    db, entry, user = _posting_fixture(monkeypatch)
 
     result = journal.post_entry(41, user, db)
 
@@ -69,10 +77,7 @@ def test_posting_moves_balanced_draft_to_posted_and_records_actor(monkeypatch):
 
 
 def test_posting_rejects_unbalanced_draft_without_committing(monkeypatch):
-    db, entry, user, _details = _posting_fixture(monkeypatch)
-    def reject_unbalanced(_db, _lines):
-        raise HTTPException(422, "القيد غير متوازن")
-    monkeypatch.setattr(journal, "_validate_lines", reject_unbalanced)
+    db, entry, user = _posting_fixture(monkeypatch, balanced=False)
 
     with pytest.raises(HTTPException) as exc:
         journal.post_entry(41, user, db)
@@ -83,10 +88,7 @@ def test_posting_rejects_unbalanced_draft_without_committing(monkeypatch):
 
 
 def test_posting_rejects_second_post_of_already_posted_entry(monkeypatch):
-    db, entry, user, _details = _posting_fixture(monkeypatch, status="Posted")
-    monkeypatch.setattr(journal, "_validate_lines", lambda *_args: pytest.fail(
-        "posted entries must be rejected before line validation"
-    ))
+    db, entry, user = _posting_fixture(monkeypatch, status="Posted")
 
     with pytest.raises(HTTPException) as exc:
         journal.post_entry(41, user, db)
