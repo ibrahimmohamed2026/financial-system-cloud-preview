@@ -743,7 +743,7 @@ def edit_tx(screen_code: str, tid: int, body: TxIn,
         linked_account = db.get(Account, linked) if linked else None
         config = USD_TRANSACTION_TYPES.get(body.transaction_type)
         classification = db.get(AccountClassification, linked_account.classification_id) if linked_account else None
-        if linked_account is None or not linked_account.is_active or classification is None or classification.name_ar not in config["classifications"]:
+        if config is None or linked_account is None or not linked_account.is_active or classification is None or classification.name_ar not in config["classifications"]:
             raise HTTPException(422, "حساب الأستاذ المرتبط بالطرف غير نشط أو لا يتوافق مع نوع الحركة")
         if db.scalar(select(Account.account_id).where(Account.parent_account_id == linked).limit(1)):
             raise HTTPException(422, "حساب الطرف المرتبط يجب أن يكون حسابًا فرعيًا")
