@@ -38,7 +38,7 @@ USD_TRANSACTION_TYPES = {
                 "classifications": ("مصروفات عمومية و ادارية", "مصروفات عمومية و إدارية", "تكلفة المبيعات", "فوائد التاجير التمويلى")},
     "asset_purchase": {"label": "شراء أصل أو مخزون أو أعمال تحت التنفيذ", "direction": "outflow",
                 "classifications": ("اصول ثابتة بالصافي", "اصول غير ملموسه", "مخزون", "اعمال تحت التنفيذ")},
-    "cash_transfer": {"label": "تحويل بين حسابات نقدية", "direction": "outflow",
+    "cash_transfer": {"label": "تحويل بين حسابات نقدية", "direction": "either",
                 "classifications": ("نقدية بالصندوق و البنوك",)},
 }
 
@@ -54,6 +54,16 @@ class AccountIn(BaseModel):
 
 class GLAccountLinkIn(BaseModel):
     gl_account_id: int
+
+
+def _movement_direction_allowed(transaction_type: str | None, direction: str) -> bool:
+    """Enforce source-to-receiver direction at the treasury API boundary."""
+    config = USD_TRANSACTION_TYPES.get(transaction_type or "")
+    if config is None:
+        return False
+    if transaction_type == "cash_transfer":
+        return direction == "outflow"
+    return config["direction"] in (direction, "either")
 
 
 class TxIn(BaseModel):
@@ -251,7 +261,7 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
     if not has_permission(db, user.user_id, treasury.screen_code, "Add"):
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
     config = USD_TRANSACTION_TYPES.get(transaction_type)
-    if config is None or config["direction"] not in (direction, "either"):
+    if not _movement_direction_allowed(transaction_type, direction):
         raise HTTPException(400, "نوع الحركة لا يتوافق مع اتجاه الوارد أو المنصرف")
     party_required_types = {
         "customer_collection", "customer_advance", "supplier_payment", "supplier_advance",
@@ -794,6 +804,9 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
     if not has_permission(db, user.user_id, a.screen_code, "Add"):
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
+    movement_direction = "inflow" if body.inflow > 0 else "outflow"
+    if not _movement_direction_allowed(body.transaction_type, movement_direction):
+        raise HTTPException(422, "التحويل بين الحسابات النقدية يجب أن يكون من حساب المصدر كمنصرف إلى حساب مستلم")
     values = body.model_dump(exclude={"treasury_account_id"})
     # Customer/supplier settlements must be tied to a master record; derive the GL account from it.
     party_required_types = {"customer_collection", "customer_advance", "supplier_payment", "supplier_advance"}
@@ -866,6 +879,9 @@ def edit_tx(screen_code: str, tid: int, body: TxIn,
     if not has_permission(db, user.user_id, target_account.screen_code, "Edit"):
         raise HTTPException(403, "ليس لديك صلاحية تعديل حركات حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
+    movement_direction = "inflow" if body.inflow > 0 else "outflow"
+    if not _movement_direction_allowed(body.transaction_type, movement_direction):
+        raise HTTPException(422, "التحويل بين الحسابات النقدية يجب أن يكون من حساب المصدر كمنصرف إلى حساب مستلم")
     party_required_types = {"customer_collection", "customer_advance", "supplier_payment", "supplier_advance"}
     if body.transaction_type in party_required_types and not body.counterparty_id:
         raise HTTPException(422, "اختَر بطاقة العميل أو المورد/المقاول لربط الحركة بحسابه الصحيح")
