@@ -678,6 +678,10 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
         linked_account = db.get(Account, linked)
         if linked_account is None or not linked_account.is_active:
             raise HTTPException(422, "حساب الأستاذ المرتبط بالطرف غير موجود أو غير نشط")
+        config = USD_TRANSACTION_TYPES.get(body.transaction_type)
+        classification = db.get(AccountClassification, linked_account.classification_id)
+        if config is None or classification is None or classification.name_ar not in config["classifications"]:
+            raise HTTPException(422, "تصنيف حساب الطرف المرتبط لا يتوافق مع نوع الحركة")
         if db.scalar(select(Account.account_id).where(Account.parent_account_id == linked).limit(1)):
             raise HTTPException(422, "حساب الطرف المرتبط يجب أن يكون حسابًا فرعيًا")
         if body.counterpart_account_id and body.counterpart_account_id != linked:
@@ -720,6 +724,32 @@ def edit_tx(screen_code: str, tid: int, body: TxIn,
     if not has_permission(db, user.user_id, target_account.screen_code, "Edit"):
         raise HTTPException(403, "ليس لديك صلاحية تعديل حركات حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
+    party_required_types = {"customer_collection", "customer_advance", "supplier_payment", "supplier_advance"}
+    if body.transaction_type in party_required_types and not body.counterparty_id:
+        raise HTTPException(422, "اختَر بطاقة العميل أو المورد/المقاول لربط الحركة بحسابه الصحيح")
+    if body.counterparty_id:
+        party = db.get(Counterparty, body.counterparty_id)
+        expected_types = {
+            "customer_collection": ("Customer", "Mixed"),
+            "customer_advance": ("Customer", "Mixed"),
+            "supplier_payment": ("Supplier", "Contractor", "Mixed"),
+            "supplier_advance": ("Supplier", "Contractor", "Mixed"),
+        }
+        if not party or not party.is_active:
+            raise HTTPException(422, "العميل/المورد المحدد غير موجود أو غير نشط")
+        if body.transaction_type in expected_types and party.party_type not in expected_types[body.transaction_type]:
+            raise HTTPException(422, "نوع بطاقة الطرف لا يتوافق مع نوع الحركة")
+        linked = party.linked_account_id or party.account_id
+        linked_account = db.get(Account, linked) if linked else None
+        config = USD_TRANSACTION_TYPES.get(body.transaction_type)
+        classification = db.get(AccountClassification, linked_account.classification_id) if linked_account else None
+        if linked_account is None or not linked_account.is_active or classification is None or classification.name_ar not in config["classifications"]:
+            raise HTTPException(422, "حساب الأستاذ المرتبط بالطرف غير نشط أو لا يتوافق مع نوع الحركة")
+        if db.scalar(select(Account.account_id).where(Account.parent_account_id == linked).limit(1)):
+            raise HTTPException(422, "حساب الطرف المرتبط يجب أن يكون حسابًا فرعيًا")
+        if body.counterpart_account_id and body.counterpart_account_id != linked:
+            raise HTTPException(422, "حساب الطرف لا يطابق الحساب المرتبط به في بطاقة العميل/المورد")
+        body.counterpart_account_id = linked
     old = {"inflow": str(t.inflow), "outflow": str(t.outflow), "description": t.description,
            "treasury_account_id": t.treasury_account_id}
     for k, v in body.model_dump(exclude={"treasury_account_id"}).items():
