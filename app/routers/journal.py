@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import exists, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -83,6 +83,12 @@ def _validate_lines(db: Session, lines: list[LineIn]) -> tuple[Decimal, Decimal]
 
 
 def _next_no(db: Session, fy: FiscalYear) -> str:
+    # Serialize numbering per fiscal year on PostgreSQL to avoid duplicate EntryNo
+    # values when multiple transactions post journals concurrently.
+    bind = db.get_bind()
+    if getattr(getattr(bind, "dialect", None), "name", None) == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                   {"k": 4_200_000 + fy.start_date.year})
     prefix = f"JE-{fy.start_date.year}-"
     last = db.scalar(select(func.max(JournalEntry.entry_no)).where(JournalEntry.entry_no.like(prefix + "%")))
     n = int(last[len(prefix):]) + 1 if last and last[len(prefix):].isdigit() else 1
