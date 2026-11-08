@@ -72,6 +72,7 @@ export async function render(main, { api, auth, route }) {
       const partySelect = formEl.elements.namedItem("counterparty_id");
       const accountSelect = formEl.elements.namedItem("treasury_account_id");
       const typeSelect = formEl.elements.namedItem("transaction_type");
+      let currentPartyOptions = initialParties;
       const inflow = formEl.elements.namedItem("inflow"), outflow = formEl.elements.namedItem("outflow");
       const typeDirections = { funding: "inflow", customer_collection: "inflow", customer_advance: "inflow", direct_income: "inflow",
         supplier_payment: "outflow", supplier_advance: "outflow", expense_payment: "outflow",
@@ -85,6 +86,7 @@ export async function render(main, { api, auth, route }) {
         partySelect.disabled = true;
         try {
           const options = required ? await api(base + "/counterparties?transaction_type=" + encodeURIComponent(transactionType)) : [];
+          currentPartyOptions = options;
           partySelect.innerHTML = '<option value="">—</option>' + options.map(p =>
             `<option value="${String(p.counterparty_id)}">${esc(p.label)} — ${esc(p.account_label)}</option>`).join("");
           if (options.some(p => String(p.counterparty_id) === selected)) partySelect.value = selected;
@@ -102,7 +104,13 @@ export async function render(main, { api, auth, route }) {
           const options = await api(base + "/counterpart-accounts?direction=" + direction + "&transaction_type=" + encodeURIComponent(transactionType) + "&treasury_account_id=" + encodeURIComponent(accountSelect.value));
           directionSelect.innerHTML = '<option value="">—</option>' + options.map(a =>
             `<option value="${String(a.account_id)}">${esc(a.label)}</option>`).join("");
-          if (options.some(a => String(a.account_id) === selected)) directionSelect.value = selected;
+          const selectedParty = currentPartyOptions.find(p => String(p.counterparty_id) === partySelect.value);
+          const linkedAccountId = selectedParty?.linked_account_id ? String(selectedParty.linked_account_id) : "";
+          if (linkedAccountId && options.some(a => String(a.account_id) === linkedAccountId)) {
+            directionSelect.value = linkedAccountId;
+          } else if (options.some(a => String(a.account_id) === selected)) {
+            directionSelect.value = selected;
+          }
         } catch (e) {
           directionSelect.innerHTML = '<option value="">—</option>';
           throw e;
@@ -128,8 +136,17 @@ export async function render(main, { api, auth, route }) {
       };
       typeSelect.addEventListener("change", () => {
         applyDirectionFromType();
-        refreshParties().catch(e => toast(errText(e)));
-        refreshCounterparts(currentDirection()).catch(e => toast(errText(e)));
+        refreshParties().then(() => refreshCounterparts(currentDirection()))
+          .catch(e => toast(errText(e)));
+      });
+      partySelect.addEventListener("change", () => {
+        const selectedParty = currentPartyOptions.find(p => String(p.counterparty_id) === partySelect.value);
+        const linkedAccountId = selectedParty?.linked_account_id ? String(selectedParty.linked_account_id) : "";
+        if (linkedAccountId && [...directionSelect.options].some(o => o.value === linkedAccountId)) {
+          directionSelect.value = linkedAccountId;
+        } else {
+          directionSelect.value = "";
+        }
       });
       accountSelect.addEventListener("change", () => refreshCounterparts(currentDirection()).catch(e => toast(errText(e))));
       applyDirectionFromType();
