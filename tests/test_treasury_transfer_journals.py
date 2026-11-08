@@ -342,9 +342,9 @@ def test_usd_inflow_transfer_rejects_pending_source_account_movements(monkeypatc
         classification if model is AccountClassification else None
     )
     db.scalars.return_value = []
-    # Destination has no pending rows; source lookup succeeds; source has one
-    # unlinked movement, so the carrying value must not be used for this transfer.
-    db.scalar.side_effect = [source, 0, 0, source, 1]
+    # Destination has no pending rows; source lookup succeeds; the source has
+    # no unlinked movements but does have a draft journal, which must block transfer.
+    db.scalar.side_effect = [source, 0, 0, source, 0, 1]
 
     body = TxIn(
         transaction_date=date(2026, 11, 8),
