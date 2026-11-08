@@ -1,4 +1,4 @@
-"""النسخ الاحتياطي والاستعادة (لمدير النظام فقط). المنطق كله في app/backup_service.py."""
+"""النسخ الاحتياطي والاستعادة (لمسؤول النظام IT فقط). المنطق كله في app/backup_service.py."""
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -11,16 +11,31 @@ from .. import backup_service as svc
 from ..config import settings
 from ..database import SessionLocal, get_db
 from ..deps import get_current_user, write_audit
-from ..models import Role, User, UserRole
+from ..models import JobProfile, User
+
 
 router = APIRouter(prefix="/admin/backup", tags=["Backup & Restore"])
 
 
 def admin_only(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
-    ok = db.scalar(select(UserRole.user_id).join(Role, Role.role_id == UserRole.role_id)
-                   .where(UserRole.user_id == user.user_id, Role.role_name == "Admin"))
+    """Use the current IT administrator job profile, not the retired Admin role.
+
+    The legacy Admin role intentionally has no global grants; system administration
+    is now assigned through the active 'مسؤول النظام IT' job profile.
+    """
+    ok = db.scalar(
+        select(User.user_id)
+        .join(JobProfile, JobProfile.job_profile_id == User.job_profile_id)
+        .where(
+            User.user_id == user.user_id,
+            User.is_active.is_(True),
+            User.is_deleted.is_(False),
+            JobProfile.name_ar == "مسؤول النظام IT",
+            JobProfile.is_active.is_(True),
+        )
+    )
     if not ok:
-        raise HTTPException(403, "هذه الوظيفة لمدير النظام فقط")
+        raise HTTPException(403, "هذه الوظيفة لمسؤول النظام IT فقط")
     return user
 
 
