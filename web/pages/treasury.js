@@ -86,12 +86,26 @@ export async function render(main, { api, auth, route }) {
         if (labelElement) labelElement.textContent = label;
       };
       const updateFieldLabels = () => {
-        if (typeSelect.value === "cash_transfer") {
-          setFieldLabel(accountSelect, tr("حساب المصدر","Source account"));
-          setFieldLabel(directionSelect, tr("حساب المستلم","Receiving account"));
+        const type = typeSelect.value;
+        const routes = {
+          funding: [tr("من حساب الممول","From funding source"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
+          customer_collection: [tr("من حساب العميل","From customer account"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
+          customer_advance: [tr("من حساب العميل","From customer account"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
+          direct_income: [tr("من حساب الإيراد","From revenue account"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
+          supplier_payment: [tr("من حساب البنك / الخزينة","From bank / cash account"), tr("إلى حساب المورد / المقاول","To supplier / contractor account")],
+          supplier_advance: [tr("من حساب البنك / الخزينة","From bank / cash account"), tr("إلى حساب المورد / المقاول","To supplier / contractor account")],
+          expense_payment: [tr("من حساب البنك / الخزينة","From bank / cash account"), tr("إلى حساب المصروف","To expense account")],
+          asset_purchase: [tr("من حساب البنك / الخزينة","From bank / cash account"), tr("إلى حساب الأصل / المخزون / الأعمال تحت التنفيذ","To asset / inventory / WIP account")],
+          cash_transfer: [tr("من حساب المصدر","From source account"), tr("إلى حساب المستلم","To receiving account")]
+        };
+        const route = routes[type];
+        if (route) {
+          const incoming = ["funding","customer_collection","customer_advance","direct_income"].includes(type);
+          setFieldLabel(accountSelect, type === "cash_transfer" ? route[0] : (incoming ? route[1] : route[0]));
+          setFieldLabel(directionSelect, type === "cash_transfer" ? route[1] : (incoming ? route[0] : route[1]));
         } else {
           setFieldLabel(accountSelect, tr("حساب البنك / الخزينة","Bank / cash account"));
-          setFieldLabel(directionSelect, tr("الحساب المقابل (من حساب / إلى حساب)","Counterpart account (From / To)"));
+          setFieldLabel(directionSelect, tr("الحساب المقابل","Counterpart account"));
         }
       };
       const currentDirection = () => typeDirections[typeSelect.value] || "";
