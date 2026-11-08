@@ -33,3 +33,5 @@ jobs:
           node-version: "20"
       - name: Check cheque register JavaScript
         run: node --check web/pages/financial_checks.js
+      - name: Check treasury JavaScript
+        run: node --check web/pages/treasury.js

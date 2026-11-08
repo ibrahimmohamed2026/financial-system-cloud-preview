@@ -56,6 +56,16 @@ class GLAccountLinkIn(BaseModel):
     gl_account_id: int
 
 
+def _movement_direction_allowed(transaction_type: str | None, direction: str) -> bool:
+    """Enforce source-to-receiver direction at the treasury API boundary."""
+    config = USD_TRANSACTION_TYPES.get(transaction_type or "")
+    if config is None:
+        return False
+    if transaction_type == "cash_transfer":
+        return direction == "outflow"
+    return config["direction"] in (direction, "either")
+
+
 class TxIn(BaseModel):
     transaction_date: date
     inflow: Decimal = Amt
@@ -240,6 +250,7 @@ def treasury_counterparties(screen_code: str, transaction_type: str = Query(...,
 def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="^(inflow|outflow)$"),
                          transaction_type: str = Query(..., min_length=1, max_length=40),
                          treasury_account_id: int | None = Query(None, gt=0),
+                         counterparty_id: int | None = Query(None, gt=0),
                          user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
                          db: Session = Depends(get_db)):
     """Return only accounts allowed for the selected transaction type and direction."""
@@ -250,8 +261,40 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
     if not has_permission(db, user.user_id, treasury.screen_code, "Add"):
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
     config = USD_TRANSACTION_TYPES.get(transaction_type)
-    if config is None or config["direction"] not in (direction, "either"):
+    if not _movement_direction_allowed(transaction_type, direction):
         raise HTTPException(400, "نوع الحركة لا يتوافق مع اتجاه الوارد أو المنصرف")
+    party_required_types = {
+        "customer_collection", "customer_advance", "supplier_payment", "supplier_advance",
+    }
+    if transaction_type in party_required_types:
+        if counterparty_id is None:
+            return []
+        party = db.get(Counterparty, counterparty_id)
+        expected_party_types = (
+            ("Customer", "Mixed")
+            if transaction_type in ("customer_collection", "customer_advance")
+            else ("Supplier", "Contractor", "Mixed")
+        )
+        if party is None or not party.is_active or party.party_type not in expected_party_types:
+            raise HTTPException(422, "بطاقة العميل أو المورد/المقاول غير صحيحة لنوع الحركة")
+        linked_id = party.linked_account_id or party.account_id
+        linked = db.get(Account, linked_id) if linked_id else None
+        classification = db.get(AccountClassification, linked.classification_id) if linked else None
+        if (linked is None or not linked.is_active or classification is None
+                or classification.name_ar not in config["classifications"]):
+            raise HTTPException(422, "بطاقة الطرف غير مرتبطة بحساب فرعي مناسب لنوع الحركة")
+        if db.scalar(select(Account.account_id).where(Account.parent_account_id == linked.account_id).limit(1)):
+            raise HTTPException(422, "حساب الطرف المرتبط يجب أن يكون حسابًا فرعيًا")
+        posting_side = "credit" if direction == "inflow" else "debit"
+        side_ar = "دائن بالقيد" if direction == "inflow" else "مدين بالقيد"
+        return [{
+            "account_id": linked.account_id,
+            "label": f"{linked.account_code} — {linked.account_name_ar} ({side_ar})",
+            "classification": classification.name_ar,
+            "statement_type": classification.statement_type,
+            "normal_balance": linked.normal_balance,
+            "posting_side": posting_side,
+        }]
     parents = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
     if transaction_type == "cash_transfer":
         # Transfers must target another configured USD treasury/bank account,
@@ -276,7 +319,7 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
             .order_by(Account.account_code).limit(500)
         ).all()
     posting_side = "credit" if direction == "inflow" else "debit"
-    side_ar = "دائن" if direction == "inflow" else "مدين"
+    side_ar = "دائن بالقيد" if direction == "inflow" else "مدين بالقيد"
     return [{"account_id": a.account_id, "label": f"{a.account_code} — {a.account_name_ar} ({side_ar})",
              "classification": cl.name_ar, "statement_type": cl.statement_type,
              "normal_balance": a.normal_balance, "posting_side": posting_side} for a, cl in rows]
@@ -761,6 +804,9 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
     if not has_permission(db, user.user_id, a.screen_code, "Add"):
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
+    movement_direction = "inflow" if body.inflow > 0 else "outflow"
+    if not _movement_direction_allowed(body.transaction_type, movement_direction):
+        raise HTTPException(422, "التحويل بين الحسابات النقدية يجب أن يكون من حساب المصدر كمنصرف إلى حساب مستلم")
     values = body.model_dump(exclude={"treasury_account_id"})
     # Customer/supplier settlements must be tied to a master record; derive the GL account from it.
     party_required_types = {"customer_collection", "customer_advance", "supplier_payment", "supplier_advance"}
@@ -833,6 +879,9 @@ def edit_tx(screen_code: str, tid: int, body: TxIn,
     if not has_permission(db, user.user_id, target_account.screen_code, "Edit"):
         raise HTTPException(403, "ليس لديك صلاحية تعديل حركات حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
+    movement_direction = "inflow" if body.inflow > 0 else "outflow"
+    if not _movement_direction_allowed(body.transaction_type, movement_direction):
+        raise HTTPException(422, "التحويل بين الحسابات النقدية يجب أن يكون من حساب المصدر كمنصرف إلى حساب مستلم")
     party_required_types = {"customer_collection", "customer_advance", "supplier_payment", "supplier_advance"}
     if body.transaction_type in party_required_types and not body.counterparty_id:
         raise HTTPException(422, "اختَر بطاقة العميل أو المورد/المقاول لربط الحركة بحسابه الصحيح")
