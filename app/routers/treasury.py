@@ -755,7 +755,11 @@ def edit_tx(screen_code: str, tid: int, body: TxIn,
     for k, v in body.model_dump(exclude={"treasury_account_id"}).items():
         setattr(t, k, v)
     t.treasury_account_id = target_account.treasury_account_id
-    journal_no = _create_usd_journal(db, target_account, t, body, user, allow_legacy=True) if target_account.currency_code == "USD" else None
+    if target_account.currency_code == "USD":
+        journal_no = _create_usd_journal(db, target_account, t, body, user, allow_legacy=True)
+    else:
+        journal_no = _create_egp_journal(db, target_account, t, body, user)
+        _create_egp_transfer_mirror(db, target_account, t, body, user)
     write_audit(db, user.user_id, "Update", "TreasuryTransactions", tid, old, body.model_dump())
     db.commit()
     return {"transaction_id": tid, "journal_entry_no": journal_no, "journal_status": "Draft" if journal_no else None}
