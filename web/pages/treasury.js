@@ -111,6 +111,7 @@ export async function render(main, { api, auth, route }) {
           } else if (options.some(a => String(a.account_id) === selected)) {
             directionSelect.value = selected;
           }
+          updateHint();
         } catch (e) {
           directionSelect.innerHTML = '<option value="">—</option>';
           throw e;
