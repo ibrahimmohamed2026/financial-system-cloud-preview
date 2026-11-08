@@ -243,7 +243,7 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
     db.add(FinancialCheckStatusHistory(check_id=cid, old_status=old_status, new_status=new_status, changed_by=user.user_id))
     write_audit(db, user.user_id, "Update", "FinancialChecks", cid, {"status": old_status}, {"status": new_status})
     db.commit()
-    return out(c, db)
+    return out(c, db if new_status in settlement_statuses else None)
 
 @router.post("/{cid}/project")
 def set_project(cid: int, body: ProjectLinkIn, user: User = Depends(require_any(SCREENS, "Edit")), db: Session = Depends(get_db)):
