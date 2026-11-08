@@ -232,18 +232,38 @@ def treasury_counterparties(screen_code: str, transaction_type: str = Query(...,
     config = USD_TRANSACTION_TYPES.get(transaction_type)
     if config is None:
         raise HTTPException(400, "نوع الحركة غير معروف")
+    # Keep active party cards visible even when their ledger link is missing or
+    # unsuitable. The selection endpoint below remains the strict accounting guard.
     rows = db.execute(
         select(Counterparty, Account, AccountClassification)
-        .join(Account, Account.account_id == func.coalesce(Counterparty.linked_account_id, Counterparty.account_id))
-        .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
-        .where(Counterparty.is_active == True, Counterparty.party_type.in_(allowed_types),
-               Account.is_active == True, AccountClassification.name_ar.in_(config["classifications"]))
-        .order_by(Counterparty.legal_name).limit(500)
+        .outerjoin(Account, Account.account_id == func.coalesce(Counterparty.linked_account_id, Counterparty.account_id))
+        .outerjoin(AccountClassification, AccountClassification.classification_id == Account.classification_id)
+        .where(Counterparty.is_active == True, Counterparty.party_type.in_(allowed_types))
+        .order_by(Counterparty.legal_name, Counterparty.counterparty_id).limit(500)
     ).all()
     parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
-    return [{"counterparty_id": p.counterparty_id, "label": f"{p.code} — {p.legal_name}",
-             "linked_account_id": a.account_id, "account_label": f"{a.account_code} — {a.account_name_ar}"}
-            for p, a, _cl in rows if a.account_id not in parents]
+    result = []
+    for party, account, classification in rows:
+        if account is None:
+            account_label = "غير مربوط بحساب في شجرة الحسابات"
+        elif not account.is_active:
+            account_label = f"{account.account_code} — {account.account_name_ar} (الحساب موقوف)"
+        elif account.account_id in parents:
+            account_label = f"{account.account_code} — {account.account_name_ar} (حساب رئيسي؛ اختر حسابًا فرعيًا)"
+        elif classification is None or classification.name_ar not in config["classifications"]:
+            actual_class = classification.name_ar if classification else "بدون تصنيف"
+            account_label = f"{account.account_code} — {account.account_name_ar} (تصنيف غير مناسب: {actual_class})"
+        else:
+            account_label = f"{account.account_code} — {account.account_name_ar}"
+        result.append({
+            "counterparty_id": party.counterparty_id,
+            "label": f"{party.code} — {party.legal_name or party.name}",
+            "linked_account_id": account.account_id if account else None,
+            "account_label": account_label,
+            "account_usable": bool(account and account.is_active and account.account_id not in parents
+                                    and classification and classification.name_ar in config["classifications"]),
+        })
+    return result
 
 
 @router.get("/{screen_code}/counterpart-accounts")
