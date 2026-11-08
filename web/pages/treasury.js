@@ -23,7 +23,7 @@ export async function render(main, { api, auth, route }) {
     p.set("treasury_account_id", selectedTreasuryId);
     const r = await api(base + "/transactions?" + p); items = r.items;
     $("#sum").innerHTML = `${tr("رصيد أول الفترة:","Opening balance:")} <b>${money(r.opening_balance) === "-" ? "0.00" : money(r.opening_balance)}</b> — ${tr("وارد:","Inflow:")} <b>${money(r.total_inflow)}</b> — ${tr("منصرف:","Outflow:")} <b>${money(r.total_outflow)}</b> — ${tr("الرصيد الحالي:","Current balance:")} <b>${money(r.closing_balance) === "-" ? "0.00" : money(r.closing_balance)}</b>${r.total > 500 ? ` — (${tr("معروض أول 500 حركة","First 500 transactions shown")})` : ""}`;
-    $("#rows").innerHTML = items.map(t => `<tr><td>${t.transaction_date}</td><td>${esc(+t.inflow > 0 ? (t.counterpart_account_label || "—") : (t.treasury_account_name || acc.name_ar))}</td><td>${esc(+t.inflow > 0 ? (t.treasury_account_name || acc.name_ar) : (t.counterpart_account_label || "—"))}</td><td class="num">${money(t.inflow)}</td><td class="num">${money(t.outflow)}</td><td class="num">${money(t.balance) === "-" ? "0.00" : money(t.balance)}</td>
+    $("#rows").innerHTML = items.map(t => `<tr><td>${t.transaction_date}</td><td>${esc(t.from_account_label || (+t.inflow > 0 ? (t.counterpart_account_label || "—") : (t.treasury_account_name || acc.name_ar)))}</td><td>${esc(t.to_account_label || (+t.inflow > 0 ? (t.treasury_account_name || acc.name_ar) : (t.counterpart_account_label || "—")))}</td><td class="num">${money(t.inflow)}</td><td class="num">${money(t.outflow)}</td><td class="num">${money(t.balance) === "-" ? "0.00" : money(t.balance)}</td>
       <td>${esc(t.description)}</td>${`<td>${esc(USD_TX_LABELS[t.transaction_type] || "—")}</td>`}${acc.currency_code === "USD" ? `<td class="num">${t.exchange_rate ? Number(t.exchange_rate).toFixed(6) : "—"}</td>` : ""}<td>${esc(t.voucher_no)}</td><td>${esc(t.status)}</td><td>${esc(t.recipient_name)}</td>
       <td>${t.locked ? `<span class="tag">${tr("مرتبط بقيد","Linked to journal entry")}</span>` : acc.currency_code === "EGP" ? `<span class="tag muted">${tr("حركة قديمة غير مرتبطة — للمراجعة","Legacy movement — reconciliation required")}</span>` : `${can("Edit") ? `<button class="btn sm" data-e="${t.transaction_id}">${tr("تعديل","Edit")}</button> ` : ""}${can("Delete") ? `<button class="btn sm danger" data-d="${t.transaction_id}">${tr("حذف","Delete")}</button>` : ""}`}</td></tr>`).join("")
       || `<tr><td colspan="${acc.currency_code === "USD" ? 13 : 12}" class="muted">${tr("لا توجد حركات","No transactions")}</td></tr>`;
@@ -86,12 +86,26 @@ export async function render(main, { api, auth, route }) {
         if (labelElement) labelElement.textContent = label;
       };
       const updateFieldLabels = () => {
-        if (typeSelect.value === "cash_transfer") {
-          setFieldLabel(accountSelect, tr("حساب المصدر","Source account"));
-          setFieldLabel(directionSelect, tr("حساب المستلم","Receiving account"));
+        const type = typeSelect.value;
+        const routes = {
+          funding: [tr("من حساب الممول","From funding source"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
+          customer_collection: [tr("من حساب العميل","From customer account"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
+          customer_advance: [tr("من حساب العميل","From customer account"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
+          direct_income: [tr("من حساب الإيراد","From revenue account"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
+          supplier_payment: [tr("من حساب البنك / الخزينة","From bank / cash account"), tr("إلى حساب المورد / المقاول","To supplier / contractor account")],
+          supplier_advance: [tr("من حساب البنك / الخزينة","From bank / cash account"), tr("إلى حساب المورد / المقاول","To supplier / contractor account")],
+          expense_payment: [tr("من حساب البنك / الخزينة","From bank / cash account"), tr("إلى حساب المصروف","To expense account")],
+          asset_purchase: [tr("من حساب البنك / الخزينة","From bank / cash account"), tr("إلى حساب الأصل / المخزون / الأعمال تحت التنفيذ","To asset / inventory / WIP account")],
+          cash_transfer: [tr("من حساب المصدر","From source account"), tr("إلى حساب المستلم","To receiving account")]
+        };
+        const route = routes[type];
+        if (route) {
+          const incoming = ["funding","customer_collection","customer_advance","direct_income"].includes(type);
+          setFieldLabel(accountSelect, type === "cash_transfer" ? route[0] : (incoming ? route[1] : route[0]));
+          setFieldLabel(directionSelect, type === "cash_transfer" ? route[1] : (incoming ? route[0] : route[1]));
         } else {
           setFieldLabel(accountSelect, tr("حساب البنك / الخزينة","Bank / cash account"));
-          setFieldLabel(directionSelect, tr("الحساب المقابل (من حساب / إلى حساب)","Counterpart account (From / To)"));
+          setFieldLabel(directionSelect, tr("الحساب المقابل","Counterpart account"));
         }
       };
       const currentDirection = () => typeDirections[typeSelect.value] || "";

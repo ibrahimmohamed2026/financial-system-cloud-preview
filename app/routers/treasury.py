@@ -18,6 +18,11 @@ BANK_SCREENS = {
 }
 router = APIRouter(prefix="/treasury", tags=["Treasury"])
 D0 = Decimal("0")
+
+
+def _movement_route(treasury_label: str, counterpart_label: str, inflow: bool) -> tuple[str, str]:
+    """Return the real money path (source, destination) for a bank/cash movement."""
+    return (counterpart_label, treasury_label) if inflow else (treasury_label, counterpart_label)
 Amt = Field(default=D0, ge=0, max_digits=18, decimal_places=2)
 
 # Transaction type determines the only valid counterpart classifications.
@@ -232,18 +237,38 @@ def treasury_counterparties(screen_code: str, transaction_type: str = Query(...,
     config = USD_TRANSACTION_TYPES.get(transaction_type)
     if config is None:
         raise HTTPException(400, "نوع الحركة غير معروف")
+    # Keep active party cards visible even when their ledger link is missing or
+    # unsuitable. The selection endpoint below remains the strict accounting guard.
     rows = db.execute(
         select(Counterparty, Account, AccountClassification)
-        .join(Account, Account.account_id == func.coalesce(Counterparty.linked_account_id, Counterparty.account_id))
-        .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
-        .where(Counterparty.is_active == True, Counterparty.party_type.in_(allowed_types),
-               Account.is_active == True, AccountClassification.name_ar.in_(config["classifications"]))
-        .order_by(Counterparty.legal_name).limit(500)
+        .outerjoin(Account, Account.account_id == func.coalesce(Counterparty.linked_account_id, Counterparty.account_id))
+        .outerjoin(AccountClassification, AccountClassification.classification_id == Account.classification_id)
+        .where(Counterparty.is_active == True, Counterparty.party_type.in_(allowed_types))
+        .order_by(Counterparty.legal_name, Counterparty.counterparty_id).limit(500)
     ).all()
     parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
-    return [{"counterparty_id": p.counterparty_id, "label": f"{p.code} — {p.legal_name}",
-             "linked_account_id": a.account_id, "account_label": f"{a.account_code} — {a.account_name_ar}"}
-            for p, a, _cl in rows if a.account_id not in parents]
+    result = []
+    for party, account, classification in rows:
+        if account is None:
+            account_label = "غير مربوط بحساب في شجرة الحسابات"
+        elif not account.is_active:
+            account_label = f"{account.account_code} — {account.account_name_ar} (الحساب موقوف)"
+        elif account.account_id in parents:
+            account_label = f"{account.account_code} — {account.account_name_ar} (حساب رئيسي؛ اختر حسابًا فرعيًا)"
+        elif classification is None or classification.name_ar not in config["classifications"]:
+            actual_class = classification.name_ar if classification else "بدون تصنيف"
+            account_label = f"{account.account_code} — {account.account_name_ar} (تصنيف غير مناسب: {actual_class})"
+        else:
+            account_label = f"{account.account_code} — {account.account_name_ar}"
+        result.append({
+            "counterparty_id": party.counterparty_id,
+            "label": f"{party.code} — {party.legal_name or party.name}",
+            "linked_account_id": account.account_id if account else None,
+            "account_label": account_label,
+            "account_usable": bool(account and account.is_active and account.account_id not in parents
+                                    and classification and classification.name_ar in config["classifications"]),
+        })
+    return result
 
 
 @router.get("/{screen_code}/counterpart-accounts")
@@ -397,6 +422,13 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
         run += t.inflow - t.outflow
         tin += t.inflow
         tout += t.outflow
+        counterpart = db.get(Account, t.counterpart_account_id) if t.counterpart_account_id else None
+        counterpart_label = (f"{counterpart.account_code} — {counterpart.account_name_ar}"
+                             if counterpart else "حساب غير محدد")
+        treasury_gl = db.get(Account, a.gl_account_id)
+        treasury_label = (f"{treasury_gl.account_code} — {treasury_gl.account_name_ar}"
+                          if treasury_gl else a.name_ar)
+        from_label, to_label = _movement_route(treasury_label, counterpart_label, t.inflow > 0)
         out.append({"transaction_id": t.transaction_id, "transaction_date": t.transaction_date,
                     "treasury_account_id": a.treasury_account_id, "treasury_account_name": a.name_ar,
                     "treasury_account_type": a.account_type,
@@ -406,11 +438,8 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
                     "transaction_type": t.transaction_type,
                     "exchange_rate": str(t.exchange_rate) if t.exchange_rate is not None else None,
                     "counterpart_account_id": t.counterpart_account_id,
-                    "counterpart_account_label": (
-                        f"{db.get(Account, t.counterpart_account_id).account_code} — "
-                        f"{db.get(Account, t.counterpart_account_id).account_name_ar}"
-                        if t.counterpart_account_id and db.get(Account, t.counterpart_account_id) else None
-                    ),
+                    "counterpart_account_label": counterpart_label,
+                    "from_account_label": from_label, "to_account_label": to_label,
                     "counterparty_id": t.counterparty_id,
                     "journal_entry_id": t.journal_entry_id,
                     "locked": t.journal_entry_id is not None})

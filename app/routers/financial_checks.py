@@ -83,11 +83,32 @@ class AllocationIn(BaseModel):
 
 
 
-def out(c):
+def _flow_account_ids(check_type: str, party_account_id: int, bank_gl_account_id: int | None) -> tuple[int | None, int | None]:
+    """Return (source, destination) GL accounts for the cheque's actual settlement."""
+    if check_type == "INCOMING":
+        return party_account_id, bank_gl_account_id
+    if check_type == "OUTGOING":
+        return bank_gl_account_id, party_account_id
+    raise HTTPException(422, "نوع الشيك غير صحيح")
+
+
+def out(c, db=None):
+    bank = db.get(TreasuryAccount, c.treasury_account_id) if db is not None else None
+    party = db.get(Account, c.party_account_id) if db is not None else None
+    bank_gl = db.get(Account, bank.gl_account_id) if bank is not None else None
+    source_id, destination_id = _flow_account_ids(
+        c.check_type, c.party_account_id, bank.gl_account_id if bank is not None else None)
+    def label(account):
+        return (f"{account.account_code} — {account.account_name_ar}"
+                if account is not None else "حساب غير مربوط")
+    source_account = party if c.check_type == "INCOMING" else bank_gl
+    destination_account = bank_gl if c.check_type == "INCOMING" else party
     return {"check_id": c.check_id, "check_number": c.check_number, "check_type": c.check_type,
             "amount": str(c.amount), "due_date": str(c.due_date), "drawee_bank": c.drawee_bank,
             "status": c.status, "project_id": c.project_id, "party_account_id": c.party_account_id,
             "treasury_account_id": c.treasury_account_id, "journal_entry_id": c.journal_entry_id,
+            "from_account_id": source_id, "to_account_id": destination_id,
+            "from_account_label": label(source_account), "to_account_label": label(destination_account),
             "description": c.description}
 
 @router.get("/options")
@@ -109,7 +130,7 @@ def list_checks(status: str | None = None, check_type: str | None = None, projec
     if check_type: q = q.where(FinancialCheck.check_type == check_type)
     if project_id is not None: q = q.where(FinancialCheck.project_id == project_id)
     if qtext: q = q.where(FinancialCheck.check_number.ilike(f"%{qtext[:80]}%"))
-    return [out(c) for c in db.scalars(q.limit(2000))]
+    return [out(c, db) for c in db.scalars(q.limit(2000))]
 
 @router.post("", status_code=201)
 def create(body: CheckIn, user: User = Depends(require_any(SCREENS, "Add")), db: Session = Depends(get_db)):
@@ -131,7 +152,7 @@ def create(body: CheckIn, user: User = Depends(require_any(SCREENS, "Add")), db:
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, "رقم الشيك مستخدم بالفعل")
-    return out(c)
+    return out(c, db)
 
 @router.post("/{cid}/status")
 def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREENS, "Edit")), db: Session = Depends(get_db)):
@@ -195,7 +216,7 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
         if c.check_type == "INCOMING":
             db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=entry_date,
                 inflow=amount, outflow=Decimal("0"), description=f"تحصيل شيك {c.check_number}",
-                voucher_no=voucher_no, status="تم التحصيل", journal_entry_id=entry.journal_entry_id))
+                voucher_no=voucher_no, status="تم التحصيل", counterpart_account_id=party.account_id, journal_entry_id=entry.journal_entry_id))
         else:
             # Preserve the cheque's single balanced journal entry while distributing
             # its bank payment across the linked settlement balances.
@@ -210,19 +231,19 @@ def set_status(cid: int, body: StatusIn, user: User = Depends(require_any(SCREEN
                     inflow=Decimal("0"), outflow=_money(allocation.allocated_amount),
                     description=f"صرف شيك {c.check_number} للمستخلص {allocation.settlement_id}",
                     voucher_no=f"{voucher_no}-A{allocation.allocation_id}", status="تم الصرف",
-                    settlement_id=allocation.settlement_id, journal_entry_id=entry.journal_entry_id))
+                    counterpart_account_id=party.account_id, settlement_id=allocation.settlement_id, journal_entry_id=entry.journal_entry_id))
             unallocated = _money(amount - allocated_total)
             if unallocated > 0:
                 db.add(TreasuryTransaction(treasury_account_id=c.treasury_account_id, transaction_date=entry_date,
                     inflow=Decimal("0"), outflow=unallocated,
                     description=f"صرف غير موزع من شيك {c.check_number}", voucher_no=voucher_no,
-                    status="تم الصرف", journal_entry_id=entry.journal_entry_id))
+                    status="تم الصرف", counterpart_account_id=party.account_id, journal_entry_id=entry.journal_entry_id))
     old_status = c.status
     c.status = new_status
     db.add(FinancialCheckStatusHistory(check_id=cid, old_status=old_status, new_status=new_status, changed_by=user.user_id))
     write_audit(db, user.user_id, "Update", "FinancialChecks", cid, {"status": old_status}, {"status": new_status})
     db.commit()
-    return out(c)
+    return out(c, db if new_status in settlement_statuses else None)
 
 @router.post("/{cid}/project")
 def set_project(cid: int, body: ProjectLinkIn, user: User = Depends(require_any(SCREENS, "Edit")), db: Session = Depends(get_db)):
@@ -237,7 +258,7 @@ def set_project(cid: int, body: ProjectLinkIn, user: User = Depends(require_any(
     write_audit(db, user.user_id, "UpdateProject", "FinancialChecks", cid,
                 {"project_id": old}, {"project_id": c.project_id})
     db.commit()
-    return out(c)
+    return out(c, db)
 
 @router.get("/export.csv")
 def export_csv(_: User = Depends(require_any(SCREENS, "View")), db: Session = Depends(get_db)):

@@ -120,8 +120,8 @@ def test_outgoing_payment_posts_one_journal_and_allocated_bank_movements(monkeyp
         end_date=date(2026, 12, 31), is_closed=False,
     )
     bank = SimpleNamespace(account_type="Bank", currency_code="EGP", gl_account_id=10)
-    bank_gl = SimpleNamespace(account_id=10, is_active=True)
-    party = SimpleNamespace(account_id=20, is_active=True)
+    bank_gl = SimpleNamespace(account_id=10, is_active=True, account_code="1101", account_name_ar="حساب البنك")
+    party = SimpleNamespace(account_id=20, is_active=True, account_code="2101", account_name_ar="حساب المورد")
     allocations = [
         SimpleNamespace(allocation_id=1, settlement_id=31, allocated_amount=Decimal("200.00")),
         SimpleNamespace(allocation_id=2, settlement_id=32, allocated_amount=Decimal("100.00")),
@@ -159,7 +159,38 @@ def test_outgoing_payment_posts_one_journal_and_allocated_bank_movements(monkeyp
     assert sum((x.outflow for x in movements), Decimal("0")) == Decimal("500.00")
     assert {x.settlement_id for x in movements if x.settlement_id is not None} == {31, 32}
     assert all(x.journal_entry_id == 88 for x in movements)
+    assert all(x.counterpart_account_id == 20 for x in movements)
     db.commit.assert_called_once()
+
+
+
+def test_previously_posted_cheque_cannot_create_a_second_journal_or_bank_movement(monkeypatch):
+    check = SimpleNamespace(
+        check_id=13, check_type="OUTGOING", status="تم التسليم",
+        journal_entry_id=99, check_number="CHK-13", amount=Decimal("100.00"),
+        due_date=date(2026, 11, 30), drawee_bank=None, project_id=None,
+        party_account_id=20, treasury_account_id=6, description=None,
+    )
+    db = MagicMock()
+    db.scalar.return_value = check
+    monkeypatch.setattr(financial_checks, "write_audit", lambda *args, **kwargs: None)
+
+    with pytest.raises(HTTPException) as exc:
+        financial_checks.set_status(
+            13, financial_checks.StatusIn(status="منصرف"),
+            SimpleNamespace(user_id=7), db,
+        )
+
+    assert exc.value.status_code == 409
+    db.add.assert_not_called()
+    db.commit.assert_not_called()
+
+
+def test_financial_cheque_route_matches_the_actual_bank_settlement_direction():
+    from app.routers.financial_checks import _flow_account_ids
+
+    assert _flow_account_ids("INCOMING", 20, 10) == (20, 10)
+    assert _flow_account_ids("OUTGOING", 20, 10) == (10, 20)
 
 
 def test_outgoing_cheque_approval_does_not_post_to_bank_or_ledger(monkeypatch):
