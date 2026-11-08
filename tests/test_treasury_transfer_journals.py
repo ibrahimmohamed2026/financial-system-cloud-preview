@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.models import Account, JournalEntry
+from app.models import Account, AccountClassification, JournalEntry
 from app.routers.treasury import (
     BANK_SCREENS,
     USD_TRANSACTION_TYPES,
@@ -179,6 +179,140 @@ def test_usd_transfer_rejects_counterpart_without_active_usd_treasury():
         transaction_type="cash_transfer",
     )
 
-    with pytest.raises(Exception):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException):
         _create_usd_transfer_mirror(db, source, original, body, SimpleNamespace(user_id=7))
     db.add.assert_not_called()
+
+
+
+@pytest.mark.parametrize("transaction_type", list(USD_TRANSACTION_TYPES))
+def test_egp_journal_builder_creates_balanced_entry_for_every_movement_type(
+    monkeypatch, transaction_type
+):
+    import app.routers.treasury as treasury_module
+    import app.routers.journal as journal_module
+
+    config = USD_TRANSACTION_TYPES[transaction_type]
+    direction = config["direction"]
+    inflow = Decimal("1250") if direction == "inflow" else Decimal("0")
+    outflow = Decimal("1250") if direction == "outflow" else Decimal("0")
+    if direction == "either":
+        outflow = Decimal("1250")
+
+    monkeypatch.setattr(journal_module, "_fy_for", lambda db, entry_date:
+                        SimpleNamespace(company_id=1, fiscal_year_id=2026))
+    monkeypatch.setattr(journal_module, "_next_no", lambda db, fiscal_year: "JE-EGP-ALL")
+    monkeypatch.setattr(treasury_module, "write_audit", lambda *args, **kwargs: None)
+
+    counterpart = SimpleNamespace(account_id=20, is_active=True, classification_id=4)
+    classification = SimpleNamespace(name_ar=config["classifications"][0])
+    db = MagicMock()
+    db.get.side_effect = lambda model, key: (
+        counterpart if model is Account else
+        classification if model is AccountClassification else None
+    )
+    db.scalars.return_value = []
+    if transaction_type == "cash_transfer":
+        db.scalar.return_value = SimpleNamespace(
+            treasury_account_id=8, gl_account_id=20, currency_code="EGP",
+            is_active=True, name_ar="البنك المستلم"
+        )
+
+    def assign_entry_id(value):
+        if isinstance(value, JournalEntry):
+            value.journal_entry_id = 88
+
+    db.add.side_effect = assign_entry_id
+    movement = SimpleNamespace(journal_entry_id=None)
+    body = TxIn(
+        transaction_date=date(2026, 11, 8),
+        inflow=inflow,
+        outflow=outflow,
+        counterpart_account_id=20,
+        transaction_type=transaction_type,
+    )
+    treasury = SimpleNamespace(
+        gl_account_id=10, name_ar="حساب نقدي", currency_code="EGP",
+        treasury_account_id=3,
+    )
+
+    _create_egp_journal(db, treasury, movement, body, SimpleNamespace(user_id=7))
+
+    lines = db.add_all.call_args.args[0]
+    assert len(lines) == 2
+    assert sum(line.debit_amount for line in lines) == sum(
+        line.credit_amount for line in lines
+    )
+
+
+@pytest.mark.parametrize("transaction_type", list(USD_TRANSACTION_TYPES))
+def test_usd_journal_builder_creates_balanced_entry_for_every_movement_type(
+    monkeypatch, transaction_type
+):
+    import app.routers.treasury as treasury_module
+    import app.routers.journal as journal_module
+
+    config = USD_TRANSACTION_TYPES[transaction_type]
+    direction = config["direction"]
+    inflow = Decimal("1000") if direction == "inflow" else Decimal("0")
+    outflow = Decimal("1000") if direction == "outflow" else Decimal("0")
+    if direction == "either":
+        outflow = Decimal("1000")
+
+    monkeypatch.setattr(journal_module, "_fy_for", lambda db, entry_date:
+                        SimpleNamespace(company_id=1, fiscal_year_id=2026))
+    monkeypatch.setattr(journal_module, "_next_no", lambda db, fiscal_year: "JE-USD-ALL")
+    monkeypatch.setattr(treasury_module, "write_audit", lambda *args, **kwargs: None)
+
+    counterpart = SimpleNamespace(account_id=20, account_code="15301003",
+                                  is_active=True, classification_id=4)
+    classification = SimpleNamespace(name_ar=config["classifications"][0])
+    treasury_source = SimpleNamespace(
+        treasury_account_id=3, gl_account_id=10, currency_code="USD",
+        is_active=True, name_ar="حساب الدولار"
+    )
+    db = MagicMock()
+    db.get.side_effect = lambda model, key: (
+        counterpart if model is Account else
+        classification if model is AccountClassification else None
+    )
+    db.scalars.return_value = []
+    if transaction_type == "cash_transfer":
+        db.scalar.side_effect = [
+            SimpleNamespace(treasury_account_id=8, gl_account_id=20,
+                            currency_code="USD", is_active=True),
+            0,
+            0,
+            treasury_source,
+        ]
+    else:
+        db.scalar.side_effect = [0, 0]
+    db.execute.return_value.all.return_value = [
+        SimpleNamespace(fcy_amount=Decimal("1000"), debit_amount=Decimal("10000"),
+                        credit_amount=Decimal("0"))
+    ]
+
+    def assign_entry_id(value):
+        if isinstance(value, JournalEntry):
+            value.journal_entry_id = 89
+
+    db.add.side_effect = assign_entry_id
+    movement = SimpleNamespace(journal_entry_id=None)
+    body = TxIn(
+        transaction_date=date(2026, 11, 8),
+        inflow=inflow,
+        outflow=outflow,
+        exchange_rate=Decimal("10"),
+        counterpart_account_id=20,
+        transaction_type=transaction_type,
+    )
+
+    _create_usd_journal(db, treasury_source, movement, body, SimpleNamespace(user_id=7))
+
+    lines = db.add_all.call_args.args[0]
+    assert len(lines) == 2
+    assert sum(line.debit_amount for line in lines) == sum(
+        line.credit_amount for line in lines
+    )
