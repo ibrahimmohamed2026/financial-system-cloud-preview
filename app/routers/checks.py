@@ -61,8 +61,14 @@ def beneficiaries(q: str | None = None, _: User = Depends(require_any(CHECK_SCRE
     stmt = select(Beneficiary).where(Beneficiary.is_active == True)
     if q and q.strip():
         stmt = stmt.where(or_(Beneficiary.name_ar.ilike(f"%{q.strip()}%"), Beneficiary.code.ilike(f"%{q.strip()}%")))
-    return [{"beneficiary_id": b.beneficiary_id, "code": b.code, "name_ar": b.name_ar}
-            for b in db.scalars(stmt.order_by(Beneficiary.name_ar).limit(500))]
+    result = []
+    for b in db.scalars(stmt.order_by(Beneficiary.name_ar).limit(500)):
+        linked = db.get(Account, b.linked_account_id) if b.linked_account_id else None
+        result.append({"beneficiary_id": b.beneficiary_id, "code": b.code, "name_ar": b.name_ar,
+                       "linked_account_id": linked.account_id if linked else None,
+                       "linked_account_label": (f"{linked.account_code} — {linked.account_name_ar}"
+                                                if linked else "غير مربوط بحساب في شجرة الحسابات")})
+    return result
 
 
 @router.post("/beneficiaries", status_code=201)
