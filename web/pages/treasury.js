@@ -55,7 +55,7 @@ export async function render(main, { api, auth, route }) {
       { name: "counterpart_account_id", label: tr("حساب الطرف المقابل","Counterpart account"), type: "select", searchable: true, options: initialCounterparts.map(a => [String(a.account_id), a.label]), required: true, full: true },
       { name: "voucher_no", label: tr("رقم الإذن","Voucher No.") }, { name: "inflow", label: tr("وارد","Inflow"), type: "number", step: "0.01", min: 0 }, { name: "outflow", label: tr("منصرف","Outflow"), type: "number", step: "0.01", min: 0 },
       { name: "description", label: tr("البيان","Description"), full: true }, { name: "status", label: tr("الحالة (مثال: تمويل)","Status (e.g. Funding)") }, { name: "recipient_name", label: tr("المستلم","Recipient") },
-      { name: "project_id", label: tr("مركز التكلفة","Cost center"), type: "select", optional: true, options: projs.map(p => [p.project_id, p.name_ar]), full: true }],
+      { name: "project_id", label: tr("مركز التكلفة (اختياري عند ارتباط الحركة بمشروع)","Cost center (optional; select when the movement relates to a project)"), type: "select", optional: true, options: projs.map(p => [p.project_id, p.name_ar]), full: true }],
     onSubmit: async v => {
       const saved = await api(t ? `${base}/transactions/${t.transaction_id}` : base + "/transactions", { method: t ? "PUT" : "POST", json: {
         transaction_date: v.transaction_date, inflow: v.inflow || "0", outflow: v.outflow || "0", description: v.description || null, voucher_no: v.voucher_no || null,
@@ -110,9 +110,21 @@ export async function render(main, { api, auth, route }) {
       };
       const applyDirectionFromType = () => {
         const fixed = typeDirections[typeSelect.value];
-        if (fixed === "inflow") { outflow.value = ""; outflow.disabled = true; inflow.disabled = false; }
-        else if (fixed === "outflow") { inflow.value = ""; inflow.disabled = true; outflow.disabled = false; }
-        else { inflow.disabled = false; outflow.disabled = false; }
+        if (fixed === "inflow") {
+          outflow.value = ""; outflow.disabled = true; outflow.required = false;
+          inflow.disabled = false; inflow.required = true;
+        } else if (fixed === "outflow") {
+          inflow.value = ""; inflow.disabled = true; inflow.required = false;
+          outflow.disabled = false; outflow.required = true;
+        } else {
+          inflow.disabled = false; outflow.disabled = false;
+          inflow.required = false; outflow.required = false;
+        }
+      };
+      const enforceSingleTransferDirection = changed => {
+        if (typeDirections[typeSelect.value] !== "either") return;
+        if (changed === "inflow" && +inflow.value > 0) outflow.value = "";
+        if (changed === "outflow" && +outflow.value > 0) inflow.value = "";
       };
       typeSelect.addEventListener("change", () => {
         applyDirectionFromType();
@@ -122,8 +134,16 @@ export async function render(main, { api, auth, route }) {
       accountSelect.addEventListener("change", () => refreshCounterparts(currentDirection()).catch(e => toast(errText(e))));
       applyDirectionFromType();
       refreshParties().catch(e => toast(errText(e)));
-      inflow.addEventListener("input", () => { if (+inflow.value > 0) refreshCounterparts("inflow").catch(e => toast(errText(e))); });
-      outflow.addEventListener("input", () => { if (+outflow.value > 0) refreshCounterparts("outflow").catch(e => toast(errText(e))); });
+      inflow.addEventListener("input", () => {
+        enforceSingleTransferDirection("inflow");
+        if (+inflow.value > 0) refreshCounterparts("inflow").catch(e => toast(errText(e)));
+        if (typeDirections[typeSelect.value] === "either") updateHint();
+      });
+      outflow.addEventListener("input", () => {
+        enforceSingleTransferDirection("outflow");
+        if (+outflow.value > 0) refreshCounterparts("outflow").catch(e => toast(errText(e)));
+        if (typeDirections[typeSelect.value] === "either") updateHint();
+      });
       const sideHint = document.createElement("small");
       sideHint.className = "muted";
       sideHint.textContent = (+inflow.value > 0 || (!+outflow.value && !+inflow.value))
