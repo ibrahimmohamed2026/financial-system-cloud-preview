@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from app.models import Account, Beneficiary
 from app.routers import checks
+from app.routers import financial_checks
 from app.routers.financial_checks import _flow_account_ids
 from app.routers.treasury import _movement_route
 
@@ -23,6 +24,31 @@ def test_treasury_outflow_is_bank_to_party():
 def test_incoming_and_outgoing_financial_cheques_have_opposite_routes():
     assert _flow_account_ids("INCOMING", 101, 201) == (101, 201)
     assert _flow_account_ids("OUTGOING", 101, 201) == (201, 101)
+
+
+
+def test_financial_check_api_returns_directional_account_labels():
+    party = SimpleNamespace(account_id=101, account_code="2101", account_name_ar="حساب الطرف")
+    bank_gl = SimpleNamespace(account_id=201, account_code="1101", account_name_ar="حساب البنك")
+    bank = SimpleNamespace(gl_account_id=201)
+    db = MagicMock()
+    db.get.side_effect = lambda model, key: bank if model.__name__ == "TreasuryAccount" else (
+        party if key == 101 else bank_gl if key == 201 else None
+    )
+    common = dict(
+        check_id=1, check_number="F-1", amount=Decimal("100.00"),
+        due_date=date(2026, 11, 30), drawee_bank=None, status="مسودة",
+        project_id=None, party_account_id=101, treasury_account_id=9,
+        journal_entry_id=None, description=None,
+    )
+
+    incoming = financial_checks.out(SimpleNamespace(check_type="INCOMING", **common), db)
+    outgoing = financial_checks.out(SimpleNamespace(check_type="OUTGOING", **common), db)
+
+    assert incoming["from_account_label"] == "2101 — حساب الطرف"
+    assert incoming["to_account_label"] == "1101 — حساب البنك"
+    assert outgoing["from_account_label"] == "1101 — حساب البنك"
+    assert outgoing["to_account_label"] == "2101 — حساب الطرف"
 
 
 def test_issued_cheque_route_is_bank_to_beneficiary():
