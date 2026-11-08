@@ -31,10 +31,13 @@ export async function render(main, { api, auth, route }) {
   const form = async t => {
     const initialDirection = t ? (+t.inflow > 0 ? "inflow" : "outflow") : "inflow";
     const initialType = t?.transaction_type || "";
-    const initialCounterparts = initialType
-      ? await api(base + "/counterpart-accounts?direction=" + initialDirection + "&transaction_type=" + encodeURIComponent(initialType) + "&treasury_account_id=" + encodeURIComponent(t?.treasury_account_id || selectedTreasuryId)).catch(() => []) : [];
-    const initialParties = ["customer_collection","customer_advance","supplier_payment","supplier_advance"].includes(initialType)
+    const partyRequiredTypes = ["customer_collection","customer_advance","supplier_payment","supplier_advance"];
+    const initialParties = partyRequiredTypes.includes(initialType)
       ? await api(base + "/counterparties?transaction_type=" + encodeURIComponent(initialType)).catch(() => []) : [];
+    const initialCounterpartyId = t?.counterparty_id ? String(t.counterparty_id) : "";
+    const initialCounterparts = initialType
+      ? await api(base + "/counterpart-accounts?direction=" + initialDirection + "&transaction_type=" + encodeURIComponent(initialType) + "&treasury_account_id=" + encodeURIComponent(t?.treasury_account_id || selectedTreasuryId)
+        + (partyRequiredTypes.includes(initialType) && initialCounterpartyId ? "&counterparty_id=" + encodeURIComponent(initialCounterpartyId) : "")).catch(() => []) : [];
     return formDialog({
     title: t ? tr("تعديل حركة","Edit transaction") : tr("حركة جديدة","New transaction"), values: t ? { ...t, inflow: +t.inflow || "", outflow: +t.outflow || "", project_id: t.project_id ?? "", transaction_type: t.transaction_type || "", counterparty_id: t.counterparty_id ? String(t.counterparty_id) : "", treasury_account_id: String(t.treasury_account_id || selectedTreasuryId) } : { transaction_date: today(), transaction_type: "", treasury_account_id: selectedTreasuryId },
     fields: [{ name: "transaction_date", label: tr("التاريخ","Date"), type: "date", required: true },
@@ -76,7 +79,21 @@ export async function render(main, { api, auth, route }) {
       const inflow = formEl.elements.namedItem("inflow"), outflow = formEl.elements.namedItem("outflow");
       const typeDirections = { funding: "inflow", customer_collection: "inflow", customer_advance: "inflow", direct_income: "inflow",
         supplier_payment: "outflow", supplier_advance: "outflow", expense_payment: "outflow",
-        asset_purchase: "outflow", cash_transfer: "either" };
+        asset_purchase: "outflow", cash_transfer: "outflow" };
+      const partyRequiredTypes = ["customer_collection","customer_advance","supplier_payment","supplier_advance"];
+      const setFieldLabel = (field, label) => {
+        const labelElement = field?.parentElement?.querySelector("label");
+        if (labelElement) labelElement.textContent = label;
+      };
+      const updateFieldLabels = () => {
+        if (typeSelect.value === "cash_transfer") {
+          setFieldLabel(accountSelect, tr("حساب المصدر","Source account"));
+          setFieldLabel(directionSelect, tr("حساب المستلم","Receiving account"));
+        } else {
+          setFieldLabel(accountSelect, tr("حساب البنك / الخزينة","Bank / cash account"));
+          setFieldLabel(directionSelect, tr("الحساب المقابل (من حساب / إلى حساب)","Counterpart account (From / To)"));
+        }
+      };
       const currentDirection = () => typeDirections[typeSelect.value] === "outflow" ? "outflow"
         : typeDirections[typeSelect.value] === "inflow" ? "inflow" : (+outflow.value > 0 ? "outflow" : "inflow");
       const refreshParties = async () => {
@@ -100,8 +117,15 @@ export async function render(main, { api, auth, route }) {
             directionSelect.innerHTML = '<option value="">—</option>';
             return;
           }
+          if (partyRequiredTypes.includes(transactionType) && !partySelect.value) {
+            directionSelect.innerHTML = '<option value="">—</option>';
+            updateHint();
+            return;
+          }
           const accountSelect = formEl.elements.namedItem("treasury_account_id");
-          const options = await api(base + "/counterpart-accounts?direction=" + direction + "&transaction_type=" + encodeURIComponent(transactionType) + "&treasury_account_id=" + encodeURIComponent(accountSelect.value));
+          const partyQuery = partyRequiredTypes.includes(transactionType)
+            ? "&counterparty_id=" + encodeURIComponent(partySelect.value) : "";
+          const options = await api(base + "/counterpart-accounts?direction=" + direction + "&transaction_type=" + encodeURIComponent(transactionType) + "&treasury_account_id=" + encodeURIComponent(accountSelect.value) + partyQuery);
           directionSelect.innerHTML = '<option value="">—</option>' + options.map(a =>
             `<option value="${String(a.account_id)}">${esc(a.label)}</option>`).join("");
           const selectedParty = currentPartyOptions.find(p => String(p.counterparty_id) === partySelect.value);
@@ -137,21 +161,19 @@ export async function render(main, { api, auth, route }) {
       };
       typeSelect.addEventListener("change", () => {
         applyDirectionFromType();
+        updateFieldLabels();
         refreshParties().then(() => refreshCounterparts(currentDirection()))
           .catch(e => toast(errText(e)));
       });
       partySelect.addEventListener("change", () => {
-        const selectedParty = currentPartyOptions.find(p => String(p.counterparty_id) === partySelect.value);
-        const linkedAccountId = selectedParty?.linked_account_id ? String(selectedParty.linked_account_id) : "";
-        if (linkedAccountId && [...directionSelect.options].some(o => o.value === linkedAccountId)) {
-          directionSelect.value = linkedAccountId;
-        } else {
-          directionSelect.value = "";
-        }
+        directionSelect.value = "";
+        refreshCounterparts(currentDirection()).catch(e => toast(errText(e)));
       });
       accountSelect.addEventListener("change", () => refreshCounterparts(currentDirection()).catch(e => toast(errText(e))));
       applyDirectionFromType();
-      refreshParties().catch(e => toast(errText(e)));
+      updateFieldLabels();
+      refreshParties().then(() => refreshCounterparts(currentDirection()))
+        .catch(e => toast(errText(e)));
       inflow.addEventListener("input", () => {
         enforceSingleTransferDirection("inflow");
         if (+inflow.value > 0) refreshCounterparts("inflow").catch(e => toast(errText(e)));
@@ -173,12 +195,17 @@ export async function render(main, { api, auth, route }) {
         const compatible = type && (typeDirections[type] === d || typeDirections[type] === "either");
         const cashLabel = accountSelect.options[accountSelect.selectedIndex]?.text || "حساب البنك / الخزينة";
         const counterpartLabel = directionSelect.options[directionSelect.selectedIndex]?.text || "الحساب المقابل";
-        const routeLabel = d === "inflow"
-          ? "من حساب " + counterpartLabel + " إلى حساب " + cashLabel
-          : "من حساب " + cashLabel + " إلى حساب " + counterpartLabel;
-        const accountingHint = d === "inflow"
-          ? "الوارد: البنك/الخزينة مدين والحساب المقابل دائن."
-          : "المنصرف: الحساب المقابل مدين والبنك/الخزينة دائن.";
+        const isTransfer = type === "cash_transfer";
+        const routeLabel = isTransfer
+          ? "من حساب " + cashLabel + " إلى حساب " + counterpartLabel
+          : d === "inflow"
+            ? "من حساب " + counterpartLabel + " إلى حساب " + cashLabel
+            : "من حساب " + cashLabel + " إلى حساب " + counterpartLabel;
+        const accountingHint = isTransfer
+          ? "التحويل: حساب المستلم مدين وحساب المصدر دائن."
+          : d === "inflow"
+            ? "الوارد: البنك/الخزينة مدين والحساب المقابل دائن."
+            : "المنصرف: الحساب المقابل مدين والبنك/الخزينة دائن.";
         sideHint.textContent = !type ? "اختَر نوع الحركة أولًا لعرض الحسابات المناسبة."
           : !compatible ? "نوع الحركة لا يتوافق مع اتجاه الوارد أو المنصرف؛ غيّر نوع الحركة."
           : routeLabel + " — " + accountingHint;
