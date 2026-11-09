@@ -225,6 +225,17 @@ def ensure_schema(engine: Engine) -> None:
                 conn.execute(text(
                     'ALTER TABLE "ContractSettlements" ALTER COLUMN "Status" TYPE VARCHAR(40)'
                 ))
+    # AuditLog.ActionType stores workflow event names; widen legacy PostgreSQL columns
+    # because create_all() does not alter existing tables.
+    if engine.dialect.name == "postgresql" and "AuditLog" in inspect(engine).get_table_names():
+        audit_columns = {col["name"]: col for col in inspect(engine).get_columns("AuditLog")}
+        action_type = audit_columns.get("ActionType", {}).get("type")
+        action_type_length = getattr(action_type, "length", None)
+        if action_type_length is not None and action_type_length < 100:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    'ALTER TABLE "AuditLog" ALTER COLUMN "ActionType" TYPE VARCHAR(100)'
+                ))
     # Capture the pre-addendum BOQ baseline exactly once; never overwrite it on later revisions.
     if "ContractItems" in inspect(engine).get_table_names():
         with engine.begin() as conn:

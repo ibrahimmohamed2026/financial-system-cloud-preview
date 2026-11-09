@@ -418,7 +418,7 @@ class AuditLog(Base):
     __tablename__ = "AuditLog"
     audit_id: Mapped[int] = C("AuditId", BigPK, primary_key=True)
     user_id: Mapped[Optional[int]] = C("UserId", ForeignKey("Users.UserId"), nullable=True)
-    action_type: Mapped[str] = C("ActionType", Unicode(30))
+    action_type: Mapped[str] = C("ActionType", Unicode(100))
     entity_name: Mapped[str] = C("EntityName", Unicode(100))
     entity_id: Mapped[Optional[str]] = C("EntityId", Unicode(50), nullable=True)
     old_value: Mapped[Optional[str]] = C("OldValue", UnicodeText, nullable=True)

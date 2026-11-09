@@ -76,3 +76,16 @@ def test_contract_settlement_status_length_and_existing_postgres_schema_upgrade(
     assert 'if engine.dialect.name == "postgresql" and "ContractSettlements" in inspect(engine).get_table_names():' in setup
     assert 'ALTER TABLE "ContractSettlements" ALTER COLUMN "Status" TYPE VARCHAR(40)' in setup
     assert 'status_length < 40' in setup
+
+
+def test_audit_log_action_type_length_and_existing_postgres_schema_upgrade():
+    models = Path("app/models.py").read_text(encoding="utf-8")
+    audit_model = models.split("class AuditLog(Base):", 1)[1].split(
+        "\nclass ", 1
+    )[0]
+    assert 'C("ActionType", Unicode(100))' in audit_model
+
+    setup = Path("app/db_setup.py").read_text(encoding="utf-8")
+    assert 'if engine.dialect.name == "postgresql" and "AuditLog" in inspect(engine).get_table_names():' in setup
+    assert 'ALTER TABLE "AuditLog" ALTER COLUMN "ActionType" TYPE VARCHAR(100)' in setup
+    assert 'action_type_length < 100' in setup
