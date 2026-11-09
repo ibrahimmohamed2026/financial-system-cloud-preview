@@ -368,8 +368,11 @@ def approve_contract(contract_id: int, body: ContractActivationIn | None = None,
                 validate_contract_rule_update(db, existing, data,
                     controlled_reason=body.deduction_rules_change_reason)
                 for k, value in data.items(): setattr(existing, k, value)
+                audit_new = {**data, "rate": str(data["rate"])}
+                if body.deduction_rules_change_reason:
+                    audit_new["controlled_change_reason"] = body.deduction_rules_change_reason.strip()
                 write_audit(db, user.user_id, "AccountingReview", "ContractDeductionRules", existing.rule_id,
-                            old=old_rule, new={**data, "rate": str(data["rate"])})
+                            old=old_rule, new=audit_new)
             else:
                 rule = ContractDeductionRule(contract_id=contract_id, **data)
                 db.add(rule); db.flush()
