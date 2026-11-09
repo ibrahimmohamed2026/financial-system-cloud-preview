@@ -106,7 +106,7 @@ def estimate_out(x, db):
     lines = db.scalars(select(TechnicalSettlementEstimateItem).where(TechnicalSettlementEstimateItem.estimate_id == x.estimate_id)).all()
     return {"estimate_id":x.estimate_id,"contract_id":x.contract_id,"contract_no":c.contract_no if c else "",
         "contract_title":c.title if c else "", "contract_title_en":c.title_en if c else None,"settlement_side":x.settlement_side,"estimate_no":x.estimate_no,
-        "estimate_date":x.estimate_date,"is_final":bool(getattr(x,"is_final",False)),"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),
+        "estimate_date":x.estimate_date,"is_final":bool(getattr(x,"is_final",False)),"counterparty_id":x.counterparty_id,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),
         "status":x.status,"notes":x.notes,"created_by":x.created_by,"financial_settlement_id":x.financial_settlement_id,"planned_schedule_id":next((r.schedule_id for r in db.scalars(select(ContractSettlementSchedule).where(ContractSettlementSchedule.technical_estimate_id==x.estimate_id)).all()),None),
         "items":[{"estimate_item_id":i.estimate_item_id,"contract_item_id":i.contract_item_id,
           "item_no":(db.get(ContractItem,i.contract_item_id).item_no if db.get(ContractItem,i.contract_item_id) else ""),
