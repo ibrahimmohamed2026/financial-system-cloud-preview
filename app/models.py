@@ -153,7 +153,7 @@ class JournalEntry(Base):
     fiscal_year_id: Mapped[int] = C("FiscalYearId", ForeignKey("FiscalYears.FiscalYearId"))
     source_settlement_id: Mapped[Optional[int]] = C("SourceSettlementId", ForeignKey("ContractSettlements.SettlementId"), nullable=True, index=True)
     description: Mapped[Optional[str]] = C("Description", Unicode(500), nullable=True)
-    status: Mapped[str] = C("Status", Unicode(40), default="Draft")  # Draft | Posted | Reversed
+    status: Mapped[str] = C("Status", Unicode(20), default="Draft")  # Draft | Posted | Reversed
     created_by: Mapped[Optional[int]] = C("CreatedBy", ForeignKey("Users.UserId"), nullable=True)
     posted_by: Mapped[Optional[int]] = C("PostedBy", ForeignKey("Users.UserId"), nullable=True)
     posted_at: Mapped[Optional[datetime]] = C("PostedAt", DateTime, nullable=True)
