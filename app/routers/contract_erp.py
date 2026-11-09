@@ -15,7 +15,7 @@ from ..deps import require_permission, write_audit, get_current_user, has_permis
 from ..models import (Contract, ContractAddendum, ContractChangeOrder, ContractItem, ContractDeductionRule,
                       ContractAccountingConfig, ContractSettlement, ContractSettlementItem, ContractSettlementSchedule, ProgressBilling, Account, Company,
                       FiscalYear, JournalEntry, JournalEntryDetail, User, TechnicalSettlementEstimate, TechnicalSettlementEstimateItem,
-                      ItemCatalog, InventoryItem, TreasuryTransaction, Check)
+                      ItemCatalog, InventoryItem, TreasuryTransaction, Check, Project)
 from ..contract_deletion import delete_settlement_tree, require_admin
 
 router = APIRouter(prefix="/api/contracts-erp", tags=["Contracts ERP: Technical Office & Settlements"])
