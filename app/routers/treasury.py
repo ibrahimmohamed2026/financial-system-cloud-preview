@@ -273,7 +273,7 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
                          counterparty_id: int | None = Query(None, gt=0),
                          user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
                          db: Session = Depends(get_db)):
-    """Return only accounts allowed for the selected transaction type and direction."""
+    """Return active leaf COA accounts; direction controls the displayed debit/credit side only."""
     screen_account = _bound(db, screen_code)
     treasury = db.get(TreasuryAccount, treasury_account_id) if treasury_account_id else screen_account
     if (treasury is None or not treasury.is_active or treasury.screen_code not in BANK_SCREENS
@@ -724,7 +724,7 @@ def _create_usd_transfer_mirror(db: Session, source: TreasuryAccount, original: 
         exchange_rate=body.exchange_rate,
         counterpart_account_id=source.gl_account_id,
         counterparty_id=None,
-        transaction_type="cash_transfer",
+        transaction_type=body.transaction_type,
         journal_entry_id=original.journal_entry_id,
     )
     db.add(mirror)
