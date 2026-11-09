@@ -253,6 +253,10 @@ def create_catalog_item(body:CatalogItemIn,user:User=Depends(require_permission(
 def add_item(contract_id:int, body:ItemIn, user:User=Depends(require_permission("Contracts","Add")), db:Session=Depends(get_db)):
     contract = db.scalar(select(Contract).where(Contract.contract_id == contract_id).with_for_update())
     if not contract: raise HTTPException(404,"العقد غير موجود")
+    if body.project_id is not None:
+        project = db.get(Project, body.project_id)
+        if project is None or not project.is_active:
+            raise HTTPException(422, "مركز تكلفة البند غير موجود أو غير نشط")
     # The server is authoritative: never accept a browser-supplied line number.
     # This also makes stale cached forms and manually edited requests harmless.
     requested_no = next_contract_item_no(db, contract_id)
@@ -277,6 +281,10 @@ def add_item(contract_id:int, body:ItemIn, user:User=Depends(require_permission(
 def update_item(contract_id:int,item_id:int,body:ItemIn,user:User=Depends(require_permission("Contracts","Edit")),db:Session=Depends(get_db)):
     x=db.get(ContractItem,item_id)
     if not x or x.contract_id!=contract_id: raise HTTPException(404,"بند العقد غير موجود")
+    if body.project_id is not None:
+        project = db.get(Project, body.project_id)
+        if project is None or not project.is_active:
+            raise HTTPException(422, "مركز تكلفة البند غير موجود أو غير نشط")
     # Item numbers are assigned at creation and remain stable on edits.
     requested_no = x.item_no
     if db.scalar(select(ContractSettlementItem.settlement_item_id).where(ContractSettlementItem.contract_item_id==item_id).limit(1)) or db.scalar(select(TechnicalSettlementEstimateItem.estimate_item_id).where(TechnicalSettlementEstimateItem.contract_item_id==item_id).limit(1)):
@@ -911,6 +919,13 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
     for idx,(aid,dr,cr,desc,project_id) in enumerate(lines,1): db.add(JournalEntryDetail(journal_entry_id=entry.journal_entry_id,line_no=idx,account_id=aid,project_id=project_id or contract.project_id,debit_amount=dr,credit_amount=cr,description=desc))
     write_audit(db,user.user_id,"Create","JournalEntries",entry.journal_entry_id,new={"entry_no":entry.entry_no,"source":"ContractSettlement","settlement_id":x.settlement_id,"settlement_no":x.settlement_no,"contract_id":x.contract_id,"debit_total":str(debit),"credit_total":str(credit)})
     x.journal_entry_id=entry.journal_entry_id;x.status="Posted"
+    linked_estimate = db.scalar(select(TechnicalSettlementEstimate).where(
+        TechnicalSettlementEstimate.financial_settlement_id == x.settlement_id))
+    if linked_estimate is not None:
+        linked_schedule = db.scalar(select(ContractSettlementSchedule).where(
+            ContractSettlementSchedule.technical_estimate_id == linked_estimate.estimate_id).with_for_update())
+        if linked_schedule is not None:
+            linked_schedule.status = "Completed"
     # Close when the explicitly marked final settlement has been posted and
     # every other settlement for this contract is posted as well.
     posted_final = db.scalar(select(ContractSettlement.settlement_id).where(
