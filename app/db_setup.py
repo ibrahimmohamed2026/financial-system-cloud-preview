@@ -191,7 +191,7 @@ def ensure_schema(engine: Engine) -> None:
     existing_tables = set(inspect(engine).get_table_names())
     for table_name in ("Users", "Companies", "Counterparties", "ChartOfAccounts", "AccountClassifications", "ContractRequests", "Contracts", "ContractSettlements", "JournalEntries",
                        "ContractItems", "ContractAddendums", "TechnicalSettlementEstimates", "TechnicalSettlementEstimateItems", "TreasuryTransactions", "PurchaseOrders", "SupplierInvoices", "Checks",
-                       "CheckPrintTemplates", "FinancialChecks"):
+                       "CheckPrintTemplates", "FinancialChecks", "ContractDeductionRules"):
         if table_name in existing_tables:
             _add_model_columns(engine, table_name)
     if "Users" in existing_tables:
