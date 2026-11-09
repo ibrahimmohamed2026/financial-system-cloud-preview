@@ -2,6 +2,9 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+
 from app.routers import treasury
 
 
@@ -208,3 +211,46 @@ def test_party_reference_is_optional_and_counterpart_options_come_from_chart(mon
     assert rows_without_card[0]["account_id"] == 20
     assert "15401001" in rows_without_card[0]["label"]
     assert "دائن بالقيد" in rows_without_card[0]["label"]
+
+
+
+def test_optional_party_reference_does_not_supply_the_account():
+    body = treasury.TxIn(
+        transaction_date=date(2026, 11, 8),
+        inflow=Decimal("100"),
+        outflow=Decimal("0"),
+        transaction_type="customer_collection",
+        counterpart_account_id=20,
+    )
+
+    class DB:
+        def get(self, model, key):
+            raise AssertionError("No party lookup should happen when reference is omitted")
+
+    treasury._validate_optional_counterparty_reference(DB(), body)
+    assert body.counterpart_account_id == 20
+    assert body.counterparty_id is None
+
+
+def test_optional_party_reference_only_checks_consistency_with_selected_chart_account():
+    party = SimpleNamespace(
+        is_active=True, party_type="Customer", linked_account_id=20,
+    )
+
+    class DB:
+        def get(self, model, key):
+            return party if model is treasury.Counterparty and key == 7 else None
+
+    matching = treasury.TxIn(
+        transaction_date=date(2026, 11, 8), inflow=Decimal("100"), outflow=Decimal("0"),
+        transaction_type="customer_collection", counterpart_account_id=20, counterparty_id=7,
+    )
+    treasury._validate_optional_counterparty_reference(DB(), matching)
+
+    mismatching = treasury.TxIn(
+        transaction_date=date(2026, 11, 8), inflow=Decimal("100"), outflow=Decimal("0"),
+        transaction_type="customer_collection", counterpart_account_id=21, counterparty_id=7,
+    )
+    with pytest.raises(HTTPException) as exc:
+        treasury._validate_optional_counterparty_reference(DB(), mismatching)
+    assert exc.value.status_code == 422
