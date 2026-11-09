@@ -25,7 +25,7 @@ def _movement_route(treasury_label: str, counterpart_label: str, inflow: bool) -
     return (counterpart_label, treasury_label) if inflow else (treasury_label, counterpart_label)
 Amt = Field(default=D0, ge=0, max_digits=18, decimal_places=2)
 
-# Transaction type determines the only valid counterpart classifications.
+# Movement types are descriptive labels only; they never drive accounting rules.
 USD_TRANSACTION_TYPES = {
     "funding": {"label": "تمويل من المساهمين أو الأطراف ذات العلاقة", "direction": "inflow",
                 "classifications": ("مستحق الى اطراف ذات علاقة", "راس المال المصدر و المدفوع")},
@@ -62,13 +62,8 @@ class GLAccountLinkIn(BaseModel):
 
 
 def _movement_direction_allowed(transaction_type: str | None, direction: str) -> bool:
-    """Enforce source-to-receiver direction at the treasury API boundary."""
-    config = USD_TRANSACTION_TYPES.get(transaction_type or "")
-    if config is None:
-        return False
-    if transaction_type == "cash_transfer":
-        return direction == "outflow"
-    return config["direction"] in (direction, "either")
+    """Direction is selected independently; movement type is descriptive only."""
+    return direction in ("inflow", "outflow")
 
 
 class TxIn(BaseModel):
@@ -288,9 +283,10 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
         raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
     if not has_permission(db, user.user_id, treasury.screen_code, "Add"):
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
-    config = USD_TRANSACTION_TYPES.get(transaction_type)
+    if transaction_type not in USD_TRANSACTION_TYPES:
+        raise HTTPException(400, "نوع الحركة غير معروف")
     if not _movement_direction_allowed(transaction_type, direction):
-        raise HTTPException(400, "نوع الحركة لا يتوافق مع اتجاه الوارد أو المنصرف")
+        raise HTTPException(400, "اتجاه الحركة غير صحيح")
     # A party card is optional reference metadata. The GL account list is
     # always selected directly from the chart of accounts below.
     if counterparty_id is not None:
@@ -305,30 +301,16 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
         if party is None or not party.is_active or party.party_type not in expected_party_types:
             raise HTTPException(422, "بطاقة العميل أو المورد/المقاول غير صحيحة لنوع الحركة")
     parents = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
-    if transaction_type == "cash_transfer":
-        # Transfers must target another configured USD treasury/bank account,
-        # not an arbitrary ledger account that merely shares the cash classification.
-        rows = db.execute(
-            select(Account, AccountClassification)
-            .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
-            .join(TreasuryAccount, TreasuryAccount.gl_account_id == Account.account_id)
-            .where(TreasuryAccount.is_active == True, TreasuryAccount.screen_code.in_(BANK_SCREENS),
-                   TreasuryAccount.currency_code == treasury.currency_code,
-                   TreasuryAccount.treasury_account_id != treasury.treasury_account_id,
-                   Account.is_active == True, Account.account_id.not_in(parents))
-            .order_by(Account.account_code).limit(500)
-        ).all()
-    else:
-        rows = db.execute(
-            select(Account, AccountClassification)
-            .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
-            .where(Account.is_active == True, Account.account_id != treasury.gl_account_id,
-                   Account.account_id.not_in(parents),
-                   Account.account_code.not_in(("32102001", "47101001")),
-                   *([] if transaction_type == "funding" else
-                     [AccountClassification.name_ar.in_(config["classifications"])]))
-            .order_by(Account.account_code).limit(500)
-        ).all()
+    # Select directly from active leaf accounts in the COA. A counterpart that is
+    # linked to another treasury account is recognized as a transfer by that link.
+    rows = db.execute(
+        select(Account, AccountClassification)
+        .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
+        .where(Account.is_active == True, Account.account_id != treasury.gl_account_id,
+               Account.account_id.not_in(parents),
+               Account.account_code.not_in(("32102001", "47101001")))
+        .order_by(Account.account_code).limit(500)
+    ).all()
     posting_side = "credit" if direction == "inflow" else "debit"
     side_ar = "دائن بالقيد" if direction == "inflow" else "مدين بالقيد"
     return [{"account_id": a.account_id, "label": f"{a.account_code} — {a.account_name_ar} ({side_ar})",
@@ -486,27 +468,16 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
     if counterpart.account_id in parents:
         raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
-    config = USD_TRANSACTION_TYPES.get(body.transaction_type or "")
     direction = "inflow" if body.inflow > 0 else "outflow"
-    if config is None or config["direction"] not in (direction, "either"):
-        raise HTTPException(422, "اختَر نوع حركة صحيحًا ومتوافقًا مع الوارد أو المنصرف")
-    counterpart_class = db.get(AccountClassification, counterpart.classification_id)
-    if body.transaction_type == "cash_transfer":
-        target_treasury = db.scalar(select(TreasuryAccount).where(
-            TreasuryAccount.gl_account_id == counterpart.account_id,
-            TreasuryAccount.currency_code == "USD",
-            TreasuryAccount.is_active == True,
-            TreasuryAccount.screen_code.in_(BANK_SCREENS),
-            TreasuryAccount.treasury_account_id != a.treasury_account_id,
-        ))
-        if target_treasury is None:
-            raise HTTPException(400, "التحويل لازم يكون إلى خزينة أو بنك آخر مُسجّل بالدولار")
-    elif body.transaction_type != "funding" and (
-            counterpart_class is None or counterpart_class.name_ar not in config["classifications"]):
-        raise HTTPException(400, "الحساب المختار لا يتبع التصنيف المسموح لنوع الحركة")
+    target_treasury = db.scalar(select(TreasuryAccount).where(
+        TreasuryAccount.gl_account_id == counterpart.account_id,
+        TreasuryAccount.currency_code == "USD",
+        TreasuryAccount.is_active == True,
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
+        TreasuryAccount.treasury_account_id != a.treasury_account_id,
+    ))
+    is_treasury_transfer = target_treasury is not None
     counterpart_posting_side = "credit" if direction == "inflow" else "debit"
-    if counterpart_posting_side not in ("credit", "debit"):
-        raise HTTPException(400, "اتجاه حركة الخزينة غير صحيح")
 
     # Prevent new movements while legacy movements or draft journals remain unprocessed.
     unlinked_stmt = select(func.count()).select_from(TreasuryTransaction).where(
@@ -544,7 +515,7 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     fx_account = None
     cash_is_debit = body.inflow > 0
 
-    if body.transaction_type == "cash_transfer":
+    if is_treasury_transfer:
         # A transfer carries the source account's historical book value.
         # It is not a realized FX gain/loss merely because the spot rate changed.
         source_gl_id = a.gl_account_id if not cash_is_debit else counterpart.account_id
@@ -694,8 +665,8 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     """
     if t.journal_entry_id is not None:
         raise HTTPException(409, "حركة الخزينة مرتبطة بقيد بالفعل؛ لا يمكن إنشاء قيد مكرر")
-    if body.counterpart_account_id is None or not body.transaction_type:
-        raise HTTPException(422, "حركة خزينة الجنيه تتطلب نوع الحركة وحساب الطرف المقابل")
+    if body.counterpart_account_id is None or body.transaction_type not in USD_TRANSACTION_TYPES:
+        raise HTTPException(422, "اختَر نوع حركة صحيحًا وحساب الطرف المقابل")
     if body.counterpart_account_id == a.gl_account_id:
         raise HTTPException(422, "حساب الطرف المقابل لازم يختلف عن حساب الخزينة")
     counterpart = db.get(Account, body.counterpart_account_id)
@@ -704,23 +675,15 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
     if counterpart.account_id in parents:
         raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
-    config = USD_TRANSACTION_TYPES.get(body.transaction_type)
+    # No classification or direction restriction is derived from transaction_type.
     direction = "inflow" if body.inflow > 0 else "outflow"
-    if config is None or config["direction"] not in (direction, "either"):
-        raise HTTPException(422, "اختَر نوع حركة صحيحًا ومتوافقًا مع الوارد أو المنصرف")
-    if body.transaction_type == "cash_transfer":
-        target = db.scalar(select(TreasuryAccount).where(
-            TreasuryAccount.gl_account_id == counterpart.account_id,
-            TreasuryAccount.currency_code == a.currency_code,
-            TreasuryAccount.is_active == True,
-            TreasuryAccount.treasury_account_id != a.treasury_account_id,
-        ))
-        if target is None:
-            raise HTTPException(400, "التحويل لازم يكون إلى خزينة أو بنك آخر مسجل بنفس العملة")
-    elif body.transaction_type != "funding":
-        classification = db.get(AccountClassification, counterpart.classification_id)
-        if classification is None or classification.name_ar not in config["classifications"]:
-            raise HTTPException(400, "الحساب المختار لا يتبع التصنيف المسموح لنوع الحركة")
+    target = db.scalar(select(TreasuryAccount).where(
+        TreasuryAccount.gl_account_id == counterpart.account_id,
+        TreasuryAccount.currency_code == a.currency_code,
+        TreasuryAccount.is_active == True,
+        TreasuryAccount.treasury_account_id != a.treasury_account_id,
+    ))
+    is_treasury_transfer = target is not None
 
     from .journal import _fy_for, _next_no
     fy = _fy_for(db, body.transaction_date)
@@ -756,8 +719,6 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
 def _create_usd_transfer_mirror(db: Session, source: TreasuryAccount, original: TreasuryTransaction,
                                    body: TxIn, user: User) -> TreasuryTransaction | None:
     """Create the opposite operational USD movement; both rows share one balanced journal."""
-    if body.transaction_type != "cash_transfer":
-        return None
     target = db.scalar(select(TreasuryAccount).where(
         TreasuryAccount.gl_account_id == body.counterpart_account_id,
         TreasuryAccount.currency_code == "USD",
@@ -766,7 +727,7 @@ def _create_usd_transfer_mirror(db: Session, source: TreasuryAccount, original: 
         TreasuryAccount.treasury_account_id != source.treasury_account_id,
     ))
     if target is None:
-        raise HTTPException(400, "حساب التحويل المقابل غير مربوط ببنك أو خزينة نشطة بالدولار")
+        return None
     if original.journal_entry_id is None:
         raise HTTPException(409, "لا يمكن إنشاء الحركة المقابلة قبل إنشاء قيد اليومية")
     mirror = TreasuryTransaction(
@@ -806,8 +767,6 @@ def _create_egp_transfer_mirror(db: Session, source: TreasuryAccount, original: 
     original movement. This is intentionally applied only to new transfers;
     historical one-sided rows are never backfilled automatically.
     """
-    if body.transaction_type != "cash_transfer":
-        return None
     target = db.scalar(select(TreasuryAccount).where(
         TreasuryAccount.gl_account_id == body.counterpart_account_id,
         TreasuryAccount.currency_code == source.currency_code,
@@ -815,7 +774,7 @@ def _create_egp_transfer_mirror(db: Session, source: TreasuryAccount, original: 
         TreasuryAccount.treasury_account_id != source.treasury_account_id,
     ))
     if target is None:
-        raise HTTPException(400, "حساب التحويل المقابل غير مربوط بخزينة أو بنك نشط بنفس العملة")
+        return None
     if original.journal_entry_id is None:
         raise HTTPException(409, "لا يمكن إنشاء الحركة المقابلة قبل إنشاء قيد اليومية")
     mirror = TreasuryTransaction(
@@ -856,8 +815,8 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
     movement_direction = "inflow" if body.inflow > 0 else "outflow"
-    if not _movement_direction_allowed(body.transaction_type, movement_direction):
-        raise HTTPException(422, "التحويل بين الحسابات النقدية يجب أن يكون من حساب المصدر كمنصرف إلى حساب مستلم")
+    if body.transaction_type not in USD_TRANSACTION_TYPES or not _movement_direction_allowed(body.transaction_type, movement_direction):
+        raise HTTPException(422, "اختَر نوع الحركة واتجاهًا صحيحًا")
     values = body.model_dump(exclude={"treasury_account_id"})
     _validate_optional_counterparty_reference(db, body)
     t = TreasuryTransaction(treasury_account_id=a.treasury_account_id, **values)
@@ -899,8 +858,8 @@ def edit_tx(screen_code: str, tid: int, body: TxIn,
         raise HTTPException(403, "ليس لديك صلاحية تعديل حركات حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
     movement_direction = "inflow" if body.inflow > 0 else "outflow"
-    if not _movement_direction_allowed(body.transaction_type, movement_direction):
-        raise HTTPException(422, "التحويل بين الحسابات النقدية يجب أن يكون من حساب المصدر كمنصرف إلى حساب مستلم")
+    if body.transaction_type not in USD_TRANSACTION_TYPES or not _movement_direction_allowed(body.transaction_type, movement_direction):
+        raise HTTPException(422, "اختَر نوع الحركة واتجاهًا صحيحًا")
     _validate_optional_counterparty_reference(db, body)
     old = {"inflow": str(t.inflow), "outflow": str(t.outflow), "description": t.description,
            "treasury_account_id": t.treasury_account_id}
