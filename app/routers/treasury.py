@@ -1046,6 +1046,17 @@ def _validate_settlement_payment(db: Session, body: TxIn, treasury_account: Trea
         body.project_id = contract.project_id
     if settlement.counterparty_id is not None and body.counterparty_id != settlement.counterparty_id:
         raise HTTPException(422, "بطاقة الطرف لا تطابق بطاقة العميل/المقاول في المستخلص")
+    if not (body.voucher_no or "").strip():
+        raise HTTPException(422, "رقم إيصال التحصيل أو إذن الصرف مطلوب عند ربط الحركة بمستخلص")
+    duplicate_voucher = db.scalar(
+        select(func.count()).select_from(TreasuryTransaction)
+        .join(JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id)
+        .where(TreasuryTransaction.settlement_id == settlement.settlement_id,
+               func.lower(TreasuryTransaction.voucher_no) == body.voucher_no.strip().lower(),
+               JournalEntry.status != "Reversed")
+    ) or 0
+    if duplicate_voucher:
+        raise HTTPException(409, "رقم الإيصال/إذن الصرف مستخدم بالفعل في حركة مرتبطة بهذا المستخلص")
     amount = body.inflow if body.inflow > 0 else body.outflow
     if settlement.settlement_side == "Customer":
         if body.inflow <= 0 or body.transaction_type != "customer_collection":
