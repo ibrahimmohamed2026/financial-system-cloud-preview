@@ -38,6 +38,29 @@ TREASURY_MOVEMENT_TYPES = {
     "cash_transfer": "تحويل بين حسابات نقدية",
 }
 
+# Backward-compatible classification catalogue for the cheque register only.
+# Treasury movements must use TREASURY_MOVEMENT_TYPES and never read these rules.
+USD_TRANSACTION_TYPES = {
+    "funding": {"label": "تمويل من المساهمين أو الأطراف ذات العلاقة", "direction": "inflow",
+                "classifications": ("مستحق الى اطراف ذات علاقة", "راس المال المصدر و المدفوع")},
+    "customer_collection": {"label": "تحصيل مستحقات من عميل", "direction": "inflow",
+                "classifications": ("عملاء وأوراق قبض", "مدينون و ارصدة مدينة اخرى", "مدينون و ارصدة مدينة أخرى")},
+    "customer_advance": {"label": "تحصيل دفعة مقدمة من عميل", "direction": "inflow",
+                "classifications": ("عملاء دفعات مقدمه",)},
+    "direct_income": {"label": "تحصيل إيراد مباشر", "direction": "inflow",
+                "classifications": ("مبيعات / إيرادات", "فوائد دائنة")},
+    "supplier_payment": {"label": "سداد مورد أو مقاول", "direction": "outflow",
+                "classifications": ("موردون و اوراق دفع", "دائنون و ارصدة دائنة اخرى", "دائنون و ارصدة دائنة أخرى")},
+    "supplier_advance": {"label": "دفعة مقدمة لمورد أو مقاول", "direction": "outflow",
+                "classifications": ("دفعات مقدمه موردون و مقاولون",)},
+    "expense_payment": {"label": "سداد مصروفات", "direction": "outflow",
+                "classifications": ("مصروفات عمومية و ادارية", "مصروفات عمومية و إدارية", "تكلفة المبيعات", "فوائد التاجير التمويلى")},
+    "asset_purchase": {"label": "شراء أصل أو مخزون أو أعمال تحت التنفيذ", "direction": "outflow",
+                "classifications": ("اصول ثابتة بالصافي", "اصول غير ملموسه", "مخزون", "اعمال تحت التنفيذ")},
+    "cash_transfer": {"label": "تحويل بين حسابات نقدية", "direction": "either",
+                "classifications": ("نقدية بالصندوق و البنوك",)},
+}
+
 
 class AccountIn(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
