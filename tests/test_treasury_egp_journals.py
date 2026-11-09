@@ -128,6 +128,7 @@ def test_egp_cash_transfer_creates_one_opposite_operational_movement(
 
 def test_egp_non_transfer_does_not_create_a_mirror():
     db = MagicMock()
+    db.scalar.return_value = None
     source = SimpleNamespace(treasury_account_id=3, gl_account_id=10, currency_code="EGP")
     original = SimpleNamespace(transaction_id=41, journal_entry_id=99)
     body = TxIn(transaction_date=date(2026, 11, 7), inflow=100, outflow=0,

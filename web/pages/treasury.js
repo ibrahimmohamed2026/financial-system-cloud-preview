@@ -13,32 +13,61 @@ export async function render(main, { api, auth, route }) {
   const projs = await api("/projects/lookup").catch(() => []);
   main.innerHTML = `<h3 style="margin-top:0">${esc(localStorage.getItem("fs_lang")==="en"?(acc.name_en||acc.name_ar):acc.name_ar)} <small class="muted">${esc(acc.currency_code)} — ${esc(acc.gl_account)}</small> ${auth.can(SC,"Edit") || auth.can(SC,"Add") ? `<button class="btn sm" id="edit-gl-link">${tr("تصحيح ربط شجرة الحسابات","Fix chart of accounts link")}</button>` : ""}</h3>
     <div class="toolbar"><div class="w" style="width:150px"><label>${tr("من","From")}</label><input type="date" id="df"></div><div class="w" style="width:150px"><label>${tr("إلى","To")}</label><input type="date" id="dt"></div>
-    <div class="grow"><label>${tr("بحث","Search")}</label><input id="q"></div>${can("Add") ? `<button class="btn primary" id="add">+ ${tr("حركة","Transaction")}</button>` : ""}</div>
+    <div class="grow"><label>${tr("بحث","Search")}</label><input id="q"></div><button class="btn" id="balance-check">${tr("مطابقة رصيد الأستاذ","Ledger balance check")}</button>${can("Add") ? `<button class="btn primary" id="add">+ ${tr("حركة","Transaction")}</button>` : ""}</div>
     <div id="sum" class="muted" style="margin-bottom:8px"></div>
-    <div class="tbl-wrap"><table><thead><tr><th>${tr("التاريخ","Date")}</th><th>${tr("من حساب","From account")}</th><th>${tr("إلى حساب","To account")}</th><th>${tr("وارد","Inflow")}</th><th>${tr("منصرف","Outflow")}</th><th>${tr("الرصيد","Balance")}</th><th>${tr("البيان","Description")}</th>${`<th>${tr("نوع الحركة","Transaction type")}</th><th>${tr("البطاقة المرجعية","Party reference")}</th>`}${acc.currency_code === "USD" ? `<th>${tr("سعر الصرف","Exchange rate")}</th>` : ""}<th>${tr("رقم الإذن","Voucher No.")}</th><th>${tr("الحالة","Status")}</th><th>${tr("المستلم","Recipient")}</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
+    <div class="tbl-wrap"><table><thead><tr><th>${tr("التاريخ","Date")}</th><th>${tr("من حساب","From account")}</th><th>${tr("إلى حساب","To account")}</th><th>${tr("وارد","Inflow")}</th><th>${tr("منصرف","Outflow")}</th><th>${tr("رصيد الحركات المرحّلة","Posted movement balance")}</th><th>${tr("البيان","Description")}</th>${`<th>${tr("نوع الحركة","Transaction type")}</th><th>${tr("البطاقة المرجعية","Party reference")}</th>`}${acc.currency_code === "USD" ? `<th>${tr("سعر الصرف","Exchange rate")}</th>` : ""}<th>${tr("رقم الإذن","Voucher No.")}</th><th>${tr("الحالة","Status")}</th><th>${tr("المستلم","Recipient")}</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
   const $ = s => main.querySelector(s); let items = [];
   $("#edit-gl-link")?.addEventListener("click", safe(() => setup(info, true)));
+  $("#balance-check").onclick = safe(openBalanceReconciliation);
+  async function openBalanceReconciliation() {
+    const asOf = $("#dt").value || today();
+    const params = new URLSearchParams({ treasury_account_id: selectedTreasuryId, as_of_date: asOf });
+    const r = await api(base + "/balance-reconciliation?" + params);
+    const fmt = value => money(value) === "-" ? "0.00" : money(value);
+    const openingBasis = r.currency_code === "EGP"
+      ? "الرصيد الافتتاحي لحساب الأستاذ: المدين ناقص الدائن"
+      : "الرصيد بعملة الحساب من مبالغ العملة الأجنبية بالقيود؛ لا يتم خلط الأرصدة الافتتاحية بالجنيه";
+    const debitHeader = r.currency_code === "USD" ? "مدين بالجنيه" : "مدين";
+    const creditHeader = r.currency_code === "USD" ? "دائن بالجنيه" : "دائن";
+    const openingWarning = r.opening_balance_warning
+      ? '<p class="muted"><b>تنبيه:</b> ' + esc(r.opening_balance_warning) + '</p>' : "";
+    const ledgerEgpCard = r.currency_code === "USD"
+      ? '<div class="card"><small>رصيد حساب الأستاذ بالجنيه (ميزان المراجعة)</small><h3>' + fmt(r.ledger_balance_egp) + '</h3></div>' : "";
+    const groups = Object.entries(r.excluded_movements || {}).map(([key, group]) => {
+      const rows = group.items.map(x => '<tr><td>' + (x.transaction_date || "") + '</td><td>' + esc(x.voucher_no || "—") + '</td><td>' + esc(x.description || "—") + '</td><td class="num">' + fmt(x.inflow) + '</td><td class="num">' + fmt(x.outflow) + '</td><td>' + esc(x.journal_entry_no || x.journal_status || "—") + '</td></tr>').join("");
+      return '<h4>' + esc(group.label || key) + ' — ' + group.count + '</h4><div class="tbl-wrap"><table><thead><tr><th>التاريخ</th><th>رقم الإذن</th><th>البيان</th><th>وارد</th><th>منصرف</th><th>القيد</th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="muted">لا توجد حركات</td></tr>') + '</tbody></table></div>';
+    }).join("");
+    const ledgerRows = (r.posted_ledger_entries_without_treasury_movement || []).map(x => '<tr><td>' + x.entry_date + '</td><td>' + esc(x.entry_no) + '</td><td class="num">' + fmt(x.debit) + '</td><td class="num">' + fmt(x.credit) + '</td><td class="num">' + fmt(x.signed_balance) + '</td></tr>').join("") || '<tr><td colspan="5" class="muted">لا توجد قيود أستاذ منفصلة</td></tr>';
+    const missingRows = (r.posted_treasury_movements_without_gl_line || []).map(x => '<tr><td>' + x.transaction_date + '</td><td>' + esc(x.voucher_no || "—") + '</td><td>' + esc(x.journal_entry_no || "—") + '</td><td class="num">' + fmt(x.inflow) + '</td><td class="num">' + fmt(x.outflow) + '</td></tr>').join("") || '<tr><td colspan="5" class="muted">لا توجد حركات ناقصة القيد</td></tr>';
+    const mismatchRows = (r.posted_treasury_movement_amount_mismatches || []).map(x => '<tr><td>' + x.transaction_date + '</td><td>' + esc(x.voucher_no || "—") + '</td><td>' + esc(x.journal_entry_no || "—") + '</td><td class="num">' + fmt(x.treasury_signed_amount) + '</td><td class="num">' + fmt(x.gl_signed_amount) + '</td><td class="num">' + fmt(x.difference) + '</td></tr>').join("") || '<tr><td colspan="6" class="muted">لا توجد فروق في مبالغ القيود المرتبطة</td></tr>';
+    const dlg = document.createElement("dialog"); dlg.style.width = "min(1100px,97vw)"; dlg.style.maxHeight = "90vh"; dlg.style.overflow = "auto";
+    dlg.innerHTML = '<form method="dialog"><h3>مطابقة رصيد الخزينة مع الأستاذ العام</h3><p class="muted">' + esc(r.account_name) + ' — ' + esc(r.currency_code) + ' — حتى ' + r.as_of_date + '</p>' +
+      '<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px"><div class="card"><small>رصيد الأستاذ العام بعملة الحساب (القيود المرحلة)</small><h3>' + fmt(r.ledger_balance) + '</h3></div><div class="card"><small>صافي حركات الخزينة المرتبطة بمرحّل</small><h3>' + fmt(r.posted_treasury_movement_balance) + '</h3></div><div class="card"><small>الفرق بعملة الحساب</small><h3>' + fmt(r.difference) + '</h3></div>' + ledgerEgpCard + '</div>' +
+      openingWarning + '<p class="muted">' + openingBasis + '. المسودات والقيود المعكوسة والحركات غير المرتبطة لا تدخل في الرصيد الرسمي.</p>' +
+      '<h4>قيود أستاذ مرحّلة بدون حركة خزينة مرتبطة</h4><div class="tbl-wrap"><table><thead><tr><th>التاريخ</th><th>رقم القيد</th><th>' + debitHeader + '</th><th>' + creditHeader + '</th><th>الصافي بعملة الحساب</th></tr></thead><tbody>' + ledgerRows + '</tbody></table></div>' +
+      '<h4>حركات خزينة مرتبطة بقيد مرحّل لكن القيد لا يحتوي حساب البنك</h4><div class="tbl-wrap"><table><thead><tr><th>التاريخ</th><th>الإذن</th><th>القيد</th><th>وارد</th><th>منصرف</th></tr></thead><tbody>' + missingRows + '</tbody></table></div>' +
+      '<h4>اختلاف مبلغ حركة الخزينة عن سطر حساب البنك في القيد</h4><div class="tbl-wrap"><table><thead><tr><th>التاريخ</th><th>الإذن</th><th>القيد</th><th>صافي الحركة</th><th>صافي سطر الأستاذ</th><th>الفرق</th></tr></thead><tbody>' + mismatchRows + '</tbody></table></div>' + groups +
+      '<div class="actions"><button class="btn" value="close">إغلاق</button></div></form>';
+    document.body.appendChild(dlg); dlg.addEventListener("close", () => dlg.remove()); dlg.showModal();
+  }
   const load = async () => {
     const p = new URLSearchParams({ limit: 500 }); for (const [k, id] of [["date_from", "#df"], ["date_to", "#dt"], ["q", "#q"]]) if ($(id).value.trim()) p.set(k, $(id).value.trim());
     p.set("treasury_account_id", selectedTreasuryId);
     const r = await api(base + "/transactions?" + p); items = r.items;
-    $("#sum").innerHTML = `${tr("رصيد أول الفترة:","Opening balance:")} <b>${money(r.opening_balance) === "-" ? "0.00" : money(r.opening_balance)}</b> — ${tr("وارد:","Inflow:")} <b>${money(r.total_inflow)}</b> — ${tr("منصرف:","Outflow:")} <b>${money(r.total_outflow)}</b> — ${tr("الرصيد الحالي:","Current balance:")} <b>${money(r.closing_balance) === "-" ? "0.00" : money(r.closing_balance)}</b>${r.total > 500 ? ` — (${tr("معروض أول 500 حركة","First 500 transactions shown")})` : ""}`;
+    $("#sum").innerHTML = `${tr("رصيد الأستاذ العام:","General ledger balance:")} <b>${money(r.closing_balance) === "-" ? "0.00" : money(r.closing_balance)}</b> — ${tr("صافي حركات الخزينة المرحلة:","Posted treasury movements:")} <b>${money(r.movement_closing_balance) === "-" ? "0.00" : money(r.movement_closing_balance)}</b> — ${tr("الفرق:","Difference:")} <b>${money(r.balance_difference) === "-" ? "0.00" : money(r.balance_difference)}</b> — ${tr("وارد مرحّل:","Posted inflow:")} <b>${money(r.total_inflow)}</b> — ${tr("منصرف مرحّل:","Posted outflow:")} <b>${money(r.total_outflow)}</b> — ${tr("مسودات:","Drafts:")} <b>${r.pending?.Draft?.count || 0}</b> — ${tr("ملغاة:","Reversed:")} <b>${r.pending?.Reversed?.count || 0}</b> — ${tr("غير مرتبطة:","Unlinked:")} <b>${r.pending?.Unlinked?.count || 0}</b>${r.total > 500 ? ` — (${tr("معروض أول 500 حركة","First 500 transactions shown")})` : ""}`;
     $("#rows").innerHTML = items.map(t => `<tr><td>${t.transaction_date}</td><td>${esc(t.from_account_label || (+t.inflow > 0 ? (t.counterpart_account_label || "—") : (t.treasury_account_name || acc.name_ar)))}</td><td>${esc(t.to_account_label || (+t.inflow > 0 ? (t.treasury_account_name || acc.name_ar) : (t.counterpart_account_label || "—")))}</td><td class="num">${money(t.inflow)}</td><td class="num">${money(t.outflow)}</td><td class="num">${money(t.balance) === "-" ? "0.00" : money(t.balance)}</td>
-      <td>${esc(t.description)}</td>${`<td>${esc(USD_TX_LABELS[t.transaction_type] || "—")}</td><td>${esc(t.counterparty_label || "—")}</td>`}${acc.currency_code === "USD" ? `<td class="num">${t.exchange_rate ? Number(t.exchange_rate).toFixed(6) : "—"}</td>` : ""}<td>${esc(t.voucher_no)}</td><td>${esc(t.status)}</td><td>${esc(t.recipient_name)}</td>
+      <td>${esc(t.description)}</td>${`<td>${esc(USD_TX_LABELS[t.transaction_type] || "—")}</td><td>${esc(t.counterparty_label || "—")}</td>`}${acc.currency_code === "USD" ? `<td class="num">${t.exchange_rate ? Number(t.exchange_rate).toFixed(6) : "—"}</td>` : ""}<td>${esc(t.voucher_no)}</td><td>${esc(t.status)}<small class="muted" style="display:block">${esc(({Posted:"قيد مرحّل",Draft:"قيد مسودة",Reversed:"قيد ملغى",Unlinked:"غير مرتبط",Missing:"قيد مفقود"})[t.journal_status] || t.journal_status || "—")}</small></td><td>${esc(t.recipient_name)}</td>
       <td>${t.locked ? `<span class="tag">${tr("مرتبط بقيد","Linked to journal entry")}</span>` : acc.currency_code === "EGP" ? `<span class="tag muted">${tr("حركة قديمة غير مرتبطة — للمراجعة","Legacy movement — reconciliation required")}</span>` : `${can("Edit") ? `<button class="btn sm" data-e="${t.transaction_id}">${tr("تعديل","Edit")}</button> ` : ""}${can("Delete") ? `<button class="btn sm danger" data-d="${t.transaction_id}">${tr("حذف","Delete")}</button>` : ""}`}</td></tr>`).join("")
       || `<tr><td colspan="${acc.currency_code === "USD" ? 14 : 13}" class="muted">${tr("لا توجد حركات","No transactions")}</td></tr>`;
   };
   const form = async t => {
     const initialDirection = t ? (+t.inflow > 0 ? "inflow" : "outflow") : "inflow";
     const initialType = t?.transaction_type || "";
-    const partyRequiredTypes = ["customer_collection","customer_advance","supplier_payment","supplier_advance"];
-    const initialParties = partyRequiredTypes.includes(initialType)
-      ? await api(base + "/counterparties?transaction_type=" + encodeURIComponent(initialType)).catch(() => []) : [];
-    const initialCounterpartyId = t?.counterparty_id ? String(t.counterparty_id) : "";
+    const initialParties = await api(base + "/counterparties").catch(() => []);
     const initialCounterparts = initialType
       ? await api(base + "/counterpart-accounts?direction=" + initialDirection + "&transaction_type=" + encodeURIComponent(initialType) + "&treasury_account_id=" + encodeURIComponent(t?.treasury_account_id || selectedTreasuryId)).catch(() => []) : [];
     return formDialog({
-    title: t ? tr("تعديل حركة","Edit transaction") : tr("حركة جديدة","New transaction"), values: t ? { ...t, amount: +t.inflow > 0 ? (+t.inflow || "") : (+t.outflow || ""), direction_label: +t.inflow > 0 ? tr("وارد","Inflow") : tr("منصرف","Outflow"), project_id: t.project_id ?? "", transaction_type: t.transaction_type || "", counterparty_id: t.counterparty_id ? String(t.counterparty_id) : "", treasury_account_id: String(t.treasury_account_id || selectedTreasuryId) } : { transaction_date: today(), transaction_type: "", amount: "", direction_label: tr("اختَر نوع الحركة أولًا","Select transaction type first"), treasury_account_id: selectedTreasuryId },
+    title: t ? tr("تعديل حركة","Edit transaction") : tr("حركة جديدة","New transaction"), values: t ? { ...t, amount: +t.inflow > 0 ? (+t.inflow || "") : (+t.outflow || ""), direction: +t.inflow > 0 ? "inflow" : "outflow", project_id: t.project_id ?? "", transaction_type: t.transaction_type || "", counterparty_id: t.counterparty_id ? String(t.counterparty_id) : "", treasury_account_id: String(t.treasury_account_id || selectedTreasuryId) } : { transaction_date: today(), transaction_type: "", amount: "", direction: "inflow", treasury_account_id: selectedTreasuryId },
     fields: [{ name: "transaction_date", label: tr("التاريخ","Date"), type: "date", required: true },
       { name: "treasury_account_id", label: tr("حساب البنك / الخزينة","Bank / cash account"), type: "select", options: treasuryOptions.map(a => [String(a.treasury_account_id), a.label]), required: true, full: true },
       { name: "transaction_type", label: tr("نوع الحركة","Transaction type"), type: "select", options: [
@@ -53,14 +82,15 @@ export async function render(main, { api, auth, route }) {
           ["cash_transfer", tr("تحويل بين حسابات نقدية","Transfer between cash/bank accounts")]
         ], required: true, full: true },
       ...(acc.currency_code === "USD" ? [{ name: "exchange_rate", label: tr("سعر الدولار مقابل الجنيه","USD exchange rate to EGP"), type: "number", step: "0.000001", min: "0.000001", required: true }] : []),
-      { name: "counterparty_id", label: tr("بطاقة العميل / المورد / المقاول (مرجع اختياري)","Customer / supplier / contractor (optional reference)"), type: "select", searchable: true, options: initialParties.map(p => [String(p.counterparty_id), p.label]), optional: true, full: true },
-      { name: "counterpart_account_id", label: tr("الحساب المقابل (من حساب / إلى حساب)","Counterpart account (From / To)"), type: "select", searchable: true, options: initialCounterparts.map(a => [String(a.account_id), a.label]), required: true, full: true },
-      { name: "amount", label: tr("قيمة الحركة","Transaction amount"), type: "number", step: "0.01", min: "0.01", required: true }, { name: "direction_label", label: tr("الاتجاه (تلقائي)","Direction (automatic)"), readonly: true }, { name: "voucher_no", label: tr("رقم الإذن","Voucher No.") },
+      { name: "direction", label: tr("اتجاه الحركة","Movement direction"), type: "select", options: [["inflow", tr("وارد","Inflow")], ["outflow", tr("منصرف","Outflow")]], required: true },
+      { name: "counterparty_id", label: tr("بطاقة الطرف (مرجع اختياري)","Party card (optional reference)"), type: "select", searchable: true, options: initialParties.map(p => [String(p.counterparty_id), p.label]), optional: true, full: true },
+      { name: "counterpart_account_id", label: tr("الحساب المقابل من شجرة الحسابات","Counterpart account from chart of accounts"), type: "select", searchable: true, options: initialCounterparts.map(a => [String(a.account_id), a.label]), required: true, full: true },
+      { name: "amount", label: tr("قيمة الحركة","Transaction amount"), type: "number", step: "0.01", min: "0.01", required: true }, { name: "voucher_no", label: tr("رقم الإذن","Voucher No.") },
       { name: "description", label: tr("البيان","Description"), full: true }, { name: "status", label: tr("الحالة (مثال: تمويل)","Status (e.g. Funding)") }, { name: "recipient_name", label: tr("المستلم","Recipient") },
       { name: "project_id", label: tr("مركز التكلفة (اختياري عند ارتباط الحركة بمشروع)","Cost center (optional; select when the movement relates to a project)"), type: "select", optional: true, options: projs.map(p => [p.project_id, p.name_ar]), full: true }],
     onSubmit: async v => {
       const saved = await api(t ? `${base}/transactions/${t.transaction_id}` : base + "/transactions", { method: t ? "PUT" : "POST", json: {
-        transaction_date: v.transaction_date, inflow: ({ funding: "inflow", customer_collection: "inflow", customer_advance: "inflow", direct_income: "inflow", supplier_payment: "outflow", supplier_advance: "outflow", expense_payment: "outflow", asset_purchase: "outflow", cash_transfer: "outflow" }[v.transaction_type] === "inflow" ? (v.amount || "0") : "0"), outflow: ({ funding: "inflow", customer_collection: "inflow", customer_advance: "inflow", direct_income: "inflow", supplier_payment: "outflow", supplier_advance: "outflow", expense_payment: "outflow", asset_purchase: "outflow", cash_transfer: "outflow" }[v.transaction_type] === "outflow" ? (v.amount || "0") : "0"), description: v.description || null, voucher_no: v.voucher_no || null,
+        transaction_date: v.transaction_date, inflow: v.direction === "inflow" ? (v.amount || "0") : "0", outflow: v.direction === "outflow" ? (v.amount || "0") : "0", description: v.description || null, voucher_no: v.voucher_no || null,
         status: v.status || null, recipient_name: v.recipient_name || null, project_id: v.project_id ? +v.project_id : null,
         exchange_rate: acc.currency_code === "USD" ? v.exchange_rate : null,
         counterpart_account_id: v.counterpart_account_id ? Number(v.counterpart_account_id) : null,
@@ -70,127 +100,92 @@ export async function render(main, { api, auth, route }) {
       toast(`${tr("تم الحفظ وإنشاء القيد كمسودة","Saved; draft journal created")}: ${saved.journal_entry_no || "—"}`); await load();
     },
     onOpen: (dlg, formEl) => {
-      const directionSelect = formEl.elements.namedItem("counterpart_account_id");
+      const counterpartSelect = formEl.elements.namedItem("counterpart_account_id");
+      const movementDirectionSelect = formEl.elements.namedItem("direction");
       const partySelect = formEl.elements.namedItem("counterparty_id");
       const accountSelect = formEl.elements.namedItem("treasury_account_id");
       const typeSelect = formEl.elements.namedItem("transaction_type");
-      let currentPartyOptions = initialParties;
-      const amount = formEl.elements.namedItem("amount"), directionDisplay = formEl.elements.namedItem("direction_label");
-      const typeDirections = { funding: "inflow", customer_collection: "inflow", customer_advance: "inflow", direct_income: "inflow",
-        supplier_payment: "outflow", supplier_advance: "outflow", expense_payment: "outflow",
-        asset_purchase: "outflow", cash_transfer: "outflow" };
-      const partyRequiredTypes = ["customer_collection","customer_advance","supplier_payment","supplier_advance"];
+      let counterpartIsTreasury = initialCounterparts.some(a =>
+        String(a.account_id) === String(t?.counterpart_account_id) && a.is_treasury_account);
+      const amount = formEl.elements.namedItem("amount");
       const setFieldLabel = (field, label) => {
         const labelElement = field?.parentElement?.querySelector("label");
         if (labelElement) labelElement.textContent = label;
       };
       const updateFieldLabels = () => {
-        const type = typeSelect.value;
-        const routes = {
-          funding: [tr("من حساب الممول","From funding source"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
-          customer_collection: [tr("من حساب العميل","From customer account"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
-          customer_advance: [tr("من حساب العميل","From customer account"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
-          direct_income: [tr("من حساب الإيراد","From revenue account"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
-          supplier_payment: [tr("من حساب البنك / الخزينة","From bank / cash account"), tr("إلى حساب المورد / المقاول","To supplier / contractor account")],
-          supplier_advance: [tr("من حساب البنك / الخزينة","From bank / cash account"), tr("إلى حساب المورد / المقاول","To supplier / contractor account")],
-          expense_payment: [tr("من حساب البنك / الخزينة","From bank / cash account"), tr("إلى حساب المصروف","To expense account")],
-          asset_purchase: [tr("من حساب البنك / الخزينة","From bank / cash account"), tr("إلى حساب الأصل / المخزون / الأعمال تحت التنفيذ","To asset / inventory / WIP account")],
-          cash_transfer: [tr("من حساب المصدر","From source account"), tr("إلى حساب المستلم","To receiving account")]
-        };
-        const route = routes[type];
-        if (route) {
-          const incoming = ["funding","customer_collection","customer_advance","direct_income"].includes(type);
-          setFieldLabel(accountSelect, type === "cash_transfer" ? route[0] : (incoming ? route[1] : route[0]));
-          setFieldLabel(directionSelect, type === "cash_transfer" ? route[1] : (incoming ? route[0] : route[1]));
-        } else {
-          setFieldLabel(accountSelect, tr("حساب البنك / الخزينة","Bank / cash account"));
-          setFieldLabel(directionSelect, tr("الحساب المقابل","Counterpart account"));
-        }
+        const type = typeSelect.value, direction = movementDirectionSelect.value;
+        setFieldLabel(accountSelect, tr("حساب البنك / الخزينة","Bank / cash account"));
+        const counterpartLabel = counterpartIsTreasury
+          ? (direction === "inflow" ? tr("حساب المصدر","Source account") : tr("حساب المستلم","Receiving account"))
+          : type === "funding"
+            ? tr("حساب الممول (من شجرة الحسابات)","Funding account (from chart of accounts)")
+            : tr("الحساب المقابل من شجرة الحسابات","Counterpart account from chart of accounts");
+        setFieldLabel(counterpartSelect, counterpartLabel);
       };
-      const currentDirection = () => typeDirections[typeSelect.value] || "";
+      const currentDirection = () => movementDirectionSelect.value;
       const refreshParties = async () => {
-        const selected = partySelect.value, transactionType = typeSelect.value;
-        const required = ["customer_collection","customer_advance","supplier_payment","supplier_advance"].includes(transactionType);
+        const selected = partySelect.value;
         partySelect.required = false;
         partySelect.disabled = true;
         try {
-          const options = required ? await api(base + "/counterparties?transaction_type=" + encodeURIComponent(transactionType)) : [];
-          currentPartyOptions = options;
+          const options = await api(base + "/counterparties");
           partySelect.innerHTML = '<option value="">—</option>' + options.map(p =>
             `<option value="${String(p.counterparty_id)}">${esc(p.label)} — ${esc(p.account_label)}</option>`).join("");
           if (options.some(p => String(p.counterparty_id) === selected)) partySelect.value = selected;
         } finally { partySelect.disabled = false; }
       };
       const refreshCounterparts = async direction => {
-        const selected = directionSelect.value, transactionType = typeSelect.value;
-        directionSelect.disabled = true;
+        const selected = counterpartSelect.value, transactionType = typeSelect.value;
+        counterpartSelect.disabled = true;
         try {
-          if (!transactionType || (typeDirections[transactionType] !== direction && typeDirections[transactionType] !== "either")) {
-            directionSelect.innerHTML = '<option value="">—</option>';
+          if (!transactionType || !direction) {
+            counterpartSelect.innerHTML = '<option value="">—</option>';
             return;
           }
           const accountSelect = formEl.elements.namedItem("treasury_account_id");
           const options = await api(base + "/counterpart-accounts?direction=" + direction + "&transaction_type=" + encodeURIComponent(transactionType) + "&treasury_account_id=" + encodeURIComponent(accountSelect.value));
-          directionSelect.innerHTML = '<option value="">—</option>' + options.map(a =>
+          counterpartSelect.innerHTML = '<option value="">—</option>' + options.map(a =>
             `<option value="${String(a.account_id)}">${esc(a.label)}</option>`).join("");
-          if (options.some(a => String(a.account_id) === selected)) {
-            directionSelect.value = selected;
-          }
+          if (options.some(a => String(a.account_id) === selected)) counterpartSelect.value = selected;
+          const selectedOption = options.find(a => String(a.account_id) === String(counterpartSelect.value));
+          counterpartIsTreasury = Boolean(selectedOption?.is_treasury_account);
+          updateFieldLabels();
           updateHint();
         } catch (e) {
-          directionSelect.innerHTML = '<option value="">—</option>';
+          counterpartSelect.innerHTML = '<option value="">—</option>';
           throw e;
-        } finally { directionSelect.disabled = false; }
+        } finally { counterpartSelect.disabled = false; }
       };
-      const applyDirectionFromType = () => {
-        const fixed = typeDirections[typeSelect.value] || "";
-        directionDisplay.value = fixed === "inflow" ? tr("وارد","Inflow")
-          : fixed === "outflow" ? tr("منصرف","Outflow") : tr("اختَر نوع الحركة أولًا","Select transaction type first");
-        amount.required = Boolean(fixed);
-      };
-      typeSelect.addEventListener("change", () => {
-        applyDirectionFromType();
-        updateFieldLabels();
-        refreshParties().then(() => refreshCounterparts(currentDirection()))
-          .catch(e => toast(errText(e)));
-      });
-      partySelect.addEventListener("change", () => {
-        updateHint();
-      });
-      accountSelect.addEventListener("change", () => refreshCounterparts(currentDirection()).catch(e => toast(errText(e))));
-      applyDirectionFromType();
-      updateFieldLabels();
-      refreshParties().then(() => refreshCounterparts(currentDirection()))
-        .catch(e => toast(errText(e)));
-      amount.addEventListener("input", updateHint);
-      const sideHint = document.createElement("small");
-      sideHint.className = "muted";
-      sideHint.textContent = "اختَر نوع الحركة ليتحدد اتجاهها تلقائيًا.";
-      directionSelect.parentElement.appendChild(sideHint);
       const updateHint = () => {
         const d = currentDirection(), type = typeSelect.value;
-        const compatible = type && (typeDirections[type] === d || typeDirections[type] === "either");
         const cashLabel = accountSelect.options[accountSelect.selectedIndex]?.text || "حساب البنك / الخزينة";
-        const counterpartLabel = directionSelect.options[directionSelect.selectedIndex]?.text || "الحساب المقابل";
-        const isTransfer = type === "cash_transfer";
+        const counterpartLabel = counterpartSelect.options[counterpartSelect.selectedIndex]?.text || "الحساب المقابل";
+        const isTransfer = counterpartIsTreasury;
         const routeLabel = isTransfer
-          ? "من حساب المصدر " + cashLabel + " إلى حساب المستلم " + counterpartLabel
+          ? (d === "inflow"
+            ? "من حساب المصدر " + counterpartLabel + " إلى حساب المستلم " + cashLabel
+            : "من حساب المصدر " + cashLabel + " إلى حساب المستلم " + counterpartLabel)
           : d === "inflow"
             ? "من حساب " + counterpartLabel + " إلى حساب " + cashLabel
             : "من حساب " + cashLabel + " إلى حساب " + counterpartLabel;
-        const accountingHint = isTransfer
-          ? "التحويل: حساب المستلم مدين وحساب المصدر دائن."
-          : d === "inflow"
-            ? "الوارد: البنك/الخزينة مدين والحساب المقابل دائن."
-            : "المنصرف: الحساب المقابل مدين والبنك/الخزينة دائن.";
-        sideHint.textContent = !type ? "اختَر نوع الحركة أولًا لتحديد الاتجاه والحسابات المناسبة."
-          : !compatible ? "نوع الحركة لا يتوافق مع اتجاه الحركة المحدد."
+        const accountingHint = d === "inflow"
+          ? "الوارد: البنك/الخزينة مدين والحساب المقابل دائن."
+          : "المنصرف: الحساب المقابل مدين والبنك/الخزينة دائن.";
+        sideHint.textContent = !type || !d ? "اختَر نوع الحركة واتجاهها المستقل."
           : routeLabel + " — قيمة الحركة: " + (amount.value || "—") + " — " + accountingHint;
       };
-      typeSelect.addEventListener("change", updateHint);
-      directionSelect.addEventListener("change", updateHint);
-      accountSelect.addEventListener("change", updateHint);
+      typeSelect.addEventListener("change", () => { updateFieldLabels(); refreshCounterparts(currentDirection()).catch(e => toast(errText(e))); updateHint(); });
+      movementDirectionSelect.addEventListener("change", () => { updateFieldLabels(); refreshCounterparts(currentDirection()).catch(e => toast(errText(e))); updateHint(); });
+      counterpartSelect.addEventListener("change", updateHint);
+      accountSelect.addEventListener("change", () => refreshCounterparts(currentDirection()).catch(e => toast(errText(e))));
       partySelect.addEventListener("change", updateHint);
+      updateFieldLabels();
+      refreshParties().then(() => refreshCounterparts(currentDirection())).catch(e => toast(errText(e)));
+      amount.addEventListener("input", updateHint);
+      const sideHint = document.createElement("small");
+      sideHint.className = "muted";
+      sideHint.textContent = "نوع الحركة وصف فقط؛ اختر اتجاه الوارد أو المنصرف بشكل مستقل.";
+      counterpartSelect.parentElement.appendChild(sideHint);
       updateHint();
     } });
   };

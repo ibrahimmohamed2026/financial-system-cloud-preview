@@ -120,6 +120,24 @@ def test_supplier_payment_posts_supplier_debit_bank_credit(monkeypatch):
     _assert_balanced(details)
 
 
+
+
+def test_funding_type_can_be_used_for_an_outflow(monkeypatch):
+    db, account, user, counterpart = _setup(monkeypatch, "مصروفات عمومية و ادارية")
+    movement = SimpleNamespace(journal_entry_id=None)
+
+    treasury._create_egp_journal(
+        db, account, movement, _body("funding", outflow="125000"), user,
+    )
+
+    details = db.added_many
+    assert [(d.account_id, d.debit_amount, d.credit_amount) for d in details] == [
+        (10, Decimal("0"), Decimal("125000")),
+        (20, Decimal("125000"), Decimal("0")),
+    ]
+    _assert_balanced(details)
+
+
 def test_egp_bank_to_cash_transfer_posts_one_journal_and_two_cash_movements(monkeypatch):
     target = SimpleNamespace(
         treasury_account_id=2, gl_account_id=20, name_ar="الخزينة",
@@ -133,7 +151,8 @@ def test_egp_bank_to_cash_transfer_posts_one_journal_and_two_cash_movements(monk
         inflow=Decimal("0"), outflow=Decimal("30000"), description="تحويل للخزينة",
         voucher_no="TR-1", status="تم", recipient_name=None, project_id=None,
     )
-    body = _body("cash_transfer", outflow="30000")
+    # The selected counterpart is a configured treasury account; the label/type is descriptive only.
+    body = _body("supplier_payment", outflow="30000")
 
     treasury._create_egp_journal(db, account, movement, body, user)
     mirror = treasury._create_egp_transfer_mirror(db, account, movement, body, user)
@@ -149,13 +168,46 @@ def test_egp_bank_to_cash_transfer_posts_one_journal_and_two_cash_movements(monk
     assert mirror.inflow == Decimal("30000")
     assert mirror.outflow == Decimal("0")
     assert mirror.counterpart_account_id == 10
+    assert mirror.transaction_type == "supplier_payment"
     assert mirror.journal_entry_id == movement.journal_entry_id
 
 
-def test_cash_transfer_api_direction_is_source_outflow_only():
-    assert treasury.USD_TRANSACTION_TYPES["cash_transfer"]["direction"] == "either"
+
+
+def test_treasury_counterpart_transfer_can_be_an_inflow(monkeypatch):
+    target = SimpleNamespace(
+        treasury_account_id=2, gl_account_id=20, name_ar="البنك المصدر",
+        currency_code="EGP", is_active=True,
+    )
+    db, account, user, counterpart = _setup(
+        monkeypatch, "مصروفات عمومية و ادارية", transfer_target=target,
+    )
+    movement = SimpleNamespace(
+        transaction_id=2, journal_entry_id=None, transaction_date=date(2026, 11, 8),
+        inflow=Decimal("18000"), outflow=Decimal("0"), description="استلام تحويل",
+        voucher_no="TR-2", status="تم", recipient_name=None, project_id=None,
+    )
+    body = _body("expense_payment", inflow="18000")
+
+    treasury._create_egp_journal(db, account, movement, body, user)
+    mirror = treasury._create_egp_transfer_mirror(db, account, movement, body, user)
+
+    details = db.added_many
+    assert [(d.account_id, d.debit_amount, d.credit_amount) for d in details] == [
+        (10, Decimal("18000"), Decimal("0")),
+        (20, Decimal("0"), Decimal("18000")),
+    ]
+    _assert_balanced(details)
+    assert mirror.inflow == Decimal("0")
+    assert mirror.outflow == Decimal("18000")
+
+
+def test_direction_is_independent_of_descriptive_movement_type():
     assert treasury._movement_direction_allowed("cash_transfer", "outflow")
-    assert not treasury._movement_direction_allowed("cash_transfer", "inflow")
+    assert treasury._movement_direction_allowed("cash_transfer", "inflow")
+    assert treasury._movement_direction_allowed("supplier_payment", "inflow")
+    assert treasury._movement_direction_allowed("funding", "outflow")
+    assert not treasury._movement_direction_allowed("funding", "sideways")
 
 
 def test_party_reference_is_optional_and_counterpart_options_come_from_chart(monkeypatch):
@@ -168,7 +220,7 @@ def test_party_reference_is_optional_and_counterpart_options_come_from_chart(mon
         classification_id=8, is_active=True, normal_balance="DR",
     )
     classification = SimpleNamespace(
-        name_ar="عملاء وأوراق قبض", statement_type="BalanceSheet",
+        name_ar="مصروفات عمومية و ادارية", statement_type="IncomeStatement",
     )
     screen = SimpleNamespace(
         treasury_account_id=1, gl_account_id=10, currency_code="EGP",
@@ -237,7 +289,7 @@ def test_optional_party_reference_does_not_supply_the_account():
 
 def test_optional_party_reference_only_checks_consistency_with_selected_chart_account():
     party = SimpleNamespace(
-        is_active=True, party_type="Customer", account_id=20, linked_account_id=None,
+        is_active=True, party_type="Customer", account_id=21, linked_account_id=20,
     )
 
     class DB:
@@ -257,3 +309,21 @@ def test_optional_party_reference_only_checks_consistency_with_selected_chart_ac
     with pytest.raises(HTTPException) as exc:
         treasury._validate_optional_counterparty_reference(DB(), mismatching)
     assert exc.value.status_code == 422
+
+
+def test_any_leaf_account_can_be_selected_without_type_classification_filter(monkeypatch):
+    db, account, user, counterpart = _setup(monkeypatch, "مصروفات عمومية و ادارية")
+    movement = SimpleNamespace(journal_entry_id=None)
+
+    entry_no = treasury._create_egp_journal(
+        db, account, movement, _body("funding", inflow="125000"), user,
+    )
+
+    assert entry_no == "JV-TEST-0001"
+    details = db.added_many
+    assert len(details) == 2
+    assert [(d.account_id, d.debit_amount, d.credit_amount) for d in details] == [
+        (10, Decimal("125000"), Decimal("0")),
+        (20, Decimal("0"), Decimal("125000")),
+    ]
+    _assert_balanced(details)

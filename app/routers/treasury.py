@@ -3,13 +3,14 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..common import money, require_dynamic
 from ..database import get_db
 from ..deps import has_permission, require_permission, write_audit
 from ..models import (Account, AccountClassification, Counterparty, JournalEntry, JournalEntryDetail, Project, TreasuryAccount, TreasuryTransaction, User)
+from .reconciliation import posted_book_balance
 
 # شاشة → (نوع الحساب الافتراضي، العملة الافتراضية)
 BANK_SCREENS = {
@@ -25,7 +26,21 @@ def _movement_route(treasury_label: str, counterpart_label: str, inflow: bool) -
     return (counterpart_label, treasury_label) if inflow else (treasury_label, counterpart_label)
 Amt = Field(default=D0, ge=0, max_digits=18, decimal_places=2)
 
-# Transaction type determines the only valid counterpart classifications.
+# Movement types are descriptive labels only; no direction or account rules live here.
+TREASURY_MOVEMENT_TYPES = {
+    "funding": "تمويل من المساهمين أو الأطراف ذات العلاقة",
+    "customer_collection": "تحصيل مستحقات من عميل",
+    "customer_advance": "تحصيل دفعة مقدمة من عميل",
+    "direct_income": "تحصيل إيراد مباشر",
+    "supplier_payment": "سداد مورد أو مقاول",
+    "supplier_advance": "دفعة مقدمة لمورد أو مقاول",
+    "expense_payment": "سداد مصروفات",
+    "asset_purchase": "شراء أصل أو مخزون أو أعمال تحت التنفيذ",
+    "cash_transfer": "تحويل بين حسابات نقدية",
+}
+
+# Backward-compatible classification catalogue for the cheque register only.
+# Treasury movements must use TREASURY_MOVEMENT_TYPES and never read these rules.
 USD_TRANSACTION_TYPES = {
     "funding": {"label": "تمويل من المساهمين أو الأطراف ذات العلاقة", "direction": "inflow",
                 "classifications": ("مستحق الى اطراف ذات علاقة", "راس المال المصدر و المدفوع")},
@@ -62,13 +77,8 @@ class GLAccountLinkIn(BaseModel):
 
 
 def _movement_direction_allowed(transaction_type: str | None, direction: str) -> bool:
-    """Enforce source-to-receiver direction at the treasury API boundary."""
-    config = USD_TRANSACTION_TYPES.get(transaction_type or "")
-    if config is None:
-        return False
-    if transaction_type == "cash_transfer":
-        return direction == "outflow"
-    return config["direction"] in (direction, "either")
+    """Direction is selected independently; movement type is descriptive only."""
+    return direction in ("inflow", "outflow")
 
 
 class TxIn(BaseModel):
@@ -93,12 +103,44 @@ class TxIn(BaseModel):
         return self
 
 
-def balance_of(db: Session, tid: int, upto: date | None = None) -> Decimal:
-    stmt = select(func.coalesce(func.sum(TreasuryTransaction.inflow - TreasuryTransaction.outflow), 0)).where(
-        TreasuryTransaction.treasury_account_id == tid)
-    if upto:
+def _posted_treasury_movement_balance(db: Session, treasury: TreasuryAccount,
+                                       upto: date | None = None,
+                                       before: date | None = None) -> Decimal:
+    stmt = (select(func.coalesce(func.sum(TreasuryTransaction.inflow - TreasuryTransaction.outflow), 0))
+            .select_from(TreasuryTransaction)
+            .join(JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id)
+            .where(TreasuryTransaction.treasury_account_id == treasury.treasury_account_id,
+                   JournalEntry.status == "Posted"))
+    if upto is not None:
         stmt = stmt.where(TreasuryTransaction.transaction_date <= upto)
-    return Decimal(db.scalar(stmt) or 0)
+    if before is not None:
+        stmt = stmt.where(TreasuryTransaction.transaction_date < before)
+    balance = Decimal(db.scalar(stmt) or 0)
+    if treasury.currency_code == "EGP":
+        gl = db.get(Account, treasury.gl_account_id)
+        if gl is not None:
+            balance += Decimal(gl.opening_debit or 0) - Decimal(gl.opening_credit or 0)
+    return balance
+
+
+def balance_of(db: Session, tid: int, upto: date | None = None) -> Decimal:
+    treasury = db.get(TreasuryAccount, tid)
+    return posted_book_balance(db, treasury, upto) if treasury is not None else D0
+
+
+def posted_gl_egp_balance(db: Session, treasury: TreasuryAccount, upto: date | None = None) -> Decimal:
+    stmt = (select(func.coalesce(func.sum(JournalEntryDetail.debit_amount - JournalEntryDetail.credit_amount), 0))
+            .select_from(JournalEntryDetail)
+            .join(JournalEntry, JournalEntry.journal_entry_id == JournalEntryDetail.journal_entry_id)
+            .where(JournalEntryDetail.account_id == treasury.gl_account_id,
+                   JournalEntry.status == "Posted"))
+    if upto is not None:
+        stmt = stmt.where(JournalEntry.entry_date <= upto)
+    balance = Decimal(db.scalar(stmt) or 0)
+    gl = db.get(Account, treasury.gl_account_id)
+    if gl is not None:
+        balance += Decimal(gl.opening_debit or 0) - Decimal(gl.opening_credit or 0)
+    return balance
 
 
 def acc_out(db: Session, a: TreasuryAccount) -> dict:
@@ -225,41 +267,26 @@ def available_accounts(screen_code: str, _: User = Depends(require_dynamic("View
 
 
 @router.get("/{screen_code}/counterparties")
-def treasury_counterparties(screen_code: str, transaction_type: str = Query(..., min_length=1, max_length=40),
+def treasury_counterparties(screen_code: str, transaction_type: str | None = Query(None, max_length=40),
                             _: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
                             db: Session = Depends(get_db)):
-    """List active customer/supplier master records with a valid linked ledger account."""
+    """List active party cards as optional references, independent of movement type."""
     _bound(db, screen_code)
-    if transaction_type in ("customer_collection", "customer_advance"):
-        allowed_types = ("Customer", "Mixed")
-    elif transaction_type in ("supplier_payment", "supplier_advance"):
-        allowed_types = ("Supplier", "Contractor", "Mixed")
-    else:
-        return []
-    config = USD_TRANSACTION_TYPES.get(transaction_type)
-    if config is None:
-        raise HTTPException(400, "نوع الحركة غير معروف")
-    # Keep active party cards visible even when their ledger link is missing or
-    # unsuitable. The selection endpoint below remains the strict accounting guard.
     rows = db.execute(
-        select(Counterparty, Account, AccountClassification)
-        .outerjoin(Account, Account.account_id == Counterparty.account_id)
-        .outerjoin(AccountClassification, AccountClassification.classification_id == Account.classification_id)
-        .where(Counterparty.is_active == True, Counterparty.party_type.in_(allowed_types))
+        select(Counterparty, Account)
+        .outerjoin(Account, Account.account_id == Counterparty.linked_account_id)
+        .where(Counterparty.is_active == True)
         .order_by(Counterparty.legal_name, Counterparty.counterparty_id).limit(500)
     ).all()
     parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
     result = []
-    for party, account, classification in rows:
+    for party, account in rows:
         if account is None:
-            account_label = "غير مربوط بحساب في شجرة الحسابات"
+            account_label = "مرجع فقط — لا يوجد حساب أستاذ مرتبط"
         elif not account.is_active:
             account_label = f"{account.account_code} — {account.account_name_ar} (الحساب موقوف)"
         elif account.account_id in parents:
-            account_label = f"{account.account_code} — {account.account_name_ar} (حساب رئيسي؛ اختر حسابًا فرعيًا)"
-        elif classification is None or classification.name_ar not in config["classifications"]:
-            actual_class = classification.name_ar if classification else "بدون تصنيف"
-            account_label = f"{account.account_code} — {account.account_name_ar} (تصنيف غير مناسب: {actual_class})"
+            account_label = f"{account.account_code} — {account.account_name_ar} (حساب رئيسي)"
         else:
             account_label = f"{account.account_code} — {account.account_name_ar}"
         result.append({
@@ -267,8 +294,7 @@ def treasury_counterparties(screen_code: str, transaction_type: str = Query(...,
             "label": f"{party.code} — {party.legal_name or party.name}",
             "linked_account_id": account.account_id if account else None,
             "account_label": account_label,
-            "account_usable": bool(account and account.is_active and account.account_id not in parents
-                                    and classification and classification.name_ar in config["classifications"]),
+            "account_usable": bool(account and account.is_active and account.account_id not in parents),
         })
     return result
 
@@ -280,7 +306,7 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
                          counterparty_id: int | None = Query(None, gt=0),
                          user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
                          db: Session = Depends(get_db)):
-    """Return only accounts allowed for the selected transaction type and direction."""
+    """Return active leaf COA accounts; direction controls the displayed debit/credit side only."""
     screen_account = _bound(db, screen_code)
     treasury = db.get(TreasuryAccount, treasury_account_id) if treasury_account_id else screen_account
     if (treasury is None or not treasury.is_active or treasury.screen_code not in BANK_SCREENS
@@ -288,51 +314,47 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
         raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
     if not has_permission(db, user.user_id, treasury.screen_code, "Add"):
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
-    config = USD_TRANSACTION_TYPES.get(transaction_type)
+    if transaction_type not in TREASURY_MOVEMENT_TYPES:
+        raise HTTPException(400, "نوع الحركة غير معروف")
     if not _movement_direction_allowed(transaction_type, direction):
-        raise HTTPException(400, "نوع الحركة لا يتوافق مع اتجاه الوارد أو المنصرف")
+        raise HTTPException(400, "اتجاه الحركة غير صحيح")
     # A party card is optional reference metadata. The GL account list is
     # always selected directly from the chart of accounts below.
     if counterparty_id is not None:
         party = db.get(Counterparty, counterparty_id)
-        expected_party_types = (
-            ("Customer", "Mixed")
-            if transaction_type in ("customer_collection", "customer_advance")
-            else ("Supplier", "Contractor", "Mixed")
-            if transaction_type in ("supplier_payment", "supplier_advance")
-            else ()
-        )
-        if party is None or not party.is_active or party.party_type not in expected_party_types:
-            raise HTTPException(422, "بطاقة العميل أو المورد/المقاول غير صحيحة لنوع الحركة")
+        if party is None or not party.is_active:
+            raise HTTPException(422, "البطاقة المرجعية غير موجودة أو غير نشطة")
     parents = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
-    if transaction_type == "cash_transfer":
-        # Transfers must target another configured USD treasury/bank account,
-        # not an arbitrary ledger account that merely shares the cash classification.
-        rows = db.execute(
-            select(Account, AccountClassification)
-            .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
-            .join(TreasuryAccount, TreasuryAccount.gl_account_id == Account.account_id)
-            .where(TreasuryAccount.is_active == True, TreasuryAccount.screen_code.in_(BANK_SCREENS),
-                   TreasuryAccount.currency_code == treasury.currency_code,
-                   TreasuryAccount.treasury_account_id != treasury.treasury_account_id,
-                   Account.is_active == True, Account.account_id.not_in(parents))
-            .order_by(Account.account_code).limit(500)
-        ).all()
-    else:
-        rows = db.execute(
-            select(Account, AccountClassification)
-            .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
-            .where(Account.is_active == True, Account.account_id != treasury.gl_account_id,
-                   Account.account_id.not_in(parents),
-                   Account.account_code.not_in(("32102001", "47101001")),
-                   AccountClassification.name_ar.in_(config["classifications"]))
-            .order_by(Account.account_code).limit(500)
-        ).all()
+    # Select directly from active leaf accounts in the COA. A counterpart linked
+    # to another accessible same-currency treasury account is recognized as a transfer.
+    treasury_rows = db.scalars(select(TreasuryAccount).where(
+        TreasuryAccount.is_active == True,
+        TreasuryAccount.currency_code == treasury.currency_code,
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
+    ))
+    treasury_rows = treasury_rows.all() if hasattr(treasury_rows, "all") else list(treasury_rows)
+    accessible_treasuries = [ta for ta in treasury_rows
+        if has_permission(db, user.user_id, ta.screen_code, "View")
+        and has_permission(db, user.user_id, ta.screen_code, "Add")]
+    treasury_gl_ids = {ta.gl_account_id for ta in accessible_treasuries}
+    inaccessible_treasury_gl_ids = select(TreasuryAccount.gl_account_id).where(
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
+    ).where(TreasuryAccount.gl_account_id.not_in(treasury_gl_ids))
+    rows = db.execute(
+        select(Account, AccountClassification)
+        .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
+        .where(Account.is_active == True, Account.account_id != treasury.gl_account_id,
+               Account.account_id.not_in(parents),
+               Account.account_id.not_in(inaccessible_treasury_gl_ids),
+               Account.account_code.not_in(("32102001", "47101001")))
+        .order_by(Account.account_code).limit(500)
+    ).all()
     posting_side = "credit" if direction == "inflow" else "debit"
     side_ar = "دائن بالقيد" if direction == "inflow" else "مدين بالقيد"
     return [{"account_id": a.account_id, "label": f"{a.account_code} — {a.account_name_ar} ({side_ar})",
              "classification": cl.name_ar, "statement_type": cl.statement_type,
-             "normal_balance": a.normal_balance, "posting_side": posting_side} for a, cl in rows]
+             "normal_balance": a.normal_balance, "posting_side": posting_side,
+             "is_treasury_account": a.account_id in treasury_gl_ids} for a, cl in rows]
 
 
 @router.post("/{screen_code}/account", status_code=201)
@@ -382,6 +404,149 @@ def update_account_gl(screen_code: str, body: GLAccountLinkIn,
     return acc_out(db, a)
 
 
+@router.get("/{screen_code}/balance-reconciliation")
+def balance_reconciliation(screen_code: str, treasury_account_id: int | None = Query(None, gt=0),
+                           as_of_date: date | None = None,
+                           user: User = Depends(require_dynamic("View", set(BANK_SCREENS))),
+                           db: Session = Depends(get_db)):
+    """Compare posted treasury movements with the linked GL balance and expose excluded items."""
+    screen_account = _bound(db, screen_code)
+    a = db.get(TreasuryAccount, treasury_account_id) if treasury_account_id else screen_account
+    if a is None or not a.is_active or a.currency_code != screen_account.currency_code:
+        raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
+    if not has_permission(db, user.user_id, a.screen_code, "View"):
+        raise HTTPException(403, "ليس لديك صلاحية عرض حساب البنك أو الخزينة المحدد")
+    as_of = as_of_date or date.today()
+    ledger_balance = posted_book_balance(db, a, as_of)
+    ledger_balance_egp = posted_gl_egp_balance(db, a, as_of)
+    movement_balance = _posted_treasury_movement_balance(db, a, upto=as_of)
+    gl_account = db.get(Account, a.gl_account_id)
+    opening_balance_warning = None
+    if a.currency_code != "EGP" and gl_account and (
+        Decimal(gl_account.opening_debit or 0) != 0 or Decimal(gl_account.opening_credit or 0) != 0
+    ):
+        opening_balance_warning = (
+            "يوجد رصيد افتتاحي بالجنيه في شجرة الحسابات. تم استبعاده من رصيد الدولار الأصلي، "
+            "لكنه داخل رصيد الأستاذ بالجنيه المعروض منفصلًا."
+        )
+    T = TreasuryTransaction
+    rows = db.execute(
+        select(T, JournalEntry.status, JournalEntry.entry_no)
+        .outerjoin(JournalEntry, JournalEntry.journal_entry_id == T.journal_entry_id)
+        .where(T.treasury_account_id == a.treasury_account_id, T.transaction_date <= as_of)
+        .order_by(T.transaction_date, T.transaction_id)
+    ).all()
+    categories = {
+        "Unlinked": {"label": "حركات غير مرتبطة بقيد", "items": []},
+        "Draft": {"label": "قيود مسودة غير مرحّلة", "items": []},
+        "Reversed": {"label": "قيود ملغاة / معكوسة", "items": []},
+        "Missing": {"label": "مرجع قيد غير موجود", "items": []},
+    }
+    for t, journal_status, entry_no in rows:
+        state = journal_status or ("Unlinked" if t.journal_entry_id is None else "Missing")
+        if state == "Posted":
+            continue
+        if state not in categories:
+            continue
+        categories[state]["items"].append({
+            "transaction_id": t.transaction_id,
+            "transaction_date": t.transaction_date,
+            "voucher_no": t.voucher_no,
+            "description": t.description,
+            "inflow": money(t.inflow),
+            "outflow": money(t.outflow),
+            "journal_entry_id": t.journal_entry_id,
+            "journal_entry_no": entry_no,
+            "journal_status": state,
+        })
+
+    linked_journal_ids = select(T.journal_entry_id).where(
+        T.treasury_account_id == a.treasury_account_id,
+        T.journal_entry_id.is_not(None),
+        T.transaction_date <= as_of,
+    )
+    amount_expr = (func.coalesce(func.sum(JournalEntryDetail.debit_amount - JournalEntryDetail.credit_amount), 0)
+                   if a.currency_code == "EGP" else
+                   func.coalesce(func.sum(case(
+                       (JournalEntryDetail.debit_amount > 0, func.coalesce(JournalEntryDetail.fcy_amount, 0)),
+                       (JournalEntryDetail.credit_amount > 0, -func.coalesce(JournalEntryDetail.fcy_amount, 0)),
+                       else_=0,
+                   )), 0))
+    ledger_only_rows = db.execute(
+        select(JournalEntry.journal_entry_id, JournalEntry.entry_no, JournalEntry.entry_date,
+               func.coalesce(func.sum(JournalEntryDetail.debit_amount), 0),
+               func.coalesce(func.sum(JournalEntryDetail.credit_amount), 0),
+               amount_expr)
+        .join(JournalEntryDetail, JournalEntryDetail.journal_entry_id == JournalEntry.journal_entry_id)
+        .where(JournalEntryDetail.account_id == a.gl_account_id,
+               JournalEntry.status == "Posted", JournalEntry.entry_date <= as_of,
+               JournalEntry.journal_entry_id.not_in(linked_journal_ids))
+        .group_by(JournalEntry.journal_entry_id, JournalEntry.entry_no, JournalEntry.entry_date)
+        .order_by(JournalEntry.entry_date, JournalEntry.journal_entry_id)
+    ).all()
+
+    posted_tx = [(t, entry_no) for t, status, entry_no in rows if status == "Posted"]
+    posted_entry_ids = {t.journal_entry_id for t, _ in posted_tx}
+    gl_line_signed = (JournalEntryDetail.debit_amount - JournalEntryDetail.credit_amount
+                      if a.currency_code == "EGP" else
+                      case(
+                          (JournalEntryDetail.debit_amount > 0, func.coalesce(JournalEntryDetail.fcy_amount, 0)),
+                          (JournalEntryDetail.credit_amount > 0, -func.coalesce(JournalEntryDetail.fcy_amount, 0)),
+                          else_=0,
+                      ))
+    gl_amount_by_entry = dict(db.execute(
+        select(JournalEntryDetail.journal_entry_id, func.sum(gl_line_signed))
+        .where(JournalEntryDetail.account_id == a.gl_account_id,
+               JournalEntryDetail.journal_entry_id.in_(posted_entry_ids or {-1}))
+        .group_by(JournalEntryDetail.journal_entry_id)
+    ).all())
+    movements_without_gl_line, movement_amount_mismatches = [], []
+    for t, entry_no in posted_tx:
+        expected = Decimal(t.inflow or 0) - Decimal(t.outflow or 0)
+        actual = gl_amount_by_entry.get(t.journal_entry_id)
+        item = {
+            "transaction_id": t.transaction_id, "transaction_date": t.transaction_date,
+            "voucher_no": t.voucher_no, "description": t.description,
+            "inflow": money(t.inflow), "outflow": money(t.outflow),
+            "journal_entry_id": t.journal_entry_id, "journal_entry_no": entry_no,
+        }
+        if actual is None:
+            movements_without_gl_line.append(item)
+        elif Decimal(actual or 0) != expected:
+            movement_amount_mismatches.append({
+                **item, "treasury_signed_amount": money(expected),
+                "gl_signed_amount": money(actual), "difference": money(Decimal(actual) - expected),
+            })
+
+    return {
+        "treasury_account_id": a.treasury_account_id,
+        "account_name": a.name_ar,
+        "gl_account_id": a.gl_account_id,
+        "currency_code": a.currency_code,
+        "as_of_date": as_of,
+        "ledger_balance": money(ledger_balance),
+        "ledger_balance_egp": money(ledger_balance_egp),
+        "posted_treasury_movement_balance": money(movement_balance),
+        "difference": money(ledger_balance - movement_balance),
+        "difference_explanation": (
+            "فرق بين رصيد الأستاذ العام وصافي الحركات المرتبطة بقيود مرحّلة. راجع القيود غير المرتبطة "
+            "بالحركات والحركات التي لا تحتوي قيودها على سطر لحساب البنك."
+        ),
+        "opening_balance_basis": "GL opening debit-credit" if a.currency_code == "EGP" else "FCY journal amounts; EGP opening balances excluded",
+        "opening_balance_warning": opening_balance_warning,
+        "excluded_movements": {
+            key: {"label": value["label"], "count": len(value["items"]), "items": value["items"]}
+            for key, value in categories.items()
+        },
+        "posted_ledger_entries_without_treasury_movement": [{
+            "journal_entry_id": row[0], "entry_no": row[1], "entry_date": row[2],
+            "debit": money(row[3]), "credit": money(row[4]), "signed_balance": money(row[5]),
+        } for row in ledger_only_rows],
+        "posted_treasury_movements_without_gl_line": movements_without_gl_line,
+        "posted_treasury_movement_amount_mismatches": movement_amount_mismatches,
+    }
+
+
 @router.get("/{screen_code}/transactions")
 def transactions(screen_code: str, date_from: date | None = None, date_to: date | None = None, q: str | None = None,
                  treasury_account_id: int | None = Query(None, gt=0),
@@ -395,24 +560,46 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
         raise HTTPException(403, "ليس لديك صلاحية عرض حساب البنك أو الخزينة المحدد")
     tid = a.treasury_account_id
     T = TreasuryTransaction
-    opening = D0
     if date_from:
-        opening = Decimal(db.scalar(select(func.coalesce(func.sum(T.inflow - T.outflow), 0)).where(
-            T.treasury_account_id == tid, T.transaction_date < date_from)) or 0)
-    stmt = select(T).where(T.treasury_account_id == tid)
+        opening = _posted_treasury_movement_balance(db, a, before=date_from)
+    else:
+        opening = D0
+        if a.currency_code == "EGP":
+            gl = db.get(Account, a.gl_account_id)
+            if gl is not None:
+                opening = Decimal(gl.opening_debit or 0) - Decimal(gl.opening_credit or 0)
+
+    stmt = (select(T, JournalEntry.status)
+            .outerjoin(JournalEntry, JournalEntry.journal_entry_id == T.journal_entry_id)
+            .where(T.treasury_account_id == tid))
     if date_from:
         stmt = stmt.where(T.transaction_date >= date_from)
     if date_to:
         stmt = stmt.where(T.transaction_date <= date_to)
-    if q and q.strip():
-        like = f"%{q.strip()}%"
-        stmt = stmt.where(or_(T.description.ilike(like), T.recipient_name.ilike(like), T.voucher_no.ilike(like)))
-    rows = db.scalars(stmt.order_by(T.transaction_date, T.transaction_id)).all()
+    rows = db.execute(stmt.order_by(T.transaction_date, T.transaction_id)).all()
     run, out, tin, tout = opening, [], D0, D0
-    for t in rows:
-        run += t.inflow - t.outflow
-        tin += t.inflow
-        tout += t.outflow
+    pending = {
+        "Draft": {"count": 0, "inflow": D0, "outflow": D0},
+        "Reversed": {"count": 0, "inflow": D0, "outflow": D0},
+        "Unlinked": {"count": 0, "inflow": D0, "outflow": D0},
+        "Missing": {"count": 0, "inflow": D0, "outflow": D0},
+    }
+    treasury_gl = db.get(Account, a.gl_account_id)
+    treasury_label = (f"{treasury_gl.account_code} — {treasury_gl.account_name_ar}"
+                      if treasury_gl else a.name_ar)
+    for t, journal_status in rows:
+        effective_status = journal_status or ("Unlinked" if t.journal_entry_id is None else "Missing")
+        included = effective_status == "Posted"
+        if included:
+            run += t.inflow - t.outflow
+            tin += t.inflow
+            tout += t.outflow
+        elif effective_status in pending:
+            bucket = pending[effective_status]
+            bucket["count"] += 1
+            bucket["inflow"] += t.inflow
+            bucket["outflow"] += t.outflow
+
         counterpart = db.get(Account, t.counterpart_account_id) if t.counterpart_account_id else None
         counterpart_label = (f"{counterpart.account_code} — {counterpart.account_name_ar}"
                              if counterpart else "حساب غير محدد")
@@ -420,15 +607,13 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
         counterparty_reference = (
             f"{party.code} — {party.legal_name or party.name}" if party else None
         )
-        treasury_gl = db.get(Account, a.gl_account_id)
-        treasury_label = (f"{treasury_gl.account_code} — {treasury_gl.account_name_ar}"
-                          if treasury_gl else a.name_ar)
         from_label, to_label = _movement_route(treasury_label, counterpart_label, t.inflow > 0)
         out.append({"transaction_id": t.transaction_id, "transaction_date": t.transaction_date,
                     "treasury_account_id": a.treasury_account_id, "treasury_account_name": a.name_ar,
                     "treasury_account_type": a.account_type,
                     "inflow": money(t.inflow), "outflow": money(t.outflow), "balance": money(run),
                     "description": t.description, "voucher_no": t.voucher_no, "status": t.status,
+                    "journal_status": effective_status, "included_in_balance": included,
                     "recipient_name": t.recipient_name, "project_id": t.project_id,
                     "transaction_type": t.transaction_type,
                     "exchange_rate": str(t.exchange_rate) if t.exchange_rate is not None else None,
@@ -439,8 +624,20 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
                     "counterparty_label": counterparty_reference,
                     "journal_entry_id": t.journal_entry_id,
                     "locked": t.journal_entry_id is not None})
-    return {"total": len(out), "opening_balance": money(opening), "total_inflow": money(tin),
-            "total_outflow": money(tout), "closing_balance": money(run), "items": out[skip:skip + limit]}
+    if q and q.strip():
+        needle = q.strip().casefold()
+        out = [item for item in out if needle in " ".join(str(item.get(k) or "") for k in
+               ("description", "recipient_name", "voucher_no", "transaction_id")).casefold()]
+    ledger_closing = posted_book_balance(db, a, date_to)
+    movement_closing = run
+    return {"total": len(out), "opening_balance": money(opening),
+            "total_inflow": money(tin), "total_outflow": money(tout),
+            "movement_closing_balance": money(movement_closing),
+            "closing_balance": money(ledger_closing),
+            "balance_difference": money(ledger_closing - movement_closing),
+            "pending": {key: {"count": value["count"], "inflow": money(value["inflow"]),
+                              "outflow": money(value["outflow"])} for key, value in pending.items()},
+            "items": out[skip:skip + limit]}
 
 
 def _check_project(db: Session, pid: int | None):
@@ -448,24 +645,35 @@ def _check_project(db: Session, pid: int | None):
         raise HTTPException(400, "مركز التكلفة غير موجود")
 
 
+def _validate_treasury_counterpart_access(db: Session, user: User, source: TreasuryAccount,
+                                          counterpart_account_id: int | None) -> None:
+    if counterpart_account_id is None:
+        return
+    target = db.scalar(select(TreasuryAccount).where(
+        TreasuryAccount.gl_account_id == counterpart_account_id,
+        TreasuryAccount.currency_code == source.currency_code,
+        TreasuryAccount.is_active == True,
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
+        TreasuryAccount.treasury_account_id != source.treasury_account_id,
+    ))
+    if target is not None and not (
+        has_permission(db, user.user_id, target.screen_code, "View")
+        and has_permission(db, user.user_id, target.screen_code, "Add")
+    ):
+        raise HTTPException(403, "ليس لديك صلاحية التحويل إلى حساب البنك أو الخزينة المحدد")
+
+
 def _validate_optional_counterparty_reference(db: Session, body: TxIn) -> None:
     """Validate optional party metadata without deriving the accounting account from it."""
     if body.counterparty_id is None:
         return
-    expected_types = {
-        "customer_collection": ("Customer", "Mixed"),
-        "customer_advance": ("Customer", "Mixed"),
-        "supplier_payment": ("Supplier", "Contractor", "Mixed"),
-        "supplier_advance": ("Supplier", "Contractor", "Mixed"),
-    }
-    allowed = expected_types.get(body.transaction_type or "", ())
     party = db.get(Counterparty, body.counterparty_id)
-    if party is None or not party.is_active or party.party_type not in allowed:
-        raise HTTPException(422, "البطاقة المرجعية غير نشطة أو لا تتوافق مع نوع الحركة")
-    # A linked account, when present, is a consistency check only. It never
-    # supplies or replaces the GL account selected on the transaction.
-    if (party.account_id is not None
-            and party.account_id != body.counterpart_account_id):
+    if party is None or not party.is_active:
+        raise HTTPException(422, "البطاقة المرجعية غير موجودة أو غير نشطة")
+    # LinkedAccountId is canonical. It is a consistency check only and never
+    # supplies or replaces the account explicitly selected from the COA.
+    if (party.linked_account_id is not None
+            and party.linked_account_id != body.counterpart_account_id):
         raise HTTPException(422, "الحساب المختار لا يطابق الحساب المرتبط بالبطاقة المرجعية")
 
 
@@ -485,26 +693,14 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
     if counterpart.account_id in parents:
         raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
-    config = USD_TRANSACTION_TYPES.get(body.transaction_type or "")
-    direction = "inflow" if body.inflow > 0 else "outflow"
-    if config is None or config["direction"] not in (direction, "either"):
-        raise HTTPException(422, "اختَر نوع حركة صحيحًا ومتوافقًا مع الوارد أو المنصرف")
-    counterpart_class = db.get(AccountClassification, counterpart.classification_id)
-    if body.transaction_type == "cash_transfer":
-        target_treasury = db.scalar(select(TreasuryAccount).where(
-            TreasuryAccount.gl_account_id == counterpart.account_id,
-            TreasuryAccount.currency_code == "USD",
-            TreasuryAccount.is_active == True,
-            TreasuryAccount.screen_code.in_(BANK_SCREENS),
-            TreasuryAccount.treasury_account_id != a.treasury_account_id,
-        ))
-        if target_treasury is None:
-            raise HTTPException(400, "التحويل لازم يكون إلى خزينة أو بنك آخر مُسجّل بالدولار")
-    elif counterpart_class is None or counterpart_class.name_ar not in config["classifications"]:
-        raise HTTPException(400, "الحساب المختار لا يتبع التصنيف المسموح لنوع الحركة")
-    counterpart_posting_side = "credit" if direction == "inflow" else "debit"
-    if counterpart_posting_side not in ("credit", "debit"):
-        raise HTTPException(400, "اتجاه حركة الخزينة غير صحيح")
+    target_treasury = db.scalar(select(TreasuryAccount).where(
+        TreasuryAccount.gl_account_id == counterpart.account_id,
+        TreasuryAccount.currency_code == "USD",
+        TreasuryAccount.is_active == True,
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
+        TreasuryAccount.treasury_account_id != a.treasury_account_id,
+    ))
+    is_treasury_transfer = target_treasury is not None
 
     # Prevent new movements while legacy movements or draft journals remain unprocessed.
     unlinked_stmt = select(func.count()).select_from(TreasuryTransaction).where(
@@ -542,7 +738,7 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     fx_account = None
     cash_is_debit = body.inflow > 0
 
-    if body.transaction_type == "cash_transfer":
+    if is_treasury_transfer:
         # A transfer carries the source account's historical book value.
         # It is not a realized FX gain/loss merely because the spot rate changed.
         source_gl_id = a.gl_account_id if not cash_is_debit else counterpart.account_id
@@ -651,7 +847,7 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
             account_id=counterpart.account_id, project_id=body.project_id,
             debit_amount=Decimal("0") if cash_is_debit else counterpart_egp,
             credit_amount=counterpart_egp if cash_is_debit else Decimal("0"),
-            fcy_amount=amount_usd, exchange_rate=cash_rate if body.transaction_type == "cash_transfer" else body.exchange_rate,
+            fcy_amount=amount_usd, exchange_rate=cash_rate if is_treasury_transfer else body.exchange_rate,
             description=body.description or "الطرف المقابل لحركة الخزينة",
         ),
     ])
@@ -692,8 +888,8 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     """
     if t.journal_entry_id is not None:
         raise HTTPException(409, "حركة الخزينة مرتبطة بقيد بالفعل؛ لا يمكن إنشاء قيد مكرر")
-    if body.counterpart_account_id is None or not body.transaction_type:
-        raise HTTPException(422, "حركة خزينة الجنيه تتطلب نوع الحركة وحساب الطرف المقابل")
+    if body.counterpart_account_id is None or body.transaction_type not in TREASURY_MOVEMENT_TYPES:
+        raise HTTPException(422, "اختَر نوع حركة صحيحًا وحساب الطرف المقابل")
     if body.counterpart_account_id == a.gl_account_id:
         raise HTTPException(422, "حساب الطرف المقابل لازم يختلف عن حساب الخزينة")
     counterpart = db.get(Account, body.counterpart_account_id)
@@ -702,23 +898,7 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
     if counterpart.account_id in parents:
         raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
-    config = USD_TRANSACTION_TYPES.get(body.transaction_type)
-    direction = "inflow" if body.inflow > 0 else "outflow"
-    if config is None or config["direction"] not in (direction, "either"):
-        raise HTTPException(422, "اختَر نوع حركة صحيحًا ومتوافقًا مع الوارد أو المنصرف")
-    if body.transaction_type == "cash_transfer":
-        target = db.scalar(select(TreasuryAccount).where(
-            TreasuryAccount.gl_account_id == counterpart.account_id,
-            TreasuryAccount.currency_code == a.currency_code,
-            TreasuryAccount.is_active == True,
-            TreasuryAccount.treasury_account_id != a.treasury_account_id,
-        ))
-        if target is None:
-            raise HTTPException(400, "التحويل لازم يكون إلى خزينة أو بنك آخر مسجل بنفس العملة")
-    else:
-        classification = db.get(AccountClassification, counterpart.classification_id)
-        if classification is None or classification.name_ar not in config["classifications"]:
-            raise HTTPException(400, "الحساب المختار لا يتبع التصنيف المسموح لنوع الحركة")
+    # No classification or direction restriction is derived from transaction_type.
 
     from .journal import _fy_for, _next_no
     fy = _fy_for(db, body.transaction_date)
@@ -754,8 +934,6 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
 def _create_usd_transfer_mirror(db: Session, source: TreasuryAccount, original: TreasuryTransaction,
                                    body: TxIn, user: User) -> TreasuryTransaction | None:
     """Create the opposite operational USD movement; both rows share one balanced journal."""
-    if body.transaction_type != "cash_transfer":
-        return None
     target = db.scalar(select(TreasuryAccount).where(
         TreasuryAccount.gl_account_id == body.counterpart_account_id,
         TreasuryAccount.currency_code == "USD",
@@ -764,7 +942,7 @@ def _create_usd_transfer_mirror(db: Session, source: TreasuryAccount, original: 
         TreasuryAccount.treasury_account_id != source.treasury_account_id,
     ))
     if target is None:
-        raise HTTPException(400, "حساب التحويل المقابل غير مربوط ببنك أو خزينة نشطة بالدولار")
+        return None
     if original.journal_entry_id is None:
         raise HTTPException(409, "لا يمكن إنشاء الحركة المقابلة قبل إنشاء قيد اليومية")
     mirror = TreasuryTransaction(
@@ -780,7 +958,7 @@ def _create_usd_transfer_mirror(db: Session, source: TreasuryAccount, original: 
         exchange_rate=body.exchange_rate,
         counterpart_account_id=source.gl_account_id,
         counterparty_id=None,
-        transaction_type="cash_transfer",
+        transaction_type=body.transaction_type,
         journal_entry_id=original.journal_entry_id,
     )
     db.add(mirror)
@@ -804,16 +982,15 @@ def _create_egp_transfer_mirror(db: Session, source: TreasuryAccount, original: 
     original movement. This is intentionally applied only to new transfers;
     historical one-sided rows are never backfilled automatically.
     """
-    if body.transaction_type != "cash_transfer":
-        return None
     target = db.scalar(select(TreasuryAccount).where(
         TreasuryAccount.gl_account_id == body.counterpart_account_id,
         TreasuryAccount.currency_code == source.currency_code,
         TreasuryAccount.is_active == True,
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
         TreasuryAccount.treasury_account_id != source.treasury_account_id,
     ))
     if target is None:
-        raise HTTPException(400, "حساب التحويل المقابل غير مربوط بخزينة أو بنك نشط بنفس العملة")
+        return None
     if original.journal_entry_id is None:
         raise HTTPException(409, "لا يمكن إنشاء الحركة المقابلة قبل إنشاء قيد اليومية")
     mirror = TreasuryTransaction(
@@ -827,7 +1004,7 @@ def _create_egp_transfer_mirror(db: Session, source: TreasuryAccount, original: 
         recipient_name=body.recipient_name,
         project_id=body.project_id,
         counterpart_account_id=source.gl_account_id,
-        transaction_type="cash_transfer",
+        transaction_type=body.transaction_type,
         journal_entry_id=original.journal_entry_id,
     )
     db.add(mirror)
@@ -853,9 +1030,10 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
     if not has_permission(db, user.user_id, a.screen_code, "Add"):
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
+    _validate_treasury_counterpart_access(db, user, a, body.counterpart_account_id)
     movement_direction = "inflow" if body.inflow > 0 else "outflow"
-    if not _movement_direction_allowed(body.transaction_type, movement_direction):
-        raise HTTPException(422, "التحويل بين الحسابات النقدية يجب أن يكون من حساب المصدر كمنصرف إلى حساب مستلم")
+    if body.transaction_type not in TREASURY_MOVEMENT_TYPES or not _movement_direction_allowed(body.transaction_type, movement_direction):
+        raise HTTPException(422, "اختَر نوع الحركة واتجاهًا صحيحًا")
     values = body.model_dump(exclude={"treasury_account_id"})
     _validate_optional_counterparty_reference(db, body)
     t = TreasuryTransaction(treasury_account_id=a.treasury_account_id, **values)
@@ -896,9 +1074,10 @@ def edit_tx(screen_code: str, tid: int, body: TxIn,
     if not has_permission(db, user.user_id, target_account.screen_code, "Edit"):
         raise HTTPException(403, "ليس لديك صلاحية تعديل حركات حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
+    _validate_treasury_counterpart_access(db, user, target_account, body.counterpart_account_id)
     movement_direction = "inflow" if body.inflow > 0 else "outflow"
-    if not _movement_direction_allowed(body.transaction_type, movement_direction):
-        raise HTTPException(422, "التحويل بين الحسابات النقدية يجب أن يكون من حساب المصدر كمنصرف إلى حساب مستلم")
+    if body.transaction_type not in TREASURY_MOVEMENT_TYPES or not _movement_direction_allowed(body.transaction_type, movement_direction):
+        raise HTTPException(422, "اختَر نوع الحركة واتجاهًا صحيحًا")
     _validate_optional_counterparty_reference(db, body)
     old = {"inflow": str(t.inflow), "outflow": str(t.outflow), "description": t.description,
            "treasury_account_id": t.treasury_account_id}

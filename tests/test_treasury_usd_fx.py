@@ -68,7 +68,7 @@ def _usd_setup(monkeypatch, *, carrying_egp, transfer=False):
         fcy_amount=Decimal("100"), debit_amount=Decimal(str(carrying_egp)),
         credit_amount=Decimal("0"),
     )]
-    scalar_values = [target, 0, 0, source] if transfer else [0, 0, fx_account]
+    scalar_values = [target, 0, 0, source] if transfer else [None, 0, 0, fx_account]
     db = USDJournalDB(scalar_values, rows)
     db.accounts = {20: counterpart}
     db.classification = supplier_class if not transfer else cash_class
