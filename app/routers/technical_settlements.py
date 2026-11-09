@@ -35,7 +35,7 @@ class EstimateIn(BaseModel):
     # Optional for backward compatibility; the server assigns the final number.
     estimate_no: str | None = Field(default=None, max_length=50)
     estimate_date: date | None = None
-    counterparty_name: str = Field(min_length=1, max_length=200)
+    counterparty_name: str | None = Field(default=None, max_length=200)
     counterparty_name_en: str | None = Field(default=None, max_length=200)
     items: list[EstimateLine] = Field(min_length=1)
     notes: str | None = None
@@ -141,6 +141,8 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     if not c: raise HTTPException(404,"العقد غير موجود")
     if (c.status or "").lower()!="active": raise HTTPException(409,"لا يمكن إعداد مستخلص فني إلا لعقد نشط ومعتمد نهائياً")
     customer_party = validate_customer_party(db, c.counterparty_id) if body.settlement_side == "Customer" else None
+    if body.settlement_side == "Subcontractor" and not (body.counterparty_name or "").strip():
+        raise HTTPException(422, "يجب اختيار اسم مقاول الباطن")
     if db.scalar(select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==c.contract_id,ContractSettlement.settlement_side==body.settlement_side,ContractSettlement.is_final.is_(True)).limit(1)):
         raise HTTPException(409,"تم تحديد مستخلص ختامي لهذا العقد ونوع المستخلص؛ لا يمكن إنشاء مستخلصات إضافية بعده")
     estimate_no = next_estimate_no(db, c.contract_id)
@@ -190,7 +192,7 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     # Saving the technical estimate is the technical approval step in the current workflow.
     # Submitted quantities are approved at save; Finance can review the linked draft immediately.
     now = datetime.utcnow()
-    estimate_party_name = (customer_party.legal_name or customer_party.name) if customer_party else body.counterparty_name
+    estimate_party_name = (customer_party.legal_name or customer_party.name) if customer_party else (body.counterparty_name or "").strip()
     estimate_party_name_en = customer_party.name_en if customer_party else body.counterparty_name_en
     x=TechnicalSettlementEstimate(contract_id=c.contract_id,settlement_side=body.settlement_side,estimate_no=estimate_no,
        estimate_date=(body.estimate_date if body.estimate_date else datetime.utcnow().date()),counterparty_name=estimate_party_name,counterparty_name_en=estimate_party_name_en,
