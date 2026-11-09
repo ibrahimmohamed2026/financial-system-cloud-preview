@@ -172,6 +172,7 @@ def test_balance_reconciliation_explains_drafts_reversals_unlinked_and_orphans(d
     )
 
     assert result["ledger_balance"] == "1390.00"
+    assert result["ledger_balance_egp"] == "1390.00"
     assert result["posted_treasury_movement_balance"] == "1440.00"
     assert result["difference"] == "-50.00"
     assert result["excluded_movements"]["Draft"]["count"] == 1
@@ -222,6 +223,7 @@ def test_usd_balance_reconciliation_uses_fcy_and_warns_about_egp_opening(db, mon
     )
 
     assert result["ledger_balance"] == "80.00"
+    assert result["ledger_balance_egp"] == "24160.00"
     assert result["posted_treasury_movement_balance"] == "80.00"
     assert result["difference"] == "0.00"
     assert result["opening_balance_warning"]
