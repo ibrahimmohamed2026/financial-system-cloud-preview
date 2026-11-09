@@ -1080,7 +1080,7 @@ def _validate_settlement_payment(db: Session, body: TxIn, treasury_account: Trea
         .where(TreasuryTransaction.settlement_id == settlement.settlement_id,
                JournalEntry.status == "Draft")
     ) or 0))
-    available = money(Decimal(str(settlement.net_amount or 0)) - paid - reserved)
+    available = Decimal(money(Decimal(str(settlement.net_amount or 0)) - paid - reserved))
     if amount <= 0 or amount > available:
         raise HTTPException(409, f"قيمة الحركة تتجاوز المتبقي المتاح للمستخلص. المتاح بعد الحجوزات: {available}")
 
