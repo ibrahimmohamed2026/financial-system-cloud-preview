@@ -88,8 +88,7 @@ def contract_customer_options(_: User = Depends(require_permission("Contracts", 
                               db: Session = Depends(get_db)):
     rows = db.scalars(select(Counterparty).where(
         Counterparty.is_active.is_(True),
-        (Counterparty.party_type.in_(("Customer", "Mixed"))) |
-        (Counterparty.roles.contains(["Customer"]))
+        Counterparty.party_type.in_(("Customer", "Mixed"))
     ).order_by(Counterparty.legal_name, Counterparty.counterparty_id).limit(1000)).all()
     items = []
     for party in rows:
