@@ -152,10 +152,12 @@ def test_egp_bank_to_cash_transfer_posts_one_journal_and_two_cash_movements(monk
     assert mirror.journal_entry_id == movement.journal_entry_id
 
 
-def test_cash_transfer_api_direction_is_source_outflow_only():
-    assert treasury.USD_TRANSACTION_TYPES["cash_transfer"]["direction"] == "either"
+def test_direction_is_independent_of_descriptive_movement_type():
     assert treasury._movement_direction_allowed("cash_transfer", "outflow")
-    assert not treasury._movement_direction_allowed("cash_transfer", "inflow")
+    assert treasury._movement_direction_allowed("cash_transfer", "inflow")
+    assert treasury._movement_direction_allowed("supplier_payment", "inflow")
+    assert treasury._movement_direction_allowed("funding", "outflow")
+    assert not treasury._movement_direction_allowed("funding", "sideways")
 
 
 def test_party_reference_is_optional_and_counterpart_options_come_from_chart(monkeypatch):
@@ -237,7 +239,7 @@ def test_optional_party_reference_does_not_supply_the_account():
 
 def test_optional_party_reference_only_checks_consistency_with_selected_chart_account():
     party = SimpleNamespace(
-        is_active=True, party_type="Customer", account_id=20, linked_account_id=None,
+        is_active=True, party_type="Customer", account_id=21, linked_account_id=20,
     )
 
     class DB:
@@ -259,7 +261,7 @@ def test_optional_party_reference_only_checks_consistency_with_selected_chart_ac
     assert exc.value.status_code == 422
 
 
-def test_funding_account_can_be_selected_without_type_classification_filter(monkeypatch):
+def test_any_leaf_account_can_be_selected_without_type_classification_filter(monkeypatch):
     db, account, user, counterpart = _setup(monkeypatch, "مصروفات عمومية و ادارية")
     movement = SimpleNamespace(journal_entry_id=None)
 
