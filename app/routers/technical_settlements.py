@@ -65,7 +65,7 @@ def final_quantity_gaps(db, contract_id, side, candidate=None, exclude_estimate_
     estimate_ids = select(TechnicalSettlementEstimate.estimate_id).where(
         TechnicalSettlementEstimate.contract_id == contract_id,
         TechnicalSettlementEstimate.settlement_side == side,
-        TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved", "ForwardedToFinance")))
+        TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")))
     if exclude_estimate_id is not None:
         estimate_ids = estimate_ids.where(TechnicalSettlementEstimate.estimate_id != exclude_estimate_id)
     financial_ids = select(ContractSettlement.settlement_id).where(
@@ -170,6 +170,16 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     total=money(total)
     if total<=0: raise HTTPException(422,"قيمة الأعمال يجب أن تكون أكبر من صفر")
     if body.is_final:
+        unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
+            ContractSettlement.contract_id == c.contract_id,
+            ContractSettlement.settlement_side == body.settlement_side,
+            ContractSettlement.status != "Posted")) or 0
+        pending_technical = db.scalar(select(func.count()).select_from(TechnicalSettlementEstimate).where(
+            TechnicalSettlementEstimate.contract_id == c.contract_id,
+            TechnicalSettlementEstimate.settlement_side == body.settlement_side,
+            TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved")))) or 0
+        if unfinished or pending_technical:
+            raise HTTPException(409, "لا يمكن إنشاء المستخلص الختامي قبل استكمال المستخلصات السابقة قيد المراجعة أو الاعتماد أو الترحيل")
         candidate = {item.item_id: qty for item, _prev, qty, _amount in prepared}
         gaps = final_quantity_gaps(db, c.contract_id, body.settlement_side, candidate=candidate)
         if gaps:
