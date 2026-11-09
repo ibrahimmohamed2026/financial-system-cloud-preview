@@ -220,41 +220,26 @@ def available_accounts(screen_code: str, _: User = Depends(require_dynamic("View
 
 
 @router.get("/{screen_code}/counterparties")
-def treasury_counterparties(screen_code: str, transaction_type: str = Query(..., min_length=1, max_length=40),
+def treasury_counterparties(screen_code: str, transaction_type: str | None = Query(None, max_length=40),
                             _: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
                             db: Session = Depends(get_db)):
-    """List active customer/supplier master records with a valid linked ledger account."""
+    """List active party cards as optional references, independent of movement type."""
     _bound(db, screen_code)
-    if transaction_type in ("customer_collection", "customer_advance"):
-        allowed_types = ("Customer", "Mixed")
-    elif transaction_type in ("supplier_payment", "supplier_advance"):
-        allowed_types = ("Supplier", "Contractor", "Mixed")
-    else:
-        return []
-    config = USD_TRANSACTION_TYPES.get(transaction_type)
-    if config is None:
-        raise HTTPException(400, "نوع الحركة غير معروف")
-    # Keep active party cards visible even when their ledger link is missing or
-    # unsuitable. The selection endpoint below remains the strict accounting guard.
     rows = db.execute(
-        select(Counterparty, Account, AccountClassification)
-        .outerjoin(Account, Account.account_id == Counterparty.account_id)
-        .outerjoin(AccountClassification, AccountClassification.classification_id == Account.classification_id)
-        .where(Counterparty.is_active == True, Counterparty.party_type.in_(allowed_types))
+        select(Counterparty, Account)
+        .outerjoin(Account, Account.account_id == Counterparty.linked_account_id)
+        .where(Counterparty.is_active == True)
         .order_by(Counterparty.legal_name, Counterparty.counterparty_id).limit(500)
     ).all()
     parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
     result = []
-    for party, account, classification in rows:
+    for party, account in rows:
         if account is None:
-            account_label = "غير مربوط بحساب في شجرة الحسابات"
+            account_label = "مرجع فقط — لا يوجد حساب أستاذ مرتبط"
         elif not account.is_active:
             account_label = f"{account.account_code} — {account.account_name_ar} (الحساب موقوف)"
         elif account.account_id in parents:
-            account_label = f"{account.account_code} — {account.account_name_ar} (حساب رئيسي؛ اختر حسابًا فرعيًا)"
-        elif classification is None or classification.name_ar not in config["classifications"]:
-            actual_class = classification.name_ar if classification else "بدون تصنيف"
-            account_label = f"{account.account_code} — {account.account_name_ar} (تصنيف غير مناسب: {actual_class})"
+            account_label = f"{account.account_code} — {account.account_name_ar} (حساب رئيسي)"
         else:
             account_label = f"{account.account_code} — {account.account_name_ar}"
         result.append({
@@ -262,8 +247,7 @@ def treasury_counterparties(screen_code: str, transaction_type: str = Query(...,
             "label": f"{party.code} — {party.legal_name or party.name}",
             "linked_account_id": account.account_id if account else None,
             "account_label": account_label,
-            "account_usable": bool(account and account.is_active and account.account_id not in parents
-                                    and classification and classification.name_ar in config["classifications"]),
+            "account_usable": bool(account and account.is_active and account.account_id not in parents),
         })
     return result
 
@@ -291,15 +275,8 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
     # always selected directly from the chart of accounts below.
     if counterparty_id is not None:
         party = db.get(Counterparty, counterparty_id)
-        expected_party_types = (
-            ("Customer", "Mixed")
-            if transaction_type in ("customer_collection", "customer_advance")
-            else ("Supplier", "Contractor", "Mixed")
-            if transaction_type in ("supplier_payment", "supplier_advance")
-            else ()
-        )
-        if party is None or not party.is_active or party.party_type not in expected_party_types:
-            raise HTTPException(422, "بطاقة العميل أو المورد/المقاول غير صحيحة لنوع الحركة")
+        if party is None or not party.is_active:
+            raise HTTPException(422, "البطاقة المرجعية غير موجودة أو غير نشطة")
     parents = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
     # Select directly from active leaf accounts in the COA. A counterpart that is
     # linked to another treasury account is recognized as a transfer by that link.
@@ -435,20 +412,13 @@ def _validate_optional_counterparty_reference(db: Session, body: TxIn) -> None:
     """Validate optional party metadata without deriving the accounting account from it."""
     if body.counterparty_id is None:
         return
-    expected_types = {
-        "customer_collection": ("Customer", "Mixed"),
-        "customer_advance": ("Customer", "Mixed"),
-        "supplier_payment": ("Supplier", "Contractor", "Mixed"),
-        "supplier_advance": ("Supplier", "Contractor", "Mixed"),
-    }
-    allowed = expected_types.get(body.transaction_type or "", ())
     party = db.get(Counterparty, body.counterparty_id)
-    if party is None or not party.is_active or party.party_type not in allowed:
-        raise HTTPException(422, "البطاقة المرجعية غير نشطة أو لا تتوافق مع نوع الحركة")
-    # A linked account, when present, is a consistency check only. It never
-    # supplies or replaces the GL account selected on the transaction.
-    if (party.account_id is not None
-            and party.account_id != body.counterpart_account_id):
+    if party is None or not party.is_active:
+        raise HTTPException(422, "البطاقة المرجعية غير موجودة أو غير نشطة")
+    # LinkedAccountId is canonical. It is a consistency check only and never
+    # supplies or replaces the account explicitly selected from the COA.
+    if (party.linked_account_id is not None
+            and party.linked_account_id != body.counterpart_account_id):
         raise HTTPException(422, "الحساب المختار لا يطابق الحساب المرتبط بالبطاقة المرجعية")
 
 
