@@ -155,7 +155,7 @@ def test_cash_transfer_api_direction_is_source_outflow_only():
     assert not treasury._movement_direction_allowed("cash_transfer", "inflow")
 
 
-def test_party_counterpart_options_require_selected_party_and_return_only_its_linked_account(monkeypatch):
+def test_party_reference_is_optional_and_counterpart_options_come_from_chart(monkeypatch):
     party = SimpleNamespace(
         counterparty_id=7, party_type="Customer", is_active=True,
         linked_account_id=20, account_id=21,
@@ -187,20 +187,24 @@ def test_party_counterpart_options_require_selected_party_and_return_only_its_li
         def scalar(self, statement):
             return None
 
+        def execute(self, statement):
+            return SimpleNamespace(all=lambda: [(linked, classification)])
+
     db = DB()
     user = SimpleNamespace(user_id=5)
     monkeypatch.setattr(treasury, "_bound", lambda *_: screen)
     monkeypatch.setattr(treasury, "has_permission", lambda *_: True)
 
-    assert treasury.counterpart_accounts(
+    rows_without_card = treasury.counterpart_accounts(
         "BankCibEgp", direction="inflow", transaction_type="customer_collection",
         counterparty_id=None, user=user, db=db,
-    ) == []
-    rows = treasury.counterpart_accounts(
+    )
+    rows_with_reference = treasury.counterpart_accounts(
         "BankCibEgp", direction="inflow", transaction_type="customer_collection",
         counterparty_id=7, user=user, db=db,
     )
-    assert len(rows) == 1
-    assert rows[0]["account_id"] == 20
-    assert "15401001" in rows[0]["label"]
-    assert "دائن بالقيد" in rows[0]["label"]
+    assert rows_without_card == rows_with_reference
+    assert len(rows_without_card) == 1
+    assert rows_without_card[0]["account_id"] == 20
+    assert "15401001" in rows_without_card[0]["label"]
+    assert "دائن بالقيد" in rows_without_card[0]["label"]
