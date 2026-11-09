@@ -26,9 +26,9 @@ VIEW_SQL = f'''CREATE VIEW "{VIEW_NAME}" AS
 SELECT u."UserId" AS "UserId", p."PermissionId" AS "PermissionId",
        p."ScreenCode" AS "ScreenCode", p."ActionCode" AS "ActionCode",
        CASE
-         -- An assigned job profile is the complete permission source for that user.
-         -- The legacy Admin role no longer bypasses the approved job-profile model.
-         -- Per-user grants/denials and ordinary roles cannot expand or override it.
+         -- Explicit per-user override takes precedence over the inherited baseline.
+         WHEN up."IsAllowed" IS NOT NULL THEN CASE WHEN up."IsAllowed" THEN 1 ELSE 0 END
+         -- Assigned job profile remains the baseline; ordinary/legacy roles do not bypass it.
          WHEN u."JobProfileId" IS NOT NULL THEN
               CASE WHEN EXISTS (
                     SELECT 1 FROM "JobProfilePermissions" jpp
@@ -37,8 +37,7 @@ SELECT u."UserId" AS "UserId", p."PermissionId" AS "PermissionId",
                       AND jp."IsActive" IS TRUE
                       AND jpp."PermissionId"=p."PermissionId"
               ) THEN 1 ELSE 0 END
-         -- Backward compatibility for users who have not yet been assigned a job profile.
-         WHEN up."IsAllowed" IS NOT NULL THEN CASE WHEN up."IsAllowed" THEN 1 ELSE 0 END
+         -- Backward compatibility for users without a job profile.
          WHEN EXISTS (SELECT 1 FROM "UserRoles" ur JOIN "RolePermissions" rp ON rp."RoleId"=ur."RoleId"
                       WHERE ur."UserId"=u."UserId" AND rp."PermissionId"=p."PermissionId") THEN 1
          ELSE 0 END AS "IsAllowed"
