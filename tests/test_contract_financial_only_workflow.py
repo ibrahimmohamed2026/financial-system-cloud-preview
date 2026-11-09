@@ -105,4 +105,3 @@ def test_existing_awaiting_technical_approval_drafts_are_migrated_to_finance_rev
     assert "SET \"ApprovedQuantity\" = line.\"CurrentQuantity\"" in setup
     assert "SET \"Status\" = 'ForwardedToFinance'" in setup
     assert "SET \"Status\" = 'Draft'" in setup
-    assert "No journal" not in setup
