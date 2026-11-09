@@ -106,6 +106,12 @@ class SettlementOutputDB:
     def get(self, model, key):
         return SimpleNamespace(contract_no="CT-TEST", title="Test contract", title_en="Test")
 
+    def scalars(self, statement):
+        class Rows(list):
+            def all(self):
+                return list(self)
+        return Rows()
+
 
 def test_customer_paid_amount_uses_posted_inflow_and_exposes_draft_reservation():
     settlement = SimpleNamespace(
