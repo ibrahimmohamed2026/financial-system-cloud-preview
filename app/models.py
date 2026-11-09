@@ -649,6 +649,9 @@ class ContractAccountingConfig(Base):
     tax_account_id: Mapped[Optional[int]] = C("TaxAccountId", ForeignKey("ChartOfAccounts.AccountId"), nullable=True)
     vat_account_id: Mapped[Optional[int]] = C("VatAccountId", ForeignKey("ChartOfAccounts.AccountId"), nullable=True)
     default_vat_rate: Mapped[Decimal] = C("DefaultVatRate", Numeric(9, 4), default=Decimal("0"))
+    vat_enabled: Mapped[bool] = C("VatEnabled", Boolean, default=False)
+    vat_tax_status: Mapped[str] = C("VatTaxStatus", Unicode(20), default="NotSubject")
+    vat_base_type: Mapped[str] = C("VatBaseType", Unicode(30), default="CurrentWork")
     created_at: Mapped[datetime] = C("CreatedAt", DateTime, default=utcnow)
 
 class ContractSettlement(Base):
@@ -668,6 +671,11 @@ class ContractSettlement(Base):
     cumulative_work_value: Mapped[Decimal] = C("CumulativeWorkValue", Numeric(18, 2), default=Decimal("0"))
     deductions_json: Mapped[dict] = C("DeductionsJson", JSON, default=dict)
     vat_amount: Mapped[Decimal] = C("VatAmount", Numeric(18, 2), default=Decimal("0"))
+    vat_rate: Mapped[Optional[Decimal]] = C("VatRate", Numeric(9, 4), nullable=True)
+    vat_base_amount: Mapped[Optional[Decimal]] = C("VatBaseAmount", Numeric(18, 2), nullable=True)
+    vat_base_type: Mapped[Optional[str]] = C("VatBaseType", Unicode(30), nullable=True)
+    vat_tax_status: Mapped[Optional[str]] = C("VatTaxStatus", Unicode(20), nullable=True)
+    vat_account_id: Mapped[Optional[int]] = C("VatAccountId", ForeignKey("ChartOfAccounts.AccountId"), nullable=True)
     net_amount: Mapped[Decimal] = C("NetAmount", Numeric(18, 2), default=Decimal("0"))
     status: Mapped[str] = C("Status", Unicode(40), default="Draft")
     financial_approved_by: Mapped[Optional[int]] = C("FinancialApprovedBy", ForeignKey("Users.UserId"), nullable=True)

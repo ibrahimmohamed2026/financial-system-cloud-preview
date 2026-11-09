@@ -22,6 +22,46 @@ router = APIRouter(prefix="/api/contracts-erp", tags=["Contracts ERP: Technical 
 ZERO = Decimal("0.00")
 CENT = Decimal("0.01")
 def money(v): return Decimal(str(v or 0)).quantize(CENT, rounding=ROUND_HALF_UP)
+
+VAT_STATUSES = {"Taxable", "Exempt", "ZeroRated", "NotSubject"}
+VAT_BASE_TYPES = {"CurrentWork", "CumulativeWork", "RemainingContract", "Manual"}
+
+def calculate_vat(cfg, work, cumulative, contract_value, *, db=None, rate=None,
+                  tax_status=None, base_type=None, base_amount=None):
+    """Calculate VAT from contract defaults or an explicit invoice-level override."""
+    enabled_value = getattr(cfg, "vat_enabled", None) if cfg is not None else False
+    enabled = (bool(enabled_value) if enabled_value is not None else
+               Decimal(str(getattr(cfg, "default_vat_rate", 0) or 0)) > ZERO) if cfg is not None else False
+    status = tax_status or ((getattr(cfg, "vat_tax_status", None) or "Taxable") if enabled else "NotSubject")
+    if status not in VAT_STATUSES:
+        raise HTTPException(422, "حالة ضريبة القيمة المضافة غير صحيحة")
+    selected_rate = Decimal(str(rate if rate is not None else (getattr(cfg, "default_vat_rate", 0) if cfg is not None else 0)))
+    if selected_rate < ZERO or selected_rate > Decimal("100"):
+        raise HTTPException(422, "نسبة ضريبة القيمة المضافة يجب أن تكون بين 0 و100")
+    selected_base_type = base_type or (getattr(cfg, "vat_base_type", None) if cfg is not None else None) or "CurrentWork"
+    if selected_base_type not in VAT_BASE_TYPES:
+        raise HTTPException(422, "وعاء ضريبة القيمة المضافة غير صحيح")
+    if selected_base_type == "CurrentWork":
+        base = money(work)
+    elif selected_base_type == "CumulativeWork":
+        base = money(cumulative)
+    elif selected_base_type == "RemainingContract":
+        base = money(max(ZERO, Decimal(str(contract_value)) - Decimal(str(cumulative))))
+    else:
+        if base_amount is None:
+            raise HTTPException(422, "يجب تحديد قيمة وعاء الضريبة اليدوي")
+        base = money(base_amount)
+    if base < ZERO:
+        raise HTTPException(422, "وعاء ضريبة القيمة المضافة لا يمكن أن يكون سالبًا")
+    amount = money(base * selected_rate / Decimal("100")) if status == "Taxable" else ZERO
+    account_id = getattr(cfg, "vat_account_id", None) if cfg is not None else None
+    if amount > ZERO:
+        if not account_id:
+            raise HTTPException(422, "ضريبة القيمة المضافة موجبة ولكن حساب الضريبة غير مربوط في إعدادات العقد")
+        if db is not None:
+            leaf_account_or_422(db, account_id, "حساب ضريبة القيمة المضافة: ")
+    return {"amount": amount, "rate": selected_rate, "base_type": selected_base_type,
+            "base_amount": base, "tax_status": status, "account_id": account_id}
 def side_check(v):
     if v not in ("Customer", "Subcontractor"): raise HTTPException(422, "settlement_side يجب أن يكون Customer أو Subcontractor")
 
@@ -319,7 +359,7 @@ def settlement_out(x, db: Session | None = None):
                 d.setdefault("calculation_type",rule.calculation_type)
                 d.setdefault("rate",str(rule.rate))
                 d.setdefault("base_type",rule.base_type)
-    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"contract_no":contract.contract_no if contract else None,"contract_title":contract.title if contract else None,"contract_title_en":contract.title_en if contract else None,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"is_final":bool(getattr(x,"is_final",False)),"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":deductions,"vat_amount":str(x.vat_amount),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"remaining_amount":str(money(remaining)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
+    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"contract_no":contract.contract_no if contract else None,"contract_title":contract.title if contract else None,"contract_title_en":contract.title_en if contract else None,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"is_final":bool(getattr(x,"is_final",False)),"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":deductions,"vat_amount":str(x.vat_amount),"vat_rate":str(x.vat_rate) if getattr(x,"vat_rate",None) is not None else None,"vat_tax_status":getattr(x,"vat_tax_status",None),"vat_base_type":getattr(x,"vat_base_type",None),"vat_base_amount":str(x.vat_base_amount) if getattr(x,"vat_base_amount",None) is not None else None,"vat_account_id":getattr(x,"vat_account_id",None),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"remaining_amount":str(money(remaining)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
 def settlement_line_out(line, item=None):
     item = item
     return {"settlement_item_id":line.settlement_item_id,"contract_item_id":line.contract_item_id,"item_no":item.item_no if item else "","description":item.description if item else "","unit":item.unit if item else "","contract_quantity":str(item.quantity) if item else "0","quantity":str(line.quantity),"unit_price":str(line.unit_price),"amount":str(line.amount),"explanatory_statement":getattr(line,"explanatory_statement",None),"account_id":getattr(line,"account_id",None) or (getattr(item,"account_id",None) if item else None)}
@@ -364,6 +404,9 @@ class ConfigIn(BaseModel):
     control_account_id: int; work_account_id: int; retention_account_id: Optional[int] = None
     advance_account_id: Optional[int] = None; tax_account_id: Optional[int] = None; vat_account_id: Optional[int] = None
     default_vat_rate: Decimal = Field(default=Decimal("0"),ge=0,le=100)
+    vat_enabled: bool = False
+    vat_tax_status: Literal["Taxable","Exempt","ZeroRated","NotSubject"] = "NotSubject"
+    vat_base_type: Literal["CurrentWork","CumulativeWork","RemainingContract"] = "CurrentWork"
 class SettlementLineIn(BaseModel):
     contract_item_id: int = Field(gt=0)
     quantity: Decimal = Field(gt=0)
@@ -375,6 +418,9 @@ class SettlementIn(BaseModel):
     work_value: Optional[Decimal] = Field(default=None,gt=0)
     items: list[SettlementLineIn] = Field(default_factory=list)
     vat_rate: Optional[Decimal] = Field(default=None,ge=0,le=100)
+    vat_tax_status: Optional[Literal["Taxable","Exempt","ZeroRated","NotSubject"]] = None
+    vat_base_type: Optional[Literal["CurrentWork","CumulativeWork","RemainingContract","Manual"]] = None
+    vat_base_amount: Optional[Decimal] = Field(default=None,ge=0)
     deduction_overrides: dict[str,Decimal] = Field(default_factory=dict)
     single_deduction_codes: list[str] = Field(default_factory=list)
     notes: Optional[str] = None
@@ -400,6 +446,10 @@ class SettlementDeductionsUpdate(BaseModel):
     amounts: dict[str, Decimal] = Field(default_factory=dict)
     additions: list[ManualSettlementDeductionIn] = Field(default_factory=list)
     vat_amount: Decimal = Field(default=ZERO, ge=0)
+    vat_rate: Optional[Decimal] = Field(default=None, ge=0, le=100)
+    vat_tax_status: Optional[Literal["Taxable","Exempt","ZeroRated","NotSubject"]] = None
+    vat_base_type: Optional[Literal["CurrentWork","CumulativeWork","RemainingContract","Manual"]] = None
+    vat_base_amount: Optional[Decimal] = Field(default=None, ge=0)
     @model_validator(mode="after")
     def valid_amounts(self):
         if any(v < 0 for v in self.amounts.values()): raise ValueError("الخصومات لا يمكن أن تكون سالبة")
@@ -617,6 +667,8 @@ def save_config(contract_id:int,body:ConfigIn,user:User=Depends(require_permissi
     company=db.get(Company,body.company_id); fy=db.get(FiscalYear,body.fiscal_year_id)
     if not company or not fy or fy.company_id!=body.company_id: raise HTTPException(422,"الشركة أو السنة المالية غير صحيحة")
     if fy.is_closed: raise HTTPException(422,"السنة المالية مغلقة")
+    if body.vat_enabled and body.vat_tax_status == "Taxable" and body.default_vat_rate > 0 and not body.vat_account_id:
+        raise HTTPException(422, "عند تفعيل VAT بنسبة موجبة يجب ربط حساب ضريبة القيمة المضافة")
     ids=[body.control_account_id,body.work_account_id]+[v for v in [body.retention_account_id,body.advance_account_id,body.tax_account_id,body.vat_account_id] if v]
     for aid in ids:
         leaf_account_or_422(db,aid,"إعدادات المحاسبة: ")
@@ -629,7 +681,7 @@ def save_config(contract_id:int,body:ConfigIn,user:User=Depends(require_permissi
 @router.get("/{contract_id}/accounting-config")
 def get_config(contract_id:int, _:User=Depends(require_permission("Contracts","View")),db:Session=Depends(get_db)):
     rows=db.scalars(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==contract_id)).all()
-    return {"items":[{"settlement_side":x.settlement_side,"company_id":x.company_id,"fiscal_year_id":x.fiscal_year_id,"control_account_id":x.control_account_id,"work_account_id":x.work_account_id,"retention_account_id":x.retention_account_id,"advance_account_id":x.advance_account_id,"tax_account_id":x.tax_account_id,"vat_account_id":x.vat_account_id,"default_vat_rate":str(x.default_vat_rate)} for x in rows]}
+    return {"items":[{"settlement_side":x.settlement_side,"company_id":x.company_id,"fiscal_year_id":x.fiscal_year_id,"control_account_id":x.control_account_id,"work_account_id":x.work_account_id,"retention_account_id":x.retention_account_id,"advance_account_id":x.advance_account_id,"tax_account_id":x.tax_account_id,"vat_account_id":x.vat_account_id,"default_vat_rate":str(x.default_vat_rate),"vat_enabled":(bool(x.vat_enabled) if getattr(x,"vat_enabled",None) is not None else Decimal(str(x.default_vat_rate or 0))>ZERO),"vat_tax_status":getattr(x,"vat_tax_status",None) or ("Taxable" if (bool(x.vat_enabled) if getattr(x,"vat_enabled",None) is not None else Decimal(str(x.default_vat_rate or 0))>ZERO) else "NotSubject"),"vat_base_type":getattr(x,"vat_base_type",None) or "CurrentWork"} for x in rows]}
 
 def contract_financial_summary(db: Session, contract_id: int, side: str):
     c = db.get(Contract, contract_id)
@@ -779,10 +831,11 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
         deductions[r.code]={"name":r.name_ar,"amount":str(amount),"calculated_amount":str(calculated_amount),"manually_overridden":amount != calculated_amount,"account_id":rule_account,"posting_side":r.posting_side,"source":"contract","calculation_type":r.calculation_type,"rate":str(r.rate),"base_type":r.base_type,"base_value":str(money(base)),"application_mode":mode,"cap_percent":str(r.cap_percent) if getattr(r,"cap_percent",None) is not None else None,"cap_amount":str(r.cap_amount) if r.cap_amount is not None else None};total+=amount
     unknown=set(body.deduction_overrides)-{r.code for r in rules}
     if unknown: raise HTTPException(422,"أكواد خصم غير معرفة: "+", ".join(sorted(unknown)))
-    vat_rate=body.vat_rate if body.vat_rate is not None else (cfg.default_vat_rate if cfg else Decimal("0"))
-    vat=money(work*vat_rate/Decimal("100")); net=money(work+vat-total)
+    vat_data=calculate_vat(cfg,work,cumulative,contract_value,db=db,rate=body.vat_rate,
+        tax_status=body.vat_tax_status,base_type=body.vat_base_type,base_amount=body.vat_base_amount)
+    vat=vat_data["amount"]; net=money(work+vat-total)
     if net<0: raise HTTPException(422,"الخصومات والضريبة تجعل صافي المستخلص سالبًا")
-    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,is_final=body.is_final,settlement_no=f"ST-PENDING-{uuid4().hex}",settlement_date=body.settlement_date,counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
+    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,is_final=body.is_final,settlement_no=f"ST-PENDING-{uuid4().hex}",settlement_date=body.settlement_date,counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,vat_rate=vat_data["rate"],vat_base_amount=vat_data["base_amount"],vat_base_type=vat_data["base_type"],vat_tax_status=vat_data["tax_status"],vat_account_id=vat_data["account_id"],net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
     side_code = "CUS" if side == "Customer" else "SUB"
     x.settlement_no = f"ST-{side_code}-{body.settlement_date.year}-{x.settlement_id:06d}"
@@ -913,7 +966,20 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
             "reason":addition.reason.strip(),"created_by":user.user_id,
             "created_at":datetime.utcnow().isoformat()}
         total+=amount; added_codes.append(code)
-    vat=money(body.vat_amount)
+    cfg=db.scalar(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==x.contract_id,ContractAccountingConfig.settlement_side==x.settlement_side))
+    if any(v is not None for v in (body.vat_rate,body.vat_tax_status,body.vat_base_type,body.vat_base_amount)):
+        _previous,_contract_value=contract_financial_summary(db,x.contract_id,x.settlement_side)[1:]
+        vat_data=calculate_vat(cfg,x.work_value,x.cumulative_work_value,_contract_value,db=db,
+            rate=body.vat_rate if body.vat_rate is not None else getattr(x,"vat_rate",None),
+            tax_status=body.vat_tax_status or getattr(x,"vat_tax_status",None),
+            base_type=body.vat_base_type or getattr(x,"vat_base_type",None),
+            base_amount=body.vat_base_amount if body.vat_base_amount is not None else getattr(x,"vat_base_amount",None))
+        vat=vat_data["amount"];x.vat_rate=vat_data["rate"];x.vat_base_amount=vat_data["base_amount"]
+        x.vat_base_type=vat_data["base_type"];x.vat_tax_status=vat_data["tax_status"];x.vat_account_id=vat_data["account_id"]
+    else:
+        vat=money(body.vat_amount)
+        if vat > ZERO and not (getattr(x,"vat_account_id",None) or (cfg.vat_account_id if cfg else None)):
+            raise HTTPException(422,"لا يمكن حفظ ضريبة موجبة دون ربط حساب ضريبة القيمة المضافة بالعقد")
     net=money(Decimal(str(x.work_value))+vat-total)
     if net<0: raise HTTPException(422,"إجمالي الخصومات أكبر من قيمة الأعمال والضريبة")
     x.deductions_json=deductions; x.vat_amount=vat; x.net_amount=net
@@ -1226,10 +1292,18 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
             if amt and d.get("posting_side")!="Debit": raise HTTPException(422,f"قاعدة الخصم {code}: جهة القيد يجب أن تكون Debit في مستخلص العميل")
             if amt: line(aid,debit=amt,desc=d.get("name",code))
         work_account_lines()
-        if x.vat_amount: line(cfg.vat_account_id,credit=x.vat_amount,desc="ضريبة قيمة مضافة مخرجات")
+        vat_account_id=getattr(x,"vat_account_id",None) or cfg.vat_account_id
+        if x.vat_amount:
+            if getattr(x,"vat_tax_status",None) not in (None,"Taxable"): raise HTTPException(422,"لا يمكن ترحيل ضريبة موجبة لحالة غير خاضعة")
+            leaf_account_or_422(db,vat_account_id,"حساب ضريبة القيمة المضافة: ")
+            line(vat_account_id,credit=x.vat_amount,desc="ضريبة قيمة مضافة مخرجات")
     else:
         work_account_lines(debit=True)
-        if x.vat_amount: line(cfg.vat_account_id,debit=x.vat_amount,desc="ضريبة قيمة مضافة مدخلات")
+        vat_account_id=getattr(x,"vat_account_id",None) or cfg.vat_account_id
+        if x.vat_amount:
+            if getattr(x,"vat_tax_status",None) not in (None,"Taxable"): raise HTTPException(422,"لا يمكن ترحيل ضريبة موجبة لحالة غير خاضعة")
+            leaf_account_or_422(db,vat_account_id,"حساب ضريبة القيمة المضافة: ")
+            line(vat_account_id,debit=x.vat_amount,desc="ضريبة قيمة مضافة مدخلات")
         for code,d in deductions.items():
             amt=money(d["amount"]); aid=d.get("account_id")
             if amt and d.get("posting_side")!="Credit": raise HTTPException(422,f"قاعدة الخصم {code}: جهة القيد يجب أن تكون Credit في مستخلص مقاول الباطن")
