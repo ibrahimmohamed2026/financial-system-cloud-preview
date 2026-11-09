@@ -145,6 +145,9 @@ def validate_rule_settlement_amount(db: Session, settlement: ContractSettlement,
         return
     _contract, _previous, contract_value = contract_financial_summary(db, rule.contract_id, rule.settlement_side)
     mode = getattr(rule, "application_mode", None) or "PerSettlement"
+    if mode != "SingleSettlement" and getattr(rule, "cap_percent", None) is None:
+        # Preserve legacy manual override behavior for all pre-existing deduction rules.
+        return
     base = contract_value if mode == "SingleSettlement" else (
         Decimal(str(settlement.work_value)) if rule.base_type == "CurrentWork" else
         Decimal(str(settlement.cumulative_work_value)) if rule.base_type == "CumulativeWork" else
@@ -625,8 +628,11 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
         if r.cap_amount is not None: amount=min(amount,money(r.cap_amount))
         if r.code in body.deduction_overrides:
             requested=money(body.deduction_overrides[r.code])
-            if requested > amount:
-                raise HTTPException(422,f"قيمة الخصم {r.name_ar} تتجاوز المبلغ المسموح في هذا المستخلص {amount}")
+            if mode=="SingleSettlement" or getattr(r,"cap_percent",None) is not None:
+                if requested > amount:
+                    raise HTTPException(422,f"قيمة الخصم {r.name_ar} تتجاوز المبلغ المسموح في هذا المستخلص {amount}")
+            elif r.cap_amount is not None and requested > money(r.cap_amount):
+                raise HTTPException(422,f"قيمة الخصم {r.name_ar} تتجاوز الحد الأقصى المسموح {money(r.cap_amount)}")
             amount=requested
         rule_account=resolve_rule_account(r.code,r.name_ar,r.gl_account_id,cfg)
         if amount>0 and not rule_account: raise HTTPException(422,f"قاعدة الخصم «{r.name_ar}» غير مربوطة بحساب في شجرة الحسابات. افتح تفاصيل العقد ← بنود الخصومات ← «ربط تلقائي بالشجرة» أو اختر الحساب يدويًا.")
