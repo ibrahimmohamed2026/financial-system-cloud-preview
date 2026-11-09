@@ -762,10 +762,10 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
         elif r.code in body.single_deduction_codes and not is_retention_rule(r):
             raise HTTPException(422,f"الاستقطاع «{r.name_ar}» مضبوط للتطبيق على كل المستخلصات ولا يحتاج اختيارًا يدويًا")
         cap=rule_cap_value(r,contract_value)
-        if cap is not None:
-            committed=retention_amount_used(db,r)
+        if cap is not None and not is_retention_rule(r):
+            committed=retention_amount_used(db,r,before_sequence_no=seq)
             amount=min(amount,max(ZERO,cap-committed))
-        if r.cap_amount is not None: amount=min(amount,money(r.cap_amount))
+        if r.cap_amount is not None and not is_retention_rule(r): amount=min(amount,money(r.cap_amount))
         if r.code in body.deduction_overrides:
             requested=money(body.deduction_overrides[r.code])
             if is_retention_rule(r) and requested != amount:
