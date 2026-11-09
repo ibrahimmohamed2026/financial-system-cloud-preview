@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..common import money, require_dynamic
 from ..database import get_db
 from ..deps import has_permission, require_permission, write_audit
-from ..models import (Account, AccountClassification, Counterparty, JournalEntry, JournalEntryDetail, Project, TreasuryAccount, TreasuryTransaction, User)
+from ..models import (Account, AccountClassification, Contract, ContractAccountingConfig, ContractSettlement, Counterparty, JournalEntry, JournalEntryDetail, Project, TreasuryAccount, TreasuryTransaction, User)
 from .reconciliation import posted_book_balance
 
 # شاشة → (نوع الحساب الافتراضي، العملة الافتراضية)
@@ -94,6 +94,7 @@ class TxIn(BaseModel):
     counterpart_account_id: int | None = Field(default=None, gt=0)
     treasury_account_id: int | None = Field(default=None, gt=0)
     counterparty_id: int | None = Field(default=None, gt=0)
+    settlement_id: int | None = Field(default=None, gt=0)
     transaction_type: str | None = Field(default=None, max_length=40)
 
     @model_validator(mode="after")
@@ -1020,6 +1021,55 @@ def _create_egp_transfer_mirror(db: Session, source: TreasuryAccount, original: 
     return mirror
 
 
+def _validate_settlement_payment(db: Session, body: TxIn) -> None:
+    if body.settlement_id is None:
+        return
+    settlement = db.scalar(select(ContractSettlement).where(
+        ContractSettlement.settlement_id == body.settlement_id).with_for_update())
+    if settlement is None:
+        raise HTTPException(404, "المستخلص المرتبط بحركة الخزينة غير موجود")
+    if settlement.status != "Posted" or settlement.journal_entry_id is None:
+        raise HTTPException(409, "لا يمكن ربط حركة خزينة إلا بمستخلص تم ترحيل قيده المحاسبي")
+    contract = db.get(Contract, settlement.contract_id)
+    if contract is None:
+        raise HTTPException(404, "عقد المستخلص غير موجود")
+    cfg = db.scalar(select(ContractAccountingConfig).where(
+        ContractAccountingConfig.contract_id == settlement.contract_id,
+        ContractAccountingConfig.settlement_side == settlement.settlement_side))
+    if cfg is None or cfg.control_account_id != body.counterpart_account_id:
+        raise HTTPException(422, "يجب اختيار حساب العميل/المقاول المرتبط بالمستخلص كحساب مقابل")
+    if contract.project_id is not None and body.project_id not in (None, contract.project_id):
+        raise HTTPException(422, "مركز التكلفة لا يطابق مشروع العقد المرتبط بالمستخلص")
+    if settlement.counterparty_id is not None and body.counterparty_id != settlement.counterparty_id:
+        raise HTTPException(422, "بطاقة الطرف لا تطابق بطاقة العميل/المقاول في المستخلص")
+    amount = body.inflow if body.inflow > 0 else body.outflow
+    if settlement.settlement_side == "Customer":
+        if body.inflow <= 0 or body.transaction_type != "customer_collection":
+            raise HTTPException(422, "مستخلص العميل يرتبط بتحصيل وارد من نوع تحصيل مستحقات عميل")
+        amount_column = TreasuryTransaction.inflow
+    else:
+        if body.outflow <= 0 or body.transaction_type != "supplier_payment":
+            raise HTTPException(422, "مستخلص المقاول يرتبط بصرف منصرف من نوع سداد مورد/مقاول")
+        amount_column = TreasuryTransaction.outflow
+    paid = money(db.scalar(
+        select(func.coalesce(func.sum(amount_column), 0))
+        .select_from(TreasuryTransaction)
+        .join(JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id)
+        .where(TreasuryTransaction.settlement_id == settlement.settlement_id,
+               JournalEntry.status == "Posted")
+    ) or 0)
+    reserved = money(db.scalar(
+        select(func.coalesce(func.sum(amount_column), 0))
+        .select_from(TreasuryTransaction)
+        .join(JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id)
+        .where(TreasuryTransaction.settlement_id == settlement.settlement_id,
+               JournalEntry.status == "Draft")
+    ) or 0)
+    available = money(Decimal(str(settlement.net_amount or 0)) - paid - reserved)
+    if amount <= 0 or amount > available:
+        raise HTTPException(409, f"قيمة الحركة تتجاوز المتبقي المتاح للمستخلص. المتاح بعد الحجوزات: {available}")
+
+
 @router.post("/{screen_code}/transactions", status_code=201)
 def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("Add", set(BANK_SCREENS))),
            db: Session = Depends(get_db)):
@@ -1030,6 +1080,7 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
     if not has_permission(db, user.user_id, a.screen_code, "Add"):
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
+    _validate_settlement_payment(db, body)
     _validate_treasury_counterpart_access(db, user, a, body.counterpart_account_id)
     movement_direction = "inflow" if body.inflow > 0 else "outflow"
     if body.transaction_type not in TREASURY_MOVEMENT_TYPES or not _movement_direction_allowed(body.transaction_type, movement_direction):
