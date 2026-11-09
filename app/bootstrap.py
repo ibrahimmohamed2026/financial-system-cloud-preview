@@ -58,7 +58,7 @@ SCREENS = [
      "code": code, "title_en": en, "title_ar": ar, "route": route, "sort_order": i}
     for i, (sec, code, en, ar, route) in enumerate(_S, start=1)
 ]
-assert len(SCREENS) == 26
+assert len(SCREENS) == 24
 
 
 def seed_screens(db: Session) -> None:
