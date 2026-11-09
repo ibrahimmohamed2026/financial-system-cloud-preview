@@ -87,12 +87,14 @@ def _validate_linked_account(db: Session, account_id: int | None, party_type: st
 def contract_customer_options(_: User = Depends(require_permission("Contracts", "View")),
                               db: Session = Depends(get_db)):
     rows = db.scalars(select(Counterparty).where(
-        Counterparty.is_active.is_(True),
-        Counterparty.party_type.in_(("Customer", "Mixed"))
+        Counterparty.is_active.is_(True)
     ).order_by(Counterparty.legal_name, Counterparty.counterparty_id).limit(1000)).all()
     items = []
     for party in rows:
-        if party.party_type == "Mixed" and "Customer" not in (party.roles or []):
+        roles = set(party.roles or [])
+        if party.party_type not in ("Customer", "Mixed") and "Customer" not in roles:
+            continue
+        if party.party_type == "Mixed" and "Customer" not in roles:
             continue
         linked = db.get(Account, party.linked_account_id) if party.linked_account_id else None
         items.append({
