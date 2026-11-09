@@ -132,10 +132,12 @@ def rule_cap_value(rule: ContractDeductionRule, contract_value: Decimal) -> Deci
 
 def rule_metrics(db: Session, rule: ContractDeductionRule) -> dict:
     _contract, _previous, contract_value = contract_financial_summary(db, rule.contract_id, rule.settlement_side)
-    used = retention_amount_used(db, rule, posted_only=True)
+    posted = retention_amount_used(db, rule, posted_only=True)
+    reserved = retention_amount_used(db, rule)
     cap = rule_cap_value(rule, contract_value)
-    return {"posted_amount": str(used), "cap_amount_effective": str(cap) if cap is not None else None,
-            "remaining_cap": str(max(ZERO, cap-used)) if cap is not None else None}
+    return {"posted_amount": str(posted), "reserved_amount": str(reserved),
+            "cap_amount_effective": str(cap) if cap is not None else None,
+            "remaining_cap": str(max(ZERO, cap-reserved)) if cap is not None else None}
 
 def validate_rule_settlement_amount(db: Session, settlement: ContractSettlement, rule: ContractDeductionRule, amount: Decimal) -> None:
     amount = money(amount)
