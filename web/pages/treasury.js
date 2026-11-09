@@ -87,7 +87,7 @@ export async function render(main, { api, auth, route }) {
       const updateFieldLabels = () => {
         const type = typeSelect.value;
         const routes = {
-          funding: [tr("من حساب الممول","From funding source"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
+          funding: [tr("من حساب الممول (من شجرة الحسابات)","Funding account (from chart of accounts)"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
           customer_collection: [tr("من حساب العميل","From customer account"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
           customer_advance: [tr("من حساب العميل","From customer account"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
           direct_income: [tr("من حساب الإيراد","From revenue account"), tr("إلى حساب البنك / الخزينة","To bank / cash account")],
