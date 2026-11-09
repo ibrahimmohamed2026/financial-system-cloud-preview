@@ -51,7 +51,7 @@ def _out(db: Session, x: Counterparty):
             "linked_account_name_en": linked_account.account_name_en if linked_account else None,
             "aliases": aliases, "linked_records": counts}
 
-def _validate_linked_account(db: Session, account_id: int | None, party_type: str) -> None:
+def _validate_linked_account(db: Session, account_id: int | None, party_type: str, party_id: int | None = None) -> None:
     if account_id is None:
         return
     account = db.get(Account, account_id)
@@ -72,7 +72,8 @@ def _validate_linked_account(db: Session, account_id: int | None, party_type: st
             raise HTTPException(422, "حساب العميل يجب أن يكون ضمن الميزانية (BalanceSheet)")
         duplicate = db.scalar(select(Counterparty.counterparty_id).where(
             Counterparty.linked_account_id == account_id,
-            Counterparty.is_active.is_(True)).limit(1))
+            Counterparty.is_active.is_(True),
+            Counterparty.counterparty_id != (party_id or -1)).limit(1))
         if duplicate is not None:
             raise HTTPException(409, "حساب الأستاذ مرتبط ببطاقة طرف أخرى؛ لا يجوز تكرار الحساب")
         return
@@ -281,7 +282,7 @@ def update_party(party_id: int, body: PartyIn, user: User = Depends(require_perm
     if not x.is_active and x.party_type in ("Customer", "Mixed") and body.linked_account_id != x.linked_account_id:
         raise HTTPException(409, "أعد تنشيط العميل قبل تغيير حساب الأستاذ المرتبط")
     if not (not x.is_active and x.party_type in ("Customer", "Mixed") and body.linked_account_id == x.linked_account_id):
-        _validate_linked_account(db, body.linked_account_id, body.party_type)
+        _validate_linked_account(db, body.linked_account_id, body.party_type, party_id)
     old = {k: getattr(x, k) for k in body.model_fields}
     for k, v in body.model_dump().items(): setattr(x, k, v)
     x.name = body.legal_name
