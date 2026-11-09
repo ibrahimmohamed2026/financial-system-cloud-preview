@@ -25,6 +25,7 @@ def money(v): return Decimal(str(v or 0)).quantize(CENT, rounding=ROUND_HALF_UP)
 class EstimateLine(BaseModel):
     contract_item_id: int = Field(gt=0)
     current_quantity: Decimal = Field(gt=0)
+    explanatory_statement: str | None = None
 class EstimateIn(BaseModel):
     contract_id: int = Field(gt=0)
     planned_schedule_id: int | None = Field(default=None, gt=0)
@@ -111,7 +112,7 @@ def estimate_out(x, db):
           "description":(db.get(ContractItem,i.contract_item_id).description if db.get(ContractItem,i.contract_item_id) else ""),
           "unit":(db.get(ContractItem,i.contract_item_id).unit if db.get(ContractItem,i.contract_item_id) else ""),
           "contract_quantity":str(db.get(ContractItem,i.contract_item_id).quantity if db.get(ContractItem,i.contract_item_id) else 0),"previous_quantity":str(i.previous_quantity),"current_quantity":str(i.current_quantity),
-          "total_quantity":str(i.previous_quantity+(i.approved_quantity if i.approved_quantity is not None else i.current_quantity)),"progress_percent":str((i.previous_quantity+(i.approved_quantity if i.approved_quantity is not None else i.current_quantity))/Decimal(str(db.get(ContractItem,i.contract_item_id).quantity or 1))*Decimal("100")) if db.get(ContractItem,i.contract_item_id) and Decimal(str(db.get(ContractItem,i.contract_item_id).quantity or 0))>0 else "0","unit_price":str(i.unit_price),"amount":str(i.amount),"approved_quantity":str(i.approved_quantity) if i.approved_quantity is not None else None,"review_note":i.review_note,"reviewed_by":i.reviewed_by,"reviewed_at":i.reviewed_at} for i in lines]}
+          "total_quantity":str(i.previous_quantity+(i.approved_quantity if i.approved_quantity is not None else i.current_quantity)),"progress_percent":str((i.previous_quantity+(i.approved_quantity if i.approved_quantity is not None else i.current_quantity))/Decimal(str(db.get(ContractItem,i.contract_item_id).quantity or 1))*Decimal("100")) if db.get(ContractItem,i.contract_item_id) and Decimal(str(db.get(ContractItem,i.contract_item_id).quantity or 0))>0 else "0","unit_price":str(i.unit_price),"amount":str(i.amount),"approved_quantity":str(i.approved_quantity) if i.approved_quantity is not None else None,"review_note":i.review_note,"explanatory_statement":i.explanatory_statement,"reviewed_by":i.reviewed_by,"reviewed_at":i.reviewed_at} for i in lines]}
 
 def next_estimate_no(db: Session, contract_id: int) -> str:
     """Return the first unused technical estimate number for a contract."""
@@ -166,7 +167,7 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
         fin_prev=db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity),0)).where(ContractSettlementItem.contract_item_id==item.item_id,ContractSettlementItem.settlement_id.in_(valid_ids))) or 0
         previous=Decimal(str(prev))+Decimal(str(fin_prev))
         if req.current_quantity > Decimal(item.quantity)-previous: raise HTTPException(409,f"كمية البند {item.item_no} تتجاوز الكمية المتبقية")
-        amount=money(req.current_quantity*item.unit_price); total+=amount; prepared.append((item,previous,req.current_quantity,amount))
+        amount=money(req.current_quantity*item.unit_price); total+=amount; prepared.append((item,previous,req.current_quantity,amount,(req.explanatory_statement or "").strip() or None))
     total=money(total)
     if total<=0: raise HTTPException(422,"قيمة الأعمال يجب أن تكون أكبر من صفر")
     if body.is_final:
@@ -180,7 +181,7 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
             TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved")))) or 0
         if unfinished or pending_technical:
             raise HTTPException(409, "لا يمكن إنشاء المستخلص الختامي قبل استكمال المستخلصات السابقة قيد المراجعة أو الاعتماد أو الترحيل")
-        candidate = {item.item_id: qty for item, _prev, qty, _amount in prepared}
+        candidate = {item.item_id: qty for item, _prev, qty, _amount, _statement in prepared}
         gaps = final_quantity_gaps(db, c.contract_id, body.settlement_side, candidate=candidate)
         if gaps:
             final_quantity_error(gaps, "إنشاء")
@@ -195,8 +196,8 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     if planned_row is not None:
         planned_row.technical_estimate_id = x.estimate_id
         planned_row.status = "Submitted"
-    for item,prev,qty,amount in prepared:
-        db.add(TechnicalSettlementEstimateItem(estimate_id=x.estimate_id,contract_item_id=item.item_id,previous_quantity=prev,current_quantity=qty,approved_quantity=qty,unit_price=item.unit_price,amount=amount))
+    for item,prev,qty,amount,explanatory_statement in prepared:
+        db.add(TechnicalSettlementEstimateItem(estimate_id=x.estimate_id,contract_item_id=item.item_id,previous_quantity=prev,current_quantity=qty,approved_quantity=qty,unit_price=item.unit_price,amount=amount,explanatory_statement=explanatory_statement))
     write_audit(db,user.user_id,"CreateAndAutoTechnicalApprove","TechnicalSettlementEstimates",x.estimate_id,
         new={"estimate_no":x.estimate_no,"work_value":str(total),"status":"ForwardedToFinance","engineering_approval":True,
              "technical_approved_at":now.isoformat()})
@@ -443,7 +444,7 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, allo
                         (line.approved_quantity if line.approved_quantity is not None else Decimal("0")))
         if approved_qty > 0:
             db.add(ContractSettlementItem(settlement_id=fin.settlement_id,contract_item_id=line.contract_item_id,
-                quantity=approved_qty,unit_price=line.unit_price,amount=money(approved_qty*line.unit_price)))
+                quantity=approved_qty,unit_price=line.unit_price,amount=money(approved_qty*line.unit_price),explanatory_statement=line.explanatory_statement))
     if not allow_unreviewed:
         x.status="ForwardedToFinance";x.reviewed_by=None;x.reviewed_at=None
     linked_schedule=db.scalar(select(ContractSettlementSchedule).where(ContractSettlementSchedule.technical_estimate_id==x.estimate_id).with_for_update())
