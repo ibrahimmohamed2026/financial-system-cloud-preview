@@ -30,7 +30,7 @@ const SCREENS = {
   "/settlements": L("./pages/settlements.js?v=20261109-separated-settlement-queues-1"),
   "/settlements/technical": L("./pages/settlements.js?v=20261109-separated-settlement-queues-1"),
   "/settlements/financial": L("./pages/settlements.js?v=20261109-separated-settlement-queues-1"),
-  "/settlements/manager-approval": L("./pages/settlements.js?v=20261107-final-settlement-flag-1"),
+  "/settlements/manager-approval": L("./pages/settlements.js?v=20261109-separated-settlement-queues-1"),
   "/inventory": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
   "/inventory/receipts": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
   "/inventory/items": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
@@ -169,7 +169,7 @@ function titleOf(path) {
   if (path === "/reports/financial-control") return tr("لوحة الرقابة المالية", "Financial Control");
   if (path === "/contracts") return tr("العقود والمكتب الفني", "Contracts & Technical Office");
   if (path === "/contract-requests") return tr("طلبات التعاقد", "Contract Requests");
-  if (["/settlements", "/settlements/technical"]) return tr("المستخلصات الفنية", "Technical Settlements");
+  if (["/settlements", "/settlements/technical"].includes(path)) return tr("المستخلصات الفنية", "Technical Settlements");
   if (path === "/settlements/financial") return tr("المستخلصات المالية", "Financial Settlements");
   if (path === "/settlements/manager-approval") return tr("اعتماد المستخلصات — المدير", "Settlement Manager Approval");
   if (path === "/inventory") return tr("إدارة المخزون", "Inventory Management");
