@@ -70,7 +70,7 @@ def final_settlement_quantity_gaps(db, contract_id, side, candidate=None):
     estimate_ids = select(TechnicalSettlementEstimate.estimate_id).where(
         TechnicalSettlementEstimate.contract_id == contract_id,
         TechnicalSettlementEstimate.settlement_side == side,
-        TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved", "ForwardedToFinance")))
+        TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")))
     financial_ids = select(ContractSettlement.settlement_id).where(
         ContractSettlement.contract_id == contract_id,
         ContractSettlement.settlement_side == side,
@@ -529,6 +529,12 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     cumulative=money(previous+work)
     if cumulative>contract_value: raise HTTPException(409,f"إجمالي الأعمال المعتمدة {cumulative} يتجاوز قيمة العقد المعدلة {contract_value}")
     if body.is_final:
+        unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
+            ContractSettlement.contract_id == contract_id,
+            ContractSettlement.settlement_side == side,
+            ContractSettlement.status != "Posted")) or 0
+        if unfinished:
+            raise HTTPException(409, "لا يمكن إنشاء المستخلص الختامي قبل اعتماد وترحيل المستخلصات السابقة غير المكتملة")
         candidate = {item.item_id: quantity for item, quantity, _amount in lines}
         gaps = final_settlement_quantity_gaps(db, contract_id, side, candidate=candidate)
         if gaps:
@@ -868,9 +874,22 @@ def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permi
     if reserved_value>contract_value:
         raise HTTPException(409,"لا يمكن اعتماد المدير: إجمالي المستخلصات المعتمدة والمعلقة يتجاوز قيمة العقد المعدلة")
     if x.is_final:
+        unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
+            ContractSettlement.contract_id == x.contract_id,
+            ContractSettlement.settlement_side == x.settlement_side,
+            ContractSettlement.settlement_id != x.settlement_id,
+            ContractSettlement.status != "Posted")) or 0
+        if unfinished:
+            raise HTTPException(409, "لا يمكن اعتماد المستخلص الختامي قبل اكتمال وترحيل المستخلصات السابقة")
         gaps = final_settlement_quantity_gaps(db, x.contract_id, x.settlement_side)
         if gaps:
             reject_incomplete_final_settlement(gaps, "اعتماد المدير")
+    elif db.scalar(select(ContractSettlement.settlement_id).where(
+        ContractSettlement.contract_id == x.contract_id,
+        ContractSettlement.settlement_side == x.settlement_side,
+        ContractSettlement.is_final.is_(True),
+        ContractSettlement.settlement_id != x.settlement_id).limit(1)):
+        raise HTTPException(409, "لا يمكن اعتماد مستخلص عادي بعد تحديد المستخلص الختامي")
     x.manager_approved_by=user.user_id
     x.manager_approved_at=datetime.utcnow()
     x.status="Approved"
