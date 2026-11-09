@@ -4,8 +4,10 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.dialects import sqlite
 
-from app.routers import contract_erp, treasury
+from app.routers import contract_erp, journal, treasury
+from app.services_tb import compute_tb
 
 
 class SettlementPaymentDB:
@@ -193,6 +195,117 @@ def test_journal_posting_finalizes_linked_settlement_and_schedule():
     assert 'settlement.status = "Posted"' in post
     assert 'linked_schedule.status = "Completed"' in post
     assert 'contract.status = "Closed"' in post
+
+
+class SettlementPostingDB:
+    def __init__(self, entry, details, accounts, scalar_values):
+        from tests.test_journal_posting_lifecycle import PostingDB
+        self._posting = PostingDB(entry, details, accounts)
+        self.scalar_values = list(scalar_values)
+        self.commits = 0
+
+    def scalars(self, statement):
+        return self._posting.scalars(statement)
+
+    def scalar(self, statement):
+        return self.scalar_values.pop(0)
+
+    def commit(self):
+        self.commits += 1
+
+
+def _post_linked_settlement(monkeypatch, *, final=False):
+    entry = SimpleNamespace(
+        journal_entry_id=41, entry_no="CS-00000071",
+        entry_date=__import__("datetime").date(2026, 11, 9),
+        status="Draft", source_settlement_id=71, posted_by=None, posted_at=None,
+    )
+    details = [
+        SimpleNamespace(account_id=10, project_id=5,
+                        debit_amount=Decimal("100"), credit_amount=Decimal("0")),
+        SimpleNamespace(account_id=20, project_id=5,
+                        debit_amount=Decimal("0"), credit_amount=Decimal("100")),
+    ]
+    accounts = [
+        SimpleNamespace(account_id=10, is_active=True, account_code="10101001"),
+        SimpleNamespace(account_id=20, is_active=True, account_code="20101001"),
+    ]
+    settlement = SimpleNamespace(
+        settlement_id=71, journal_entry_id=41, status="JournalDraft",
+        contract_id=9, is_final=final,
+    )
+    contract = SimpleNamespace(status="Active", contract_id=9, closed_at=None, closed_by=None)
+    estimate = SimpleNamespace(estimate_id=3)
+    schedule = SimpleNamespace(status="Submitted")
+    values = [settlement, contract, estimate, schedule, 71, 0] if final else [
+        settlement, contract, None, None,
+    ]
+    db = SettlementPostingDB(entry, details, accounts, values)
+    fy = SimpleNamespace(is_closed=False)
+    monkeypatch.setattr(journal, "_get", lambda _db, _eid: entry)
+    monkeypatch.setattr(journal, "_validate_settlement_link", lambda *args, **kwargs: None)
+    monkeypatch.setattr(journal, "_fy_for", lambda *args: fy)
+    monkeypatch.setattr(journal, "write_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(journal, "_out", lambda _db, e: {"status": e.status})
+    monkeypatch.setattr(journal, "utcnow", lambda: __import__("datetime").datetime(2026, 11, 9, 10))
+    result = journal.post_entry(41, SimpleNamespace(user_id=5), db)
+    return result, settlement, contract, schedule, db
+
+
+def test_posting_settlement_journal_changes_status_only_at_journal_post():
+    result, settlement, contract, schedule, db = _post_linked_settlement(pytest.MonkeyPatch())
+    assert result["status"] == "Posted"
+    assert settlement.status == "Posted"
+    assert contract.status == "Active"
+    assert db.commits == 1
+
+
+def test_posting_final_settlement_completes_schedule_and_closes_contract():
+    result, settlement, contract, schedule, db = _post_linked_settlement(pytest.MonkeyPatch(), final=True)
+    assert result["status"] == "Posted"
+    assert settlement.status == "Posted"
+    assert schedule.status == "Completed"
+    assert contract.status == "Closed"
+    assert contract.closed_by == 5
+    assert db.commits == 1
+
+
+def test_trial_balance_query_uses_posted_journals_only():
+    class CaptureDB:
+        statement = None
+
+        def execute(self, statement):
+            self.statement = statement
+            return []
+
+    db = CaptureDB()
+    assert compute_tb(db) == []
+    compiled = db.statement.compile(dialect=sqlite.dialect())
+    assert "JournalEntries" in str(compiled)
+    assert "Status" in str(compiled)
+    assert "Posted" in compiled.params.values()
+
+
+def test_treasury_ledger_balance_query_uses_posted_journals_only():
+    class CaptureDB:
+        statement = None
+
+        def scalar(self, statement):
+            self.statement = statement
+            return Decimal("0")
+
+        def get(self, model, key):
+            return SimpleNamespace(opening_debit=Decimal("0"), opening_credit=Decimal("0"))
+
+    db = CaptureDB()
+    account = SimpleNamespace(
+        treasury_account_id=3, currency_code="EGP", gl_account_id=10,
+    )
+    assert treasury._posted_treasury_movement_balance(db, account) == Decimal("0")
+    compiled = db.statement.compile(dialect=sqlite.dialect())
+    assert "JournalEntries" in str(compiled)
+    assert "Status" in str(compiled)
+    assert "Posted" in compiled.params.values()
 
 
 def test_treasury_api_accepts_settlement_link_and_validates_before_journal_creation():
