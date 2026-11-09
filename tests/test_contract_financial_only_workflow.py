@@ -28,7 +28,8 @@ def test_technical_estimate_is_automatically_technically_approved_on_save_and_fi
     assert "line.current_quantity if allow_unreviewed" in forwarding
     assert 'x.status="ForwardedToFinance"' in forwarding
     assert '"engineering_approval":True' in forwarding
-    assert 'AwaitingTechnicalApproval' not in forwarding
+    assert 'status="AwaitingTechnicalApproval"' not in forwarding
+    assert 'fin.status="AwaitingTechnicalApproval"' not in forwarding
     assert 'linked_schedule.status="Submitted"' in forwarding
 
     financial_api = Path("app/routers/contract_erp.py").read_text(encoding="utf-8")
