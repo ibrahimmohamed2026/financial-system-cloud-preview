@@ -485,7 +485,6 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     parents = set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))))
     if counterpart.account_id in parents:
         raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
-    direction = "inflow" if body.inflow > 0 else "outflow"
     target_treasury = db.scalar(select(TreasuryAccount).where(
         TreasuryAccount.gl_account_id == counterpart.account_id,
         TreasuryAccount.currency_code == "USD",
@@ -779,6 +778,7 @@ def _create_egp_transfer_mirror(db: Session, source: TreasuryAccount, original: 
         TreasuryAccount.gl_account_id == body.counterpart_account_id,
         TreasuryAccount.currency_code == source.currency_code,
         TreasuryAccount.is_active == True,
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
         TreasuryAccount.treasury_account_id != source.treasury_account_id,
     ))
     if target is None:
