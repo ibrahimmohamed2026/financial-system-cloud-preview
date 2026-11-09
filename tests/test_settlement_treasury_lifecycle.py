@@ -332,7 +332,7 @@ def test_linked_settlement_journal_cannot_be_cancelled_without_reversal_workflow
     with pytest.raises(HTTPException) as exc:
         journal.cancel_entry(41, SimpleNamespace(user_id=5), SimpleNamespace())
     assert exc.value.status_code == 409
-    assert "تسوية عكسية معتمدة" in str(exc.value.detail)
+    assert "تسوية عكسية معتمد" in str(exc.value.detail)
 
 
 def test_treasury_api_accepts_settlement_link_and_validates_before_journal_creation():
