@@ -442,6 +442,24 @@ def _check_project(db: Session, pid: int | None):
         raise HTTPException(400, "مركز التكلفة غير موجود")
 
 
+def _validate_treasury_counterpart_access(db: Session, user: User, source: TreasuryAccount,
+                                          counterpart_account_id: int | None) -> None:
+    if counterpart_account_id is None:
+        return
+    target = db.scalar(select(TreasuryAccount).where(
+        TreasuryAccount.gl_account_id == counterpart_account_id,
+        TreasuryAccount.currency_code == source.currency_code,
+        TreasuryAccount.is_active == True,
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
+        TreasuryAccount.treasury_account_id != source.treasury_account_id,
+    ))
+    if target is not None and not (
+        has_permission(db, user.user_id, target.screen_code, "View")
+        and has_permission(db, user.user_id, target.screen_code, "Add")
+    ):
+        raise HTTPException(403, "ليس لديك صلاحية التحويل إلى حساب البنك أو الخزينة المحدد")
+
+
 def _validate_optional_counterparty_reference(db: Session, body: TxIn) -> None:
     """Validate optional party metadata without deriving the accounting account from it."""
     if body.counterparty_id is None:
@@ -481,8 +499,6 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
         TreasuryAccount.treasury_account_id != a.treasury_account_id,
     ))
     is_treasury_transfer = target_treasury is not None
-    if target_treasury is not None and not has_permission(db, user.user_id, target_treasury.screen_code, "Add"):
-        raise HTTPException(403, "ليس لديك صلاحية التحويل إلى حساب البنك أو الخزينة المحدد")
 
     # Prevent new movements while legacy movements or draft journals remain unprocessed.
     unlinked_stmt = select(func.count()).select_from(TreasuryTransaction).where(
@@ -681,15 +697,6 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     if counterpart.account_id in parents:
         raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
     # No classification or direction restriction is derived from transaction_type.
-    target_treasury = db.scalar(select(TreasuryAccount).where(
-        TreasuryAccount.gl_account_id == counterpart.account_id,
-        TreasuryAccount.currency_code == a.currency_code,
-        TreasuryAccount.is_active == True,
-        TreasuryAccount.screen_code.in_(BANK_SCREENS),
-        TreasuryAccount.treasury_account_id != a.treasury_account_id,
-    ))
-    if target_treasury is not None and not has_permission(db, user.user_id, target_treasury.screen_code, "Add"):
-        raise HTTPException(403, "ليس لديك صلاحية التحويل إلى حساب البنك أو الخزينة المحدد")
 
     from .journal import _fy_for, _next_no
     fy = _fy_for(db, body.transaction_date)
@@ -820,6 +827,7 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
     if not has_permission(db, user.user_id, a.screen_code, "Add"):
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
+    _validate_treasury_counterpart_access(db, user, a, body.counterpart_account_id)
     movement_direction = "inflow" if body.inflow > 0 else "outflow"
     if body.transaction_type not in TREASURY_MOVEMENT_TYPES or not _movement_direction_allowed(body.transaction_type, movement_direction):
         raise HTTPException(422, "اختَر نوع الحركة واتجاهًا صحيحًا")
@@ -863,6 +871,7 @@ def edit_tx(screen_code: str, tid: int, body: TxIn,
     if not has_permission(db, user.user_id, target_account.screen_code, "Edit"):
         raise HTTPException(403, "ليس لديك صلاحية تعديل حركات حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
+    _validate_treasury_counterpart_access(db, user, target_account, body.counterpart_account_id)
     movement_direction = "inflow" if body.inflow > 0 else "outflow"
     if body.transaction_type not in TREASURY_MOVEMENT_TYPES or not _movement_direction_allowed(body.transaction_type, movement_direction):
         raise HTTPException(422, "اختَر نوع الحركة واتجاهًا صحيحًا")
