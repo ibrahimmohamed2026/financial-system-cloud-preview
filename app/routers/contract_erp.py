@@ -17,6 +17,7 @@ from ..models import (Contract, ContractAddendum, ContractChangeOrder, ContractI
                       FiscalYear, JournalEntry, JournalEntryDetail, User, TechnicalSettlementEstimate, TechnicalSettlementEstimateItem,
                       ItemCatalog, InventoryItem, TreasuryTransaction, Check, Project)
 from ..contract_deletion import delete_settlement_tree, require_admin
+from ..counterparties import validate_customer_party
 
 router = APIRouter(prefix="/api/contracts-erp", tags=["Contracts ERP: Technical Office & Settlements"])
 ZERO = Decimal("0.00")
@@ -698,19 +699,24 @@ def auto_link_rules(contract_id:int,body:AutoLinkIn,user:User=Depends(require_pe
 
 @router.put("/{contract_id}/accounting-config")
 def save_config(contract_id:int,body:ConfigIn,user:User=Depends(require_permission("Contracts","Edit")),db:Session=Depends(get_db)):
-    if not db.get(Contract,contract_id): raise HTTPException(404,"العقد غير موجود")
+    contract = db.get(Contract,contract_id)
+    if not contract: raise HTTPException(404,"العقد غير موجود")
+    config_values = body.model_dump()
+    if body.settlement_side == "Customer":
+        customer_party = validate_customer_party(db, contract.counterparty_id, require_account=True)
+        config_values["control_account_id"] = customer_party.linked_account_id
     company=db.get(Company,body.company_id); fy=db.get(FiscalYear,body.fiscal_year_id)
     if not company or not fy or fy.company_id!=body.company_id: raise HTTPException(422,"الشركة أو السنة المالية غير صحيحة")
     if fy.is_closed: raise HTTPException(422,"السنة المالية مغلقة")
     if body.vat_enabled and body.vat_tax_status == "Taxable" and body.default_vat_rate > 0 and not body.vat_account_id:
         raise HTTPException(422, "عند تفعيل VAT بنسبة موجبة يجب ربط حساب ضريبة القيمة المضافة")
-    ids=[body.control_account_id,body.work_account_id]+[v for v in [body.retention_account_id,body.advance_account_id,body.tax_account_id,body.vat_account_id] if v]
+    ids=[config_values["control_account_id"],body.work_account_id]+[v for v in [body.retention_account_id,body.advance_account_id,body.tax_account_id,body.vat_account_id] if v]
     for aid in ids:
         leaf_account_or_422(db,aid,"إعدادات المحاسبة: ")
     x=db.scalar(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==contract_id,ContractAccountingConfig.settlement_side==body.settlement_side))
     if not x: x=ContractAccountingConfig(contract_id=contract_id,settlement_side=body.settlement_side);db.add(x)
-    for k,v in body.model_dump().items(): setattr(x,k,v)
-    db.flush();write_audit(db,user.user_id,"Save","ContractAccountingConfig",x.config_id,new=body.model_dump());db.commit()
+    for k,v in config_values.items(): setattr(x,k,v)
+    db.flush();write_audit(db,user.user_id,"Save","ContractAccountingConfig",x.config_id,new=config_values);db.commit()
     return {"message":"تم حفظ إعدادات المحاسبة","contract_id":contract_id,"settlement_side":body.settlement_side}
 
 @router.get("/{contract_id}/accounting-config")
@@ -789,6 +795,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     if db.scalar(select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==contract_id,ContractSettlement.settlement_side==body.settlement_side,ContractSettlement.is_final.is_(True)).limit(1)):
         raise HTTPException(409,"تم تحديد مستخلص ختامي لهذا العقد ونوع المستخلص؛ لا يمكن إنشاء مستخلصات إضافية بعده")
     side=body.settlement_side
+    customer_party = validate_customer_party(db, c.counterparty_id) if side == "Customer" else None
     previous, contract_value = contract_financial_summary(db, contract_id, side)[1:]
     # Settlement numbers are generated internally; sequence is scoped by contract and settlement side.
     contract_items=db.scalars(select(ContractItem).where(ContractItem.contract_id==contract_id).order_by(ContractItem.item_no)).all()
@@ -871,7 +878,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     vat=vat_data["amount"]; net=money(work+vat-total)
     if net<0: raise HTTPException(422,"الخصومات والضريبة تجعل صافي المستخلص سالبًا")
     validate_deduction_account_links(db, side, deductions, {r.code:r for r in rules})
-    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,is_final=body.is_final,settlement_no=f"ST-PENDING-{uuid4().hex}",settlement_date=body.settlement_date,counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,vat_rate=vat_data["rate"],vat_base_amount=vat_data["base_amount"],vat_base_type=vat_data["base_type"],vat_tax_status=vat_data["tax_status"],vat_account_id=vat_data["account_id"],net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
+    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,is_final=body.is_final,settlement_no=f"ST-PENDING-{uuid4().hex}",settlement_date=body.settlement_date,counterparty_name=(customer_party.legal_name or customer_party.name) if customer_party else body.counterparty_name,counterparty_name_en=customer_party.name_en if customer_party else body.counterparty_name_en,counterparty_id=customer_party.counterparty_id if customer_party else None,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,vat_rate=vat_data["rate"],vat_base_amount=vat_data["base_amount"],vat_base_type=vat_data["base_type"],vat_tax_status=vat_data["tax_status"],vat_account_id=vat_data["account_id"],net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
     side_code = "CUS" if side == "Customer" else "SUB"
     x.settlement_no = f"ST-{side_code}-{body.settlement_date.year}-{x.settlement_id:06d}"
@@ -1269,6 +1276,9 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
     if x.status!="Approved": raise HTTPException(409,"يجب اعتماد المستخلص قبل الترحيل")
     contract = db.scalar(select(Contract).where(Contract.contract_id==x.contract_id).with_for_update())
     if not contract or contract.status.lower() != "active": raise HTTPException(409,"لا يمكن ترحيل مستخلص لعقد غير فعّال")
+    customer_party = validate_customer_party(db, contract.counterparty_id, require_account=True) if x.settlement_side == "Customer" else None
+    if customer_party and x.counterparty_id != customer_party.counterparty_id:
+        raise HTTPException(409, "هوية العميل في المستخلص المالي لا تطابق العميل المسجل بالعقد؛ راجع المستند قبل الترحيل")
     if x.is_final:
         gaps = final_settlement_quantity_gaps(db, x.contract_id, x.settlement_side)
         if gaps:
@@ -1326,7 +1336,7 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
             item_desc=contract_item.description if contract_item else "بند عقد"
             line(aid,debit=si.amount if debit else ZERO,credit=ZERO if debit else si.amount,desc=item_desc,project_id=contract_item.project_id if contract_item else None)
     if side=="Customer":
-        line(cfg.control_account_id,debit=x.net_amount,desc="صافي مستخلص عميل")
+        line(customer_party.linked_account_id,debit=x.net_amount,desc="صافي مستخلص عميل")
         for code,d in deductions.items():
             amt=money(d["amount"]); aid=d.get("account_id")
             if amt and d.get("posting_side")!="Debit": raise HTTPException(422,f"قاعدة الخصم {code}: جهة القيد يجب أن تكون Debit في مستخلص العميل")
