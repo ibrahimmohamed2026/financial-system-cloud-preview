@@ -168,8 +168,8 @@ def test_balance_reconciliation_explains_drafts_reversals_unlinked_and_orphans(d
     )
 
     assert result["ledger_balance"] == "1350.00"
-    assert result["posted_treasury_movement_balance"] == "1480.00"
-    assert result["difference"] == "-130.00"
+    assert result["posted_treasury_movement_balance"] == "1380.00"
+    assert result["difference"] == "-30.00"
     assert result["excluded_movements"]["Draft"]["count"] == 1
     assert result["excluded_movements"]["Reversed"]["count"] == 1
     assert result["excluded_movements"]["Unlinked"]["count"] == 1
