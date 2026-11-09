@@ -16,7 +16,7 @@ from ..models import (User, Contract, ContractItem, ContractSettlement, Contract
     TechnicalSettlementEstimate, TechnicalSettlementEstimateItem, ContractDeductionRule,
     ContractAccountingConfig, ProgressBilling, ContractAddendum, ContractChangeOrder, ContractSettlementSchedule)
 
-from .contract_erp import resolve_rule_account
+from .contract_erp import resolve_rule_account, is_retention_rule, cumulative_retention_amount
 from ..contract_deletion import delete_settlement_tree, require_admin
 router = APIRouter(prefix="/api/technical-settlements", tags=["Technical Office Settlements"])
 CENT = Decimal("0.01")
@@ -377,11 +377,18 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, allo
     cumulative=money(previous+work)
     if cumulative > contract_value:
         raise HTTPException(409,f"إجمالي الأعمال التراكمي {cumulative} يتجاوز قيمة العقد المعدلة {contract_value}")
+    existing_financial=db.get(ContractSettlement,x.financial_settlement_id) if x.financial_settlement_id else None
+    current_sequence_no=(existing_financial.sequence_no if existing_financial else
+        (db.scalar(select(func.max(ContractSettlement.sequence_no)).where(
+            ContractSettlement.contract_id==x.contract_id,
+            ContractSettlement.settlement_side==x.settlement_side)) or 0)+1)
     deductions={}; total_d=Decimal("0")
     for r in rules:
         base=work if r.base_type=="CurrentWork" else cumulative if r.base_type=="CumulativeWork" else max(Decimal("0"),contract_value-cumulative)
-        amount=money(base*Decimal(str(r.rate))/Decimal("100")) if r.calculation_type=="Percent" else money(r.rate)
-        if r.cap_amount is not None: amount=min(amount,money(r.cap_amount))
+        amount=(cumulative_retention_amount(db,r,cumulative,contract_value,exclude_settlement_id=x.financial_settlement_id,before_sequence_no=current_sequence_no)
+                if is_retention_rule(r) else
+                money(base*Decimal(str(r.rate))/Decimal("100")) if r.calculation_type=="Percent" else money(r.rate))
+        if not is_retention_rule(r) and r.cap_amount is not None: amount=min(amount,money(r.cap_amount))
         account=resolve_rule_account(r.code,r.name_ar,r.gl_account_id,cfg)
         if amount>0 and not account: raise HTTPException(422,f"قاعدة الخصم «{r.name_ar}» غير مربوطة بحساب في شجرة الحسابات. اربطها من تفاصيل العقد (ربط تلقائي بالشجرة) ثم أعد حفظ المستخلص.")
         deductions[r.code]={"name":r.name_ar,"amount":str(amount),"account_id":account,"posting_side":r.posting_side};total_d+=amount
