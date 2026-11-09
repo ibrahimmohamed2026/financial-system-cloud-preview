@@ -167,7 +167,7 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
         fin_prev=db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity),0)).where(ContractSettlementItem.contract_item_id==item.item_id,ContractSettlementItem.settlement_id.in_(valid_ids))) or 0
         previous=Decimal(str(prev))+Decimal(str(fin_prev))
         if req.current_quantity > Decimal(item.quantity)-previous: raise HTTPException(409,f"كمية البند {item.item_no} تتجاوز الكمية المتبقية")
-        amount=money(req.current_quantity*item.unit_price); total+=amount; prepared.append((item,previous,req.current_quantity,amount))
+        amount=money(req.current_quantity*item.unit_price); total+=amount; prepared.append((item,previous,req.current_quantity,amount,(req.explanatory_statement or "").strip() or None))
     total=money(total)
     if total<=0: raise HTTPException(422,"قيمة الأعمال يجب أن تكون أكبر من صفر")
     if body.is_final:
@@ -181,7 +181,7 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
             TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved")))) or 0
         if unfinished or pending_technical:
             raise HTTPException(409, "لا يمكن إنشاء المستخلص الختامي قبل استكمال المستخلصات السابقة قيد المراجعة أو الاعتماد أو الترحيل")
-        candidate = {item.item_id: qty for item, _prev, qty, _amount in prepared}
+        candidate = {item.item_id: qty for item, _prev, qty, _amount, _statement in prepared}
         gaps = final_quantity_gaps(db, c.contract_id, body.settlement_side, candidate=candidate)
         if gaps:
             final_quantity_error(gaps, "إنشاء")
@@ -196,8 +196,8 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     if planned_row is not None:
         planned_row.technical_estimate_id = x.estimate_id
         planned_row.status = "Submitted"
-    for item,prev,qty,amount in prepared:
-        db.add(TechnicalSettlementEstimateItem(estimate_id=x.estimate_id,contract_item_id=item.item_id,previous_quantity=prev,current_quantity=qty,approved_quantity=qty,unit_price=item.unit_price,amount=amount,explanatory_statement=(req.explanatory_statement or "").strip() or None))
+    for item,prev,qty,amount,explanatory_statement in prepared:
+        db.add(TechnicalSettlementEstimateItem(estimate_id=x.estimate_id,contract_item_id=item.item_id,previous_quantity=prev,current_quantity=qty,approved_quantity=qty,unit_price=item.unit_price,amount=amount,explanatory_statement=explanatory_statement))
     write_audit(db,user.user_id,"CreateAndAutoTechnicalApprove","TechnicalSettlementEstimates",x.estimate_id,
         new={"estimate_no":x.estimate_no,"work_value":str(total),"status":"ForwardedToFinance","engineering_approval":True,
              "technical_approved_at":now.isoformat()})
