@@ -29,6 +29,8 @@ export async function render(main, { api, auth, route }) {
       : "الرصيد بعملة الحساب من مبالغ العملة الأجنبية بالقيود؛ لا يتم خلط الأرصدة الافتتاحية بالجنيه";
     const debitHeader = r.currency_code === "USD" ? "مدين بالجنيه" : "مدين";
     const creditHeader = r.currency_code === "USD" ? "دائن بالجنيه" : "دائن";
+    const openingWarning = r.opening_balance_warning
+      ? '<p class="muted"><b>تنبيه:</b> ' + esc(r.opening_balance_warning) + '</p>' : "";
     const groups = Object.entries(r.excluded_movements || {}).map(([key, group]) => {
       const rows = group.items.map(x => '<tr><td>' + (x.transaction_date || "") + '</td><td>' + esc(x.voucher_no || "—") + '</td><td>' + esc(x.description || "—") + '</td><td class="num">' + fmt(x.inflow) + '</td><td class="num">' + fmt(x.outflow) + '</td><td>' + esc(x.journal_entry_no || x.journal_status || "—") + '</td></tr>').join("");
       return '<h4>' + esc(group.label || key) + ' — ' + group.count + '</h4><div class="tbl-wrap"><table><thead><tr><th>التاريخ</th><th>رقم الإذن</th><th>البيان</th><th>وارد</th><th>منصرف</th><th>القيد</th></tr></thead><tbody>' + (rows || '<tr><td colspan="6" class="muted">لا توجد حركات</td></tr>') + '</tbody></table></div>';
@@ -38,7 +40,7 @@ export async function render(main, { api, auth, route }) {
     const dlg = document.createElement("dialog"); dlg.style.width = "min(1100px,97vw)"; dlg.style.maxHeight = "90vh"; dlg.style.overflow = "auto";
     dlg.innerHTML = '<form method="dialog"><h3>مطابقة رصيد الخزينة مع الأستاذ العام</h3><p class="muted">' + esc(r.account_name) + ' — ' + esc(r.currency_code) + ' — حتى ' + r.as_of_date + '</p>' +
       '<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px"><div class="card"><small>رصيد الأستاذ العام (القيود المرحلة)</small><h3>' + fmt(r.ledger_balance) + '</h3></div><div class="card"><small>صافي حركات الخزينة المرتبطة بمرحّل</small><h3>' + fmt(r.posted_treasury_movement_balance) + '</h3></div><div class="card"><small>الفرق</small><h3>' + fmt(r.difference) + '</h3></div></div>' +
-      '<p class="muted">' + openingBasis + '. المسودات والقيود المعكوسة والحركات غير المرتبطة لا تدخل في الرصيد الرسمي.</p>' +
+      openingWarning + '<p class="muted">' + openingBasis + '. المسودات والقيود المعكوسة والحركات غير المرتبطة لا تدخل في الرصيد الرسمي.</p>' +
       '<h4>قيود أستاذ مرحّلة بدون حركة خزينة مرتبطة</h4><div class="tbl-wrap"><table><thead><tr><th>التاريخ</th><th>رقم القيد</th><th>' + debitHeader + '</th><th>' + creditHeader + '</th><th>الصافي بعملة الحساب</th></tr></thead><tbody>' + ledgerRows + '</tbody></table></div>' +
       '<h4>حركات خزينة مرتبطة بقيد مرحّل لكن القيد لا يحتوي حساب البنك</h4><div class="tbl-wrap"><table><thead><tr><th>التاريخ</th><th>الإذن</th><th>القيد</th><th>وارد</th><th>منصرف</th></tr></thead><tbody>' + missingRows + '</tbody></table></div>' + groups +
       '<div class="actions"><button class="btn" value="close">إغلاق</button></div></form>';
