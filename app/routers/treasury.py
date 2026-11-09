@@ -128,6 +128,21 @@ def balance_of(db: Session, tid: int, upto: date | None = None) -> Decimal:
     return posted_book_balance(db, treasury, upto) if treasury is not None else D0
 
 
+def posted_gl_egp_balance(db: Session, treasury: TreasuryAccount, upto: date | None = None) -> Decimal:
+    stmt = (select(func.coalesce(func.sum(JournalEntryDetail.debit_amount - JournalEntryDetail.credit_amount), 0))
+            .select_from(JournalEntryDetail)
+            .join(JournalEntry, JournalEntry.journal_entry_id == JournalEntryDetail.journal_entry_id)
+            .where(JournalEntryDetail.account_id == treasury.gl_account_id,
+                   JournalEntry.status == "Posted"))
+    if upto is not None:
+        stmt = stmt.where(JournalEntry.entry_date <= upto)
+    balance = Decimal(db.scalar(stmt) or 0)
+    gl = db.get(Account, treasury.gl_account_id)
+    if gl is not None:
+        balance += Decimal(gl.opening_debit or 0) - Decimal(gl.opening_credit or 0)
+    return balance
+
+
 def acc_out(db: Session, a: TreasuryAccount) -> dict:
     gl = db.get(Account, a.gl_account_id)
     return {"treasury_account_id": a.treasury_account_id, "name_ar": a.name_ar, "account_type": a.account_type,
@@ -403,6 +418,7 @@ def balance_reconciliation(screen_code: str, treasury_account_id: int | None = Q
         raise HTTPException(403, "ليس لديك صلاحية عرض حساب البنك أو الخزينة المحدد")
     as_of = as_of_date or date.today()
     ledger_balance = posted_book_balance(db, a, as_of)
+    ledger_balance_egp = posted_gl_egp_balance(db, a, as_of)
     movement_balance = _posted_treasury_movement_balance(db, a, upto=as_of)
     gl_account = db.get(Account, a.gl_account_id)
     opening_balance_warning = None
@@ -410,8 +426,8 @@ def balance_reconciliation(screen_code: str, treasury_account_id: int | None = Q
         Decimal(gl_account.opening_debit or 0) != 0 or Decimal(gl_account.opening_credit or 0) != 0
     ):
         opening_balance_warning = (
-            "يوجد رصيد افتتاحي بالجنيه في شجرة الحسابات، ولم يتم خلطه برصيد الدولار. "
-            "يلزم إدخال أو تسوية الرصيد الافتتاحي بعملة الحساب."
+            "يوجد رصيد افتتاحي بالجنيه في شجرة الحسابات. تم استبعاده من رصيد الدولار الأصلي، "
+            "لكنه داخل رصيد الأستاذ بالجنيه المعروض منفصلًا."
         )
     T = TreasuryTransaction
     rows = db.execute(
@@ -509,6 +525,7 @@ def balance_reconciliation(screen_code: str, treasury_account_id: int | None = Q
         "currency_code": a.currency_code,
         "as_of_date": as_of,
         "ledger_balance": money(ledger_balance),
+        "ledger_balance_egp": money(ledger_balance_egp),
         "posted_treasury_movement_balance": money(movement_balance),
         "difference": money(ledger_balance - movement_balance),
         "difference_explanation": (
