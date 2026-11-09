@@ -963,7 +963,7 @@ def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permi
             TechnicalSettlementEstimate.settlement_side == x.settlement_side,
             TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved")))) or 0
         if unfinished or pending_technical:
-            raise HTTPException(409, "لا يمكن اعتماد المستخلص الختامي قبل استكمال وترحيل المستخلصات السابقة قيد المراجعة أو الاعتماد")
+            raise HTTPException(409, "لا يمكن اعتماد المستخلص الختامي قبل اكتمال وترحيل المستخلصات السابقة قيد المراجعة أو الاعتماد")
         gaps = final_settlement_quantity_gaps(db, x.contract_id, x.settlement_side)
         if gaps:
             reject_incomplete_final_settlement(gaps, "اعتماد المدير")
