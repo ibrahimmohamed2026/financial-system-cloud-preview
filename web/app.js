@@ -27,8 +27,10 @@ const SCREENS = {
   "/reports/financial-control": L("./pages/financial_control.js?v=20261105-financial-control-1"),
   "/contracts": L("./pages/contracts.js?v=20261107-no-fixed-settlement-count-1"),
   "/contract-requests": L("./pages/contract_requests.js?v=20261105-auto-document-numbers-1"),
-  "/settlements": L("./pages/settlements.js?v=20261107-final-settlement-flag-1"),
-  "/settlements/manager-approval": L("./pages/settlements.js?v=20261107-final-settlement-flag-1"),
+  "/settlements": L("./pages/settlements.js?v=20261109-separated-settlement-queues-1"),
+  "/settlements/technical": L("./pages/settlements.js?v=20261109-separated-settlement-queues-1"),
+  "/settlements/financial": L("./pages/settlements.js?v=20261109-separated-settlement-queues-1"),
+  "/settlements/manager-approval": L("./pages/settlements.js?v=20261109-separated-settlement-queues-1"),
   "/inventory": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
   "/inventory/receipts": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
   "/inventory/items": L("./pages/inventory.js?v=20261105-inventory-screens-2"),
@@ -119,7 +121,8 @@ const ADMIN_ITEMS = [
   { route: "/admin/reset", title: "إعادة ضبط البيانات", title_en: "Reset System Data", icon: "refresh" },
 ];
 const NAV_GROUPS = [
-  { ar: "المشروعات والعقود", en: "Projects & Contracts", icon: "file", routes: ["/projects", "/contract-requests", "/contracts", "/settlements"] },
+  { ar: "المشروعات والعقود", en: "Projects & Contracts", icon: "file", routes: ["/projects", "/contract-requests", "/contracts"] },
+  { ar: "المستخلصات", en: "Settlements", icon: "receipt", routes: ["/settlements/technical", "/settlements/financial"] },
   { ar: "المشتريات والمخازن", en: "Purchasing & Inventory", icon: "receipt", routes: ["/purchases", "/inventory"] },
   { ar: "الإدارة المالية", en: "Financial Operations", icon: "bank", routes: ["/accounts", "/treasury/analysis", "/treasury/reconciliation", "/checks/register", "/financial-checks", "/checks-register"] },
   { ar: "الحسابات العامة", en: "General Accounting", icon: "book", sectionCodes: ["ACCOUNTING"] },
@@ -133,6 +136,10 @@ function navItems() {          // كل الوجهات (للبحث العام)
   if (dashboardScreens.some(x => String(x.route || "").startsWith("/inventory")) || auth.can("PurchaseCycle", "View") || dashboardScreens.some(x => String(x.route || "").startsWith("/purchases")))
     out.push({ route: "/dashboard", title: tr("لوحة التحكم", "Dashboard"), sub: "Operational Dashboard" });
   for (const s of sectionsOrdered()) for (const x of screensOf(s)) out.push({ route: x.route, title: tOf(x), sub: x.title_en });
+  if (auth.can("ContractSettlements", "View")) out.push(
+    { route: "/settlements/technical", title: tr("المستخلصات الفنية", "Technical Settlements"), sub: tr("مراجعة هندسية", "Engineering review") },
+    { route: "/settlements/financial", title: tr("المستخلصات المالية", "Financial Settlements"), sub: tr("مراجعة مالية وترحيل", "Finance review & posting") }
+  );
   if (auth.can("AnalyticsReports", "View")) out.push({ route: "/reports/financial-control", title: tr("لوحة الرقابة المالية", "Financial Control"), sub: "Financial Control" });
   if (auth.can("PurchaseCycle", "View")) out.push(
     {route:"/purchases",title:tr("دورة المشتريات","Purchasing Cycle"),sub:"Purchasing"},
@@ -162,7 +169,8 @@ function titleOf(path) {
   if (path === "/reports/financial-control") return tr("لوحة الرقابة المالية", "Financial Control");
   if (path === "/contracts") return tr("العقود والمكتب الفني", "Contracts & Technical Office");
   if (path === "/contract-requests") return tr("طلبات التعاقد", "Contract Requests");
-  if (path === "/settlements") return tr("مستخلصات العملاء ومقاولي الباطن", "Customer & Subcontractor Statements");
+  if (["/settlements", "/settlements/technical"].includes(path)) return tr("المستخلصات الفنية", "Technical Settlements");
+  if (path === "/settlements/financial") return tr("المستخلصات المالية", "Financial Settlements");
   if (path === "/settlements/manager-approval") return tr("اعتماد المستخلصات — المدير", "Settlement Manager Approval");
   if (path === "/inventory") return tr("إدارة المخزون", "Inventory Management");
   if (path === "/inventory/receipts") return tr("استلام التوريدات", "Goods Receipts");
@@ -188,7 +196,7 @@ function titleOf(path) {
 
 function navHtml(path) {
   const link = (it, sub = true) => `<a class="nav-i${it.route === path ? " on" : ""}${SCREENS[it.route] || it.route === "/" ? "" : " soon"}" href="#${esc(it.route)}">${sub ? "" : ico(it.icon)}<span>${esc(it.title)}</span></a>`;
-  const all = sectionsOrdered().flatMap(s => screensOf(s).map(x => ({ ...x, _section: s.code })));
+  const all = sectionsOrdered().flatMap(s => screensOf(s).map(x => ({ ...x, _section: s.code }))).filter(x => x.route !== "/settlements");
   const used = new Set();
   let h = link({ route: "/", title: tr("الرئيسية", "Home"), icon: "home" }, false);
   const dashboardScreens = (NAV?.sections || []).flatMap(section => section.screens || []);
@@ -203,6 +211,10 @@ function navHtml(path) {
   };
   for (const g of NAV_GROUPS) {
     const screens = all.filter(x => (g.routes || []).includes(x.route) || (g.sectionCodes || []).includes(x._section));
+    if (g.routes?.includes("/settlements/technical") && auth.can("ContractSettlements", "View")) screens.push(
+      { route: "/settlements/technical", title_ar: "المستخلصات الفنية", title_en: "Technical Settlements" },
+      { route: "/settlements/financial", title_ar: "المستخلصات المالية", title_en: "Financial Settlements" }
+    );
     if ((g.routes || []).includes("/inventory") && screens.some(x => x.route === "/inventory")) screens.push({route:"/inventory/receipts",title_ar:"استلام التوريدات",title_en:"Goods Receipts"},{route:"/inventory/items",title_ar:"الأصناف",title_en:"Items"},{route:"/inventory/warehouses",title_ar:"المخازن",title_en:"Warehouses"},{route:"/inventory/balances",title_ar:"أرصدة المخزون",title_en:"Stock Balances"},{route:"/inventory/movements",title_ar:"حركة المخزون",title_en:"Stock Movements"},{route:"/inventory/transfers",title_ar:"التحويلات بين المخازن",title_en:"Warehouse Transfers"},{route:"/inventory/site-issues",title_ar:"طلبات صرف المواقع",title_en:"Site Issue Requests"},{route:"/inventory/stocktakes",title_ar:"الجرد والتسويات",title_en:"Stocktakes & Adjustments"},{route:"/inventory/returns",title_ar:"المرتجعات",title_en:"Inventory Returns"});
     if ((g.routes || []).includes("/purchases") && (screens.some(x => x.route === "/purchases") || auth.can("PurchaseCycle", "View"))) {
       if (!screens.some(x => x.route === "/purchases")) screens.push({route:"/purchases",title_ar:"دورة المشتريات",title_en:"Purchasing Cycle"});
