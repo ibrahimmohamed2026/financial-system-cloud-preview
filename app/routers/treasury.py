@@ -25,26 +25,17 @@ def _movement_route(treasury_label: str, counterpart_label: str, inflow: bool) -
     return (counterpart_label, treasury_label) if inflow else (treasury_label, counterpart_label)
 Amt = Field(default=D0, ge=0, max_digits=18, decimal_places=2)
 
-# Movement types are descriptive labels only; they never drive accounting rules.
-USD_TRANSACTION_TYPES = {
-    "funding": {"label": "تمويل من المساهمين أو الأطراف ذات العلاقة", "direction": "inflow",
-                "classifications": ("مستحق الى اطراف ذات علاقة", "راس المال المصدر و المدفوع")},
-    "customer_collection": {"label": "تحصيل مستحقات من عميل", "direction": "inflow",
-                "classifications": ("عملاء وأوراق قبض", "مدينون و ارصدة مدينة اخرى", "مدينون و ارصدة مدينة أخرى")},
-    "customer_advance": {"label": "تحصيل دفعة مقدمة من عميل", "direction": "inflow",
-                "classifications": ("عملاء دفعات مقدمه",)},
-    "direct_income": {"label": "تحصيل إيراد مباشر", "direction": "inflow",
-                "classifications": ("مبيعات / إيرادات", "فوائد دائنة")},
-    "supplier_payment": {"label": "سداد مورد أو مقاول", "direction": "outflow",
-                "classifications": ("موردون و اوراق دفع", "دائنون و ارصدة دائنة اخرى", "دائنون و ارصدة دائنة أخرى")},
-    "supplier_advance": {"label": "دفعة مقدمة لمورد أو مقاول", "direction": "outflow",
-                "classifications": ("دفعات مقدمه موردون و مقاولون",)},
-    "expense_payment": {"label": "سداد مصروفات", "direction": "outflow",
-                "classifications": ("مصروفات عمومية و ادارية", "مصروفات عمومية و إدارية", "تكلفة المبيعات", "فوائد التاجير التمويلى")},
-    "asset_purchase": {"label": "شراء أصل أو مخزون أو أعمال تحت التنفيذ", "direction": "outflow",
-                "classifications": ("اصول ثابتة بالصافي", "اصول غير ملموسه", "مخزون", "اعمال تحت التنفيذ")},
-    "cash_transfer": {"label": "تحويل بين حسابات نقدية", "direction": "either",
-                "classifications": ("نقدية بالصندوق و البنوك",)},
+# Movement types are descriptive labels only; no direction or account rules live here.
+TREASURY_MOVEMENT_TYPES = {
+    "funding": "تمويل من المساهمين أو الأطراف ذات العلاقة",
+    "customer_collection": "تحصيل مستحقات من عميل",
+    "customer_advance": "تحصيل دفعة مقدمة من عميل",
+    "direct_income": "تحصيل إيراد مباشر",
+    "supplier_payment": "سداد مورد أو مقاول",
+    "supplier_advance": "دفعة مقدمة لمورد أو مقاول",
+    "expense_payment": "سداد مصروفات",
+    "asset_purchase": "شراء أصل أو مخزون أو أعمال تحت التنفيذ",
+    "cash_transfer": "تحويل بين حسابات نقدية",
 }
 
 
@@ -267,7 +258,7 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
         raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
     if not has_permission(db, user.user_id, treasury.screen_code, "Add"):
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
-    if transaction_type not in USD_TRANSACTION_TYPES:
+    if transaction_type not in TREASURY_MOVEMENT_TYPES:
         raise HTTPException(400, "نوع الحركة غير معروف")
     if not _movement_direction_allowed(transaction_type, direction):
         raise HTTPException(400, "اتجاه الحركة غير صحيح")
@@ -447,7 +438,6 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
         TreasuryAccount.treasury_account_id != a.treasury_account_id,
     ))
     is_treasury_transfer = target_treasury is not None
-    counterpart_posting_side = "credit" if direction == "inflow" else "debit"
 
     # Prevent new movements while legacy movements or draft journals remain unprocessed.
     unlinked_stmt = select(func.count()).select_from(TreasuryTransaction).where(
@@ -594,7 +584,7 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
             account_id=counterpart.account_id, project_id=body.project_id,
             debit_amount=Decimal("0") if cash_is_debit else counterpart_egp,
             credit_amount=counterpart_egp if cash_is_debit else Decimal("0"),
-            fcy_amount=amount_usd, exchange_rate=cash_rate if body.transaction_type == "cash_transfer" else body.exchange_rate,
+            fcy_amount=amount_usd, exchange_rate=cash_rate if is_treasury_transfer else body.exchange_rate,
             description=body.description or "الطرف المقابل لحركة الخزينة",
         ),
     ])
@@ -635,7 +625,7 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     """
     if t.journal_entry_id is not None:
         raise HTTPException(409, "حركة الخزينة مرتبطة بقيد بالفعل؛ لا يمكن إنشاء قيد مكرر")
-    if body.counterpart_account_id is None or body.transaction_type not in USD_TRANSACTION_TYPES:
+    if body.counterpart_account_id is None or body.transaction_type not in TREASURY_MOVEMENT_TYPES:
         raise HTTPException(422, "اختَر نوع حركة صحيحًا وحساب الطرف المقابل")
     if body.counterpart_account_id == a.gl_account_id:
         raise HTTPException(422, "حساب الطرف المقابل لازم يختلف عن حساب الخزينة")
@@ -646,14 +636,6 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
     if counterpart.account_id in parents:
         raise HTTPException(400, "حساب الطرف المقابل لازم يكون حسابًا فرعيًا")
     # No classification or direction restriction is derived from transaction_type.
-    direction = "inflow" if body.inflow > 0 else "outflow"
-    target = db.scalar(select(TreasuryAccount).where(
-        TreasuryAccount.gl_account_id == counterpart.account_id,
-        TreasuryAccount.currency_code == a.currency_code,
-        TreasuryAccount.is_active == True,
-        TreasuryAccount.treasury_account_id != a.treasury_account_id,
-    ))
-    is_treasury_transfer = target is not None
 
     from .journal import _fy_for, _next_no
     fy = _fy_for(db, body.transaction_date)
@@ -785,7 +767,7 @@ def add_tx(screen_code: str, body: TxIn, user: User = Depends(require_dynamic("A
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
     movement_direction = "inflow" if body.inflow > 0 else "outflow"
-    if body.transaction_type not in USD_TRANSACTION_TYPES or not _movement_direction_allowed(body.transaction_type, movement_direction):
+    if body.transaction_type not in TREASURY_MOVEMENT_TYPES or not _movement_direction_allowed(body.transaction_type, movement_direction):
         raise HTTPException(422, "اختَر نوع الحركة واتجاهًا صحيحًا")
     values = body.model_dump(exclude={"treasury_account_id"})
     _validate_optional_counterparty_reference(db, body)
@@ -828,7 +810,7 @@ def edit_tx(screen_code: str, tid: int, body: TxIn,
         raise HTTPException(403, "ليس لديك صلاحية تعديل حركات حساب البنك أو الخزينة المحدد")
     _check_project(db, body.project_id)
     movement_direction = "inflow" if body.inflow > 0 else "outflow"
-    if body.transaction_type not in USD_TRANSACTION_TYPES or not _movement_direction_allowed(body.transaction_type, movement_direction):
+    if body.transaction_type not in TREASURY_MOVEMENT_TYPES or not _movement_direction_allowed(body.transaction_type, movement_direction):
         raise HTTPException(422, "اختَر نوع الحركة واتجاهًا صحيحًا")
     _validate_optional_counterparty_reference(db, body)
     old = {"inflow": str(t.inflow), "outflow": str(t.outflow), "description": t.description,
