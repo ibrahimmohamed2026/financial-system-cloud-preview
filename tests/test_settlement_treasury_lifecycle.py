@@ -199,13 +199,22 @@ def test_journal_posting_finalizes_linked_settlement_and_schedule():
 
 class SettlementPostingDB:
     def __init__(self, entry, details, accounts, scalar_values):
-        from tests.test_journal_posting_lifecycle import PostingDB
-        self._posting = PostingDB(entry, details, accounts)
+        self.details = details
+        self.accounts = accounts
         self.scalar_values = list(scalar_values)
+        self.scalar_calls = 0
         self.commits = 0
 
     def scalars(self, statement):
-        return self._posting.scalars(statement)
+        self.scalar_calls += 1
+        class Rows(list):
+            def all(self):
+                return list(self)
+        if self.scalar_calls == 1:
+            return Rows(self.details)
+        if self.scalar_calls == 2:
+            return Rows(self.accounts)
+        return Rows()
 
     def scalar(self, statement):
         return self.scalar_values.pop(0)
