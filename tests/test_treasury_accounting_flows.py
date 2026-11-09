@@ -151,7 +151,8 @@ def test_egp_bank_to_cash_transfer_posts_one_journal_and_two_cash_movements(monk
         inflow=Decimal("0"), outflow=Decimal("30000"), description="تحويل للخزينة",
         voucher_no="TR-1", status="تم", recipient_name=None, project_id=None,
     )
-    body = _body("cash_transfer", outflow="30000")
+    # The selected counterpart is a configured treasury account; the label/type is descriptive only.
+    body = _body("supplier_payment", outflow="30000")
 
     treasury._create_egp_journal(db, account, movement, body, user)
     mirror = treasury._create_egp_transfer_mirror(db, account, movement, body, user)
@@ -168,6 +169,36 @@ def test_egp_bank_to_cash_transfer_posts_one_journal_and_two_cash_movements(monk
     assert mirror.outflow == Decimal("0")
     assert mirror.counterpart_account_id == 10
     assert mirror.journal_entry_id == movement.journal_entry_id
+
+
+
+
+def test_treasury_counterpart_transfer_can_be_an_inflow(monkeypatch):
+    target = SimpleNamespace(
+        treasury_account_id=2, gl_account_id=20, name_ar="البنك المصدر",
+        currency_code="EGP", is_active=True,
+    )
+    db, account, user, counterpart = _setup(
+        monkeypatch, "مصروفات عمومية و ادارية", transfer_target=target,
+    )
+    movement = SimpleNamespace(
+        transaction_id=2, journal_entry_id=None, transaction_date=date(2026, 11, 8),
+        inflow=Decimal("18000"), outflow=Decimal("0"), description="استلام تحويل",
+        voucher_no="TR-2", status="تم", recipient_name=None, project_id=None,
+    )
+    body = _body("expense_payment", inflow="18000")
+
+    treasury._create_egp_journal(db, account, movement, body, user)
+    mirror = treasury._create_egp_transfer_mirror(db, account, movement, body, user)
+
+    details = db.added_many
+    assert [(d.account_id, d.debit_amount, d.credit_amount) for d in details] == [
+        (10, Decimal("18000"), Decimal("0")),
+        (20, Decimal("0"), Decimal("18000")),
+    ]
+    _assert_balanced(details)
+    assert mirror.inflow == Decimal("0")
+    assert mirror.outflow == Decimal("18000")
 
 
 def test_direction_is_independent_of_descriptive_movement_type():
