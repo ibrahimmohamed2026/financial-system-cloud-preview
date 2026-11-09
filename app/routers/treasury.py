@@ -158,7 +158,8 @@ def _ensure_gl_relink_safe(db: Session, treasury: TreasuryAccount, new_gl_accoun
 
 @router.get("/analysis")
 def analysis(_: User = Depends(require_permission("CashAnalysis", "View")), db: Session = Depends(get_db)):
-    accs = db.scalars(select(TreasuryAccount).where(TreasuryAccount.is_active == True)
+    accs = db.scalars(select(TreasuryAccount).where(TreasuryAccount.is_active == True,
+                                                    TreasuryAccount.screen_code.in_(BANK_SCREENS))
                       .order_by(TreasuryAccount.currency_code, TreasuryAccount.account_type, TreasuryAccount.name_ar)).all()
     items, by_cur = [], {}
     for a in accs:
@@ -207,6 +208,7 @@ def available_accounts(screen_code: str, _: User = Depends(require_dynamic("View
     current = _bound(db, screen_code)
     rows = db.scalars(select(TreasuryAccount).where(
         TreasuryAccount.is_active == True,
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
         TreasuryAccount.currency_code == current.currency_code,
     ).order_by(TreasuryAccount.account_type, TreasuryAccount.name_ar)).all()
     rows = [row for row in rows if row.screen_code == current.screen_code or (
@@ -484,6 +486,7 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
             TreasuryAccount.gl_account_id == counterpart.account_id,
             TreasuryAccount.currency_code == "USD",
             TreasuryAccount.is_active == True,
+            TreasuryAccount.screen_code.in_(BANK_SCREENS),
             TreasuryAccount.treasury_account_id != a.treasury_account_id,
         ))
         if target_treasury is None:
@@ -538,6 +541,7 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
             TreasuryAccount.gl_account_id == source_gl_id,
             TreasuryAccount.currency_code == "USD",
             TreasuryAccount.is_active == True,
+            TreasuryAccount.screen_code.in_(BANK_SCREENS),
         ))
         if source_treasury is None:
             raise HTTPException(400, "حساب مصدر التحويل لازم يكون بنكًا أو خزينة نشطة بالدولار")
@@ -747,6 +751,7 @@ def _create_usd_transfer_mirror(db: Session, source: TreasuryAccount, original: 
         TreasuryAccount.gl_account_id == body.counterpart_account_id,
         TreasuryAccount.currency_code == "USD",
         TreasuryAccount.is_active == True,
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
         TreasuryAccount.treasury_account_id != source.treasury_account_id,
     ))
     if target is None:
