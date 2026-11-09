@@ -50,6 +50,11 @@ def company_profile_out(company: Company) -> dict:
             "address_ar": company.address_ar, "phone": company.phone, "email": company.email,
             "website": company.website, "logo_data": company.logo_data}
 
+class UserPermissionOverride(BaseModel):
+    permission_id: int
+    is_allowed: bool
+
+
 class UserCreate(BaseModel):
     username: str = Field(min_length=2, max_length=50)
     full_name: str = Field(min_length=2, max_length=150)
@@ -58,6 +63,7 @@ class UserCreate(BaseModel):
     role_ids: list[int] = []
     job_profile_id: int | None = None
     project_id: int | None = None
+    permission_overrides: list[UserPermissionOverride] = Field(default_factory=list)
 
     @field_validator("password")
     @classmethod
@@ -265,12 +271,25 @@ def create_user(body: UserCreate, actor: User = Depends(admin_user), db: Session
             raise HTTPException(422, "لا يمكن الجمع بين الوظيفة وأدوار مستقلة")
     if body.project_id is not None and db.get(Project, body.project_id) is None:
         raise HTTPException(422, "المشروع أو الموقع غير موجود")
+    override_ids = [item.permission_id for item in body.permission_overrides]
+    if len(override_ids) != len(set(override_ids)):
+        raise HTTPException(422, "لا يمكن تكرار الصلاحية في الاستثناءات الفردية")
+    valid_override_ids = set(db.scalars(select(Permission.permission_id).where(
+        Permission.permission_id.in_(override_ids))).all()) if override_ids else set()
+    if valid_override_ids != set(override_ids):
+        raise HTTPException(422, "توجد صلاحية غير صحيحة في الاستثناءات الفردية")
     # Project/site is optional organizational metadata; it never scopes data access.
     u=User(username=body.username.strip(),full_name=body.full_name.strip(),password_hash=hash_password(body.password),
            is_active=body.is_active,job_profile_id=body.job_profile_id,project_id=body.project_id)
     db.add(u); db.flush()
     for r in roles: db.add(UserRole(user_id=u.user_id,role_id=r.role_id))
-    write_audit(db, actor.user_id, "Create", "Users", u.user_id, new={"username":u.username,"roles":body.role_ids})
+    for item in body.permission_overrides:
+        db.add(UserPermission(user_id=u.user_id, permission_id=item.permission_id, is_allowed=item.is_allowed))
+    write_audit(db, actor.user_id, "Create", "Users", u.user_id,
+                new={"username":u.username,"roles":body.role_ids,
+                     "job_profile_id":body.job_profile_id,
+                     "permission_overrides":[{"permission_id":x.permission_id,"is_allowed":x.is_allowed}
+                                             for x in body.permission_overrides]})
     db.commit(); return {"user_id":u.user_id,"username":u.username}
 
 @router.patch("/users/{user_id}")
@@ -479,11 +498,6 @@ def list_permissions(_: User = Depends(admin_user), db: Session = Depends(get_db
                     .order_by(Section.sort_order,Screen.sort_order,Permission.screen_code,Permission.action_code)).all()
     return [{"permission_id":p.permission_id,"screen_code":p.screen_code,"action_code":p.action_code,
              "screen_ar":s.title_ar if s else p.screen_code,"section_ar":sec.name_ar if sec else "أخرى"} for p,s,sec in rows]
-
-class UserPermissionOverride(BaseModel):
-    permission_id: int
-    is_allowed: bool | None
-
 
 class UserPermissionOverridesUpdate(BaseModel):
     overrides: list[UserPermissionOverride] = Field(default_factory=list)
