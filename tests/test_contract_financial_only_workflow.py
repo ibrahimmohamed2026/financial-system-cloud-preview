@@ -12,29 +12,38 @@ def test_new_contracts_enter_financial_review_without_engineering_stage():
     assert '@router.post("/{contract_id}/engineering-approve")' not in source
 
 
-def test_technical_estimate_creates_locked_financial_draft_on_save_then_unlocks_after_technical_approval():
+def test_technical_estimate_is_automatically_technically_approved_on_save_and_finance_can_review_immediately():
     source = Path("app/routers/technical_settlements.py").read_text(encoding="utf-8")
     create_estimate = source.split("def create_estimate", 1)[1].split("@router.post", 1)[0]
     forwarding = source.split("def _create_financial_from_estimate", 1)[1].split("@router.post", 1)[0]
-    approval_endpoint = source.split('@router.post("/{estimate_id}/approve")', 1)[1].split("@router.delete", 1)[0]
 
-    assert 'status="UnderReview"' in create_estimate
-    assert "approved_quantity=None" in create_estimate
+    assert 'work_value=total,status="ForwardedToFinance"' in create_estimate
+    assert "technical_reviewed_by=user.user_id" in create_estimate
+    assert "technical_reviewed_at=now" in create_estimate
+    assert "approved_quantity=qty" in create_estimate
+    assert '"engineering_approval":True' in create_estimate
     assert "_create_financial_from_estimate(x.estimate_id, user, db, allow_unreviewed=True)" in create_estimate
-    assert 'status="AwaitingTechnicalApproval" if allow_unreviewed else "Draft"' in forwarding
+    assert 'status="Draft"' in forwarding
+    assert 'fin.status="Draft"' in forwarding
     assert "line.current_quantity if allow_unreviewed" in forwarding
     assert 'x.status="ForwardedToFinance"' in forwarding
-    assert 'fin.status="AwaitingTechnicalApproval" if allow_unreviewed else "Draft"' in forwarding
-    assert 'x.created_by == user.user_id' not in forwarding
-    assert 'x.technical_reviewed_by == user.user_id' not in forwarding
-    assert "return _create_financial_from_estimate(estimate_id, user, db)" in approval_endpoint
+    assert '"engineering_approval":True' in forwarding
+    assert 'status="AwaitingTechnicalApproval"' not in forwarding
+    assert 'fin.status="AwaitingTechnicalApproval"' not in forwarding
     assert 'linked_schedule.status="Submitted"' in forwarding
-    assert 'linked_schedule.status="Completed"' not in forwarding
 
     financial_api = Path("app/routers/contract_erp.py").read_text(encoding="utf-8")
     assert 'linked_estimate.status!="ForwardedToFinance"' in financial_api
     assert 'raise HTTPException(409,"المراجعة المالية غير متاحة قبل الاعتماد الفني للمستخلص المرتبط")' in financial_api
 
+
+def test_settlement_screen_has_no_technical_approval_waiting_stage():
+    screen = Path("web/pages/settlements.js").read_text(encoding="utf-8")
+    assert "بانتظار الاعتماد الفني" not in screen
+    assert "Awaiting technical approval" not in screen
+    assert "pendingTechnicalGate" not in screen
+    assert "حفظ واعتماد فني وتحويل للحسابات" in screen
+    assert "المراجعة المالية" in screen
 
 def test_final_technical_estimate_must_settle_every_contract_item_after_engineering_review():
     technical = Path("app/routers/technical_settlements.py").read_text(encoding="utf-8")
@@ -89,3 +98,11 @@ def test_audit_log_action_type_length_and_existing_postgres_schema_upgrade():
     assert 'if engine.dialect.name == "postgresql" and "AuditLog" in inspect(engine).get_table_names():' in setup
     assert 'ALTER TABLE "AuditLog" ALTER COLUMN "ActionType" TYPE VARCHAR(100)' in setup
     assert 'action_type_length < 100' in setup
+
+
+def test_existing_awaiting_technical_approval_drafts_are_migrated_to_finance_review():
+    setup = Path("app/db_setup.py").read_text(encoding="utf-8")
+    assert "financial.\"Status\" = 'AwaitingTechnicalApproval'" in setup
+    assert "SET \"ApprovedQuantity\" = line.\"CurrentQuantity\"" in setup
+    assert "SET \"Status\" = 'ForwardedToFinance'" in setup
+    assert "SET \"Status\" = 'Draft'" in setup
