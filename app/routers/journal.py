@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..common import money
 from ..database import get_db
 from ..deps import require_permission, write_audit
-from ..models import (Account, Company, Contract, ContractSettlement, FiscalYear, JournalEntry, JournalEntryDetail, Project, User, utcnow)
+from ..models import (Account, Company, Contract, ContractSettlement, ContractSettlementSchedule, TechnicalSettlementEstimate, FiscalYear, JournalEntry, JournalEntryDetail, Project, User, utcnow)
 
 SCREEN = "JournalBook"
 router = APIRouter(prefix="/journal", tags=["JournalBook"])
@@ -139,8 +139,12 @@ def _validate_settlement_link(db: Session, settlement_id: int | None, *, journal
         ContractSettlement.settlement_id == settlement_id).with_for_update())
     if settlement is None:
         raise HTTPException(404, "المستخلص المرتبط بالقيد غير موجود")
-    if settlement.journal_entry_id or settlement.status == "Posted":
-        raise HTTPException(409, "لا يمكن ربط القيد اليدوي بهذا المستخلص لأنه مرحّل تلقائيًا بالفعل")
+    if settlement.status == "Posted":
+        raise HTTPException(409, "المستخلص مرحّل بالفعل")
+    if settlement.journal_entry_id not in (None, journal_entry_id):
+        raise HTTPException(409, "المستخلص مرتبط بقيد آخر بالفعل")
+    if journal_entry_id is not None and settlement.status != "JournalDraft":
+        raise HTTPException(409, "حالة المستخلص لا تسمح بترحيل هذا القيد")
     existing = db.scalar(select(JournalEntry).where(
         JournalEntry.source_settlement_id == settlement_id,
         JournalEntry.status != "Reversed",
@@ -300,6 +304,42 @@ def post_entry(eid: int, user: User = Depends(require_permission(SCREEN, "Post")
         raise HTTPException(422, "القيد لازم فيه سطرين على الأقل")
     _validate_lines(db, lines)
     e.status, e.posted_by, e.posted_at = "Posted", user.user_id, utcnow()
+    if e.source_settlement_id is not None:
+        settlement = db.scalar(select(ContractSettlement).where(
+            ContractSettlement.settlement_id == e.source_settlement_id).with_for_update())
+        if settlement is None or settlement.journal_entry_id != e.journal_entry_id or settlement.status != "JournalDraft":
+            raise HTTPException(409, "ربط المستخلص بالقيد غير متطابق أو أن حالة المستخلص تغيرت")
+        contract = db.scalar(select(Contract).where(
+            Contract.contract_id == settlement.contract_id).with_for_update())
+        if contract is None or contract.status.lower() != "active":
+            raise HTTPException(409, "لا يمكن ترحيل مستخلص لعقد غير فعّال")
+        settlement.status = "Posted"
+        linked_estimate = db.scalar(select(TechnicalSettlementEstimate).where(
+            TechnicalSettlementEstimate.financial_settlement_id == settlement.settlement_id))
+        if linked_estimate is not None:
+            linked_schedule = db.scalar(select(ContractSettlementSchedule).where(
+                ContractSettlementSchedule.technical_estimate_id == linked_estimate.estimate_id).with_for_update())
+            if linked_schedule is not None:
+                linked_schedule.status = "Completed"
+        posted_final = db.scalar(select(ContractSettlement.settlement_id).where(
+            ContractSettlement.contract_id == contract.contract_id,
+            ContractSettlement.is_final.is_(True),
+            ContractSettlement.status == "Posted").limit(1))
+        if posted_final:
+            unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
+                ContractSettlement.contract_id == contract.contract_id,
+                ContractSettlement.status != "Posted")) or 0
+            if unfinished == 0:
+                contract.status = "Closed"
+                contract.closed_at = utcnow()
+                contract.closed_by = user.user_id
+                write_audit(db, user.user_id, "AutoClose", "Contracts", contract.contract_id,
+                            old={"status": "Active"}, new={"status": "Closed",
+                            "closed_at": contract.closed_at.isoformat(),
+                            "reason": "Final settlement journal posted and all contract settlements completed"})
+        write_audit(db, user.user_id, "Post", "ContractSettlements", settlement.settlement_id,
+                    {"status": "JournalDraft", "journal_entry_id": eid},
+                    {"status": "Posted", "journal_entry_id": eid})
     write_audit(db, user.user_id, "Post", "JournalEntries", eid, {"status": "Draft"}, {"status": "Posted"})
     db.commit()
     return _out(db, e)
@@ -312,6 +352,8 @@ def cancel_entry(eid: int, user: User = Depends(require_permission(SCREEN, "Appr
     e = _get(db, eid)
     if e.status != "Posted":
         raise HTTPException(409, "الإلغاء للقيود المرحّلة بس")
+    if e.source_settlement_id is not None:
+        raise HTTPException(409, "لا يمكن إلغاء قيد مستخلص مرحّل من دفتر اليومية مباشرة؛ استخدم إجراء تسوية عكسية معتمد حتى لا تنفصل حالة المستخلص عن حسابات العقد")
     _fy_for(db, e.entry_date)
     e.status = "Reversed"
     write_audit(db, user.user_id, "Cancel", "JournalEntries", eid, {"status": "Posted"}, {"status": "Reversed"})
