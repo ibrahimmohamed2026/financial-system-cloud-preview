@@ -12,7 +12,7 @@ from ..database import get_db
 from ..deps import require_permission, write_audit, get_current_user, has_permission
 from ..models import (Contract, ContractAddendum, ContractAddendumLine, ContractItem, ItemCatalog, ProgressBilling, Project, User, ContractSettlement,
                       ContractDeductionRule, ContractAccountingConfig, ContractChangeOrder, ContractAttachment,
-                      TechnicalSettlementEstimate, ContractSettlementItem, TechnicalSettlementEstimateItem, ContractSettlementSchedule, Counterparty)
+                      TechnicalSettlementEstimate, ContractSettlementItem, TechnicalSettlementEstimateItem, ContractSettlementSchedule)
 from ..contract_deletion import delete_settlement_tree, require_admin
 from ..counterparties import validate_customer_party
 from .contract_erp import leaf_account_or_422, validate_contract_rule_update, ensure_rule_not_linked, validate_unique_rule_account
