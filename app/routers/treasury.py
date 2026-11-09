@@ -13,8 +13,8 @@ from ..models import (Account, AccountClassification, Counterparty, JournalEntry
 
 # شاشة → (نوع الحساب الافتراضي، العملة الافتراضية)
 BANK_SCREENS = {
-    "BankCibEgp": ("Bank", "EGP"), "CashUsd": ("Cash", "USD"), "CashEgp": ("Cash", "EGP"), "BankCairoEgp": ("Bank", "EGP"),
-    "BankHdbUsd": ("Bank", "USD"), "BankHdbEgp": ("Bank", "EGP"), "BankCibUsd": ("Bank", "USD"),
+    "BankCibEgp": ("Bank", "EGP"), "BankCibUsd": ("Bank", "USD"),
+    "CashEgp": ("Cash", "EGP"), "CashUsd": ("Cash", "USD"),
 }
 router = APIRouter(prefix="/treasury", tags=["Treasury"])
 D0 = Decimal("0")
@@ -158,7 +158,8 @@ def _ensure_gl_relink_safe(db: Session, treasury: TreasuryAccount, new_gl_accoun
 
 @router.get("/analysis")
 def analysis(_: User = Depends(require_permission("CashAnalysis", "View")), db: Session = Depends(get_db)):
-    accs = db.scalars(select(TreasuryAccount).where(TreasuryAccount.is_active == True)
+    accs = db.scalars(select(TreasuryAccount).where(TreasuryAccount.is_active == True,
+                                                    TreasuryAccount.screen_code.in_(BANK_SCREENS))
                       .order_by(TreasuryAccount.currency_code, TreasuryAccount.account_type, TreasuryAccount.name_ar)).all()
     items, by_cur = [], {}
     for a in accs:
@@ -207,6 +208,7 @@ def available_accounts(screen_code: str, _: User = Depends(require_dynamic("View
     current = _bound(db, screen_code)
     rows = db.scalars(select(TreasuryAccount).where(
         TreasuryAccount.is_active == True,
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
         TreasuryAccount.currency_code == current.currency_code,
     ).order_by(TreasuryAccount.account_type, TreasuryAccount.name_ar)).all()
     rows = [row for row in rows if row.screen_code == current.screen_code or (
@@ -281,7 +283,8 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
     """Return only accounts allowed for the selected transaction type and direction."""
     screen_account = _bound(db, screen_code)
     treasury = db.get(TreasuryAccount, treasury_account_id) if treasury_account_id else screen_account
-    if treasury is None or not treasury.is_active or treasury.currency_code != screen_account.currency_code:
+    if (treasury is None or not treasury.is_active or treasury.screen_code not in BANK_SCREENS
+            or treasury.currency_code != screen_account.currency_code):
         raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
     if not has_permission(db, user.user_id, treasury.screen_code, "Add"):
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
@@ -328,7 +331,8 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
             select(Account, AccountClassification)
             .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
             .join(TreasuryAccount, TreasuryAccount.gl_account_id == Account.account_id)
-            .where(TreasuryAccount.is_active == True, TreasuryAccount.currency_code == treasury.currency_code,
+            .where(TreasuryAccount.is_active == True, TreasuryAccount.screen_code.in_(BANK_SCREENS),
+                   TreasuryAccount.currency_code == treasury.currency_code,
                    TreasuryAccount.treasury_account_id != treasury.treasury_account_id,
                    Account.is_active == True, Account.account_id.not_in(parents))
             .order_by(Account.account_code).limit(500)
@@ -364,6 +368,12 @@ def create_account(screen_code: str, body: AccountIn,
         raise HTTPException(400, "نوع الحساب أو العملة لا يطابقان الشاشة المحددة")
     values = body.model_dump()
     values["currency_code"] = expected_currency
+    values["name_ar"] = {
+        "BankCibEgp": "البنك التجاري الدولي CIB - جنيه مصري",
+        "BankCibUsd": "البنك التجاري الدولي CIB - دولار أمريكي",
+        "CashEgp": "خزينة الجنيه المصري",
+        "CashUsd": "خزينة الدولار",
+    }[screen_code]
     if expected_type == "Cash":
         values["bank_account_number"] = None
     a = TreasuryAccount(**values, screen_code=screen_code)
@@ -478,6 +488,7 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
             TreasuryAccount.gl_account_id == counterpart.account_id,
             TreasuryAccount.currency_code == "USD",
             TreasuryAccount.is_active == True,
+            TreasuryAccount.screen_code.in_(BANK_SCREENS),
             TreasuryAccount.treasury_account_id != a.treasury_account_id,
         ))
         if target_treasury is None:
@@ -532,6 +543,7 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
             TreasuryAccount.gl_account_id == source_gl_id,
             TreasuryAccount.currency_code == "USD",
             TreasuryAccount.is_active == True,
+            TreasuryAccount.screen_code.in_(BANK_SCREENS),
         ))
         if source_treasury is None:
             raise HTTPException(400, "حساب مصدر التحويل لازم يكون بنكًا أو خزينة نشطة بالدولار")
@@ -741,6 +753,7 @@ def _create_usd_transfer_mirror(db: Session, source: TreasuryAccount, original: 
         TreasuryAccount.gl_account_id == body.counterpart_account_id,
         TreasuryAccount.currency_code == "USD",
         TreasuryAccount.is_active == True,
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
         TreasuryAccount.treasury_account_id != source.treasury_account_id,
     ))
     if target is None:

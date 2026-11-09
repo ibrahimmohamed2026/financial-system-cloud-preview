@@ -31,16 +31,12 @@ _S = [  # (section, code, title_en, title_ar, route)
     ("REPORTS", "IncomeStatement", "Income Statement", "قائمة الدخل", "/reports/income-statement"),      # 6
     ("TREASURY", "CashAnalysis", "Cash Analysis", "تحليل النقدية", "/treasury/analysis"),                # 7
     ("TREASURY", "BankCibEgp", "CIB Bank - EGP", "البنك التجاري جنيه مصري", "/treasury/cib-egp"),        # 8
-    ("CHECKS", "ChecksCib", "CIB Checks", "أرقام شيكات بنك CIB", "/checks/cib"),                          # 9
+    ("CHECKS", "ChecksCib", "CIB Checks - EGP", "دفتر شيكات CIB جنيه مصري", "/checks/cib"),                          # 9
+    ("CHECKS", "ChecksCibUsd", "CIB Checks - USD", "دفتر شيكات CIB دولار", "/checks/cib-usd"),
     ("TREASURY", "BankReconciliation", "Bank Reconciliation", "مذكرة تسوية البنك", "/treasury/reconciliation"),  # 10
     ("TREASURY", "CashUsd", "Cash - USD", "خزينة دولار", "/treasury/cash-usd"),                           # 11
     ("TREASURY", "CashEgp", "Cash - EGP", "صندوق خزينة الجنيه المصري", "/treasury/cash-egp"),
-    ("TREASURY", "BankCairoEgp", "Banque du Caire - EGP", "بنك القاهرة جنيه مصري", "/treasury/cairo-egp"),  # 12
-    ("TREASURY", "BankHdbUsd", "Real Estate Bank - USD", "البنك العقاري المصري دولار", "/treasury/hdb-usd"),  # 13
-    ("TREASURY", "BankHdbEgp", "Real Estate Bank - EGP", "البنك العقاري جنيه مصري", "/treasury/hdb-egp"),  # 14
     ("TREASURY", "BankCibUsd", "CIB Bank - USD", "البنك التجاري دولار", "/treasury/cib-usd"),             # 15
-    ("CHECKS", "ChecksCairoEgp", "Banque du Caire Checks - EGP", "أرقام شيكات بنك القاهرة جنيه", "/checks/cairo-egp"),  # 16
-    ("CHECKS", "ChecksCairoUsd", "Banque du Caire Checks - USD", "أرقام شيكات بنك القاهرة دولار", "/checks/cairo-usd"),  # 17
     ("CHECKS", "FinancialChecks", "Financial Checks Register", "إدارة الشيكات المالية", "/checks/register"),
     ("REPORTS", "AuditLogs", "Audit Logs", "سجل المراجعة والنشاطات", "/audit-logs"),  # 18
     ("REPORTS", "AnalyticsReports", "Reports & Analytics", "التقارير والرسوم البيانية", "/reports"),  # 19
@@ -57,7 +53,7 @@ SCREENS = [
      "code": code, "title_en": en, "title_ar": ar, "route": route, "sort_order": i}
     for i, (sec, code, en, ar, route) in enumerate(_S, start=1)
 ]
-assert len(SCREENS) == 28
+assert len(SCREENS) == len({item['code'] for item in SCREENS})
 
 
 def seed_screens(db: Session) -> None:
@@ -72,12 +68,16 @@ def seed_screens(db: Session) -> None:
         if existing_screen is None:
             db.add(Screen(section_id=section.section_id, screen_code=item["code"], title_en=item["title_en"],
                           title_ar=item["title_ar"], route=item["route"], sort_order=item["sort_order"]))
-        elif item["code"] in ("CashUsd", "ContractRequests", "ContractSettlements", "PurchaseCycle", "FinancialChecks", "AnalyticsReports", "Counterparties"):
+        elif item["code"] in ("CashUsd", "ChecksCib", "ChecksCibUsd", "ContractRequests", "ContractSettlements", "PurchaseCycle", "FinancialChecks", "AnalyticsReports", "Counterparties"):
             # Keep legacy database screen routes synchronized with the implemented frontend routes.
             existing_screen.route = item["route"]
             existing_screen.title_ar = item["title_ar"]
             existing_screen.title_en = item["title_en"]
             existing_screen.is_active = True
+    # Hide retired bank/cheque screens without deleting historical treasury or cheque records.
+    retired_codes = {"BankCairoEgp", "BankHdbUsd", "BankHdbEgp", "ChecksCairoEgp", "ChecksCairoUsd"}
+    for old in db.scalars(select(Screen).where(Screen.screen_code.in_(retired_codes))):
+        old.is_active = False
     # الشاشات المؤقتة اللي register_excel_screens.py كان بيسجلها (EXCEL_SHEET_xx) بتتعطّل عشان ماتتكررش
     for old in db.scalars(select(Screen).where(Screen.screen_code.like("EXCEL\\_SHEET\\_%", escape="\\"))):
         old.is_active = False
@@ -122,7 +122,7 @@ def sync_permissions(db: Session) -> None:
     # to use any legacy check-book screen.
     fin_view = next((p.permission_id for p in db.scalars(select(Permission))
                      if p.screen_code == "FinancialChecks" and p.action_code == "View"), None)
-    legacy_codes = {"ChecksCib", "ChecksCairoEgp", "ChecksCairoUsd"}
+    legacy_codes = {"ChecksCib", "ChecksCibUsd", "ChecksCairoEgp", "ChecksCairoUsd"}
     if fin_view is not None:
         roles_with_checks = set(db.scalars(
             select(RolePermission.role_id).join(Permission, Permission.permission_id == RolePermission.permission_id)
@@ -189,7 +189,7 @@ def seed_job_profiles(db: Session) -> None:
         "محاسب": ("Accountant", {"ContractSettlements": ["View", "Add", "Edit"], "JournalBook": ["View", "Add", "Edit"], "ChartOfAccounts": ["View"], "Counterparties": ["View"], "TrialBalance": ["View"]}),
         "مراجع مالي": ("Financial Reviewer", {"ContractSettlements": ["View", "FinancialApprove"], "JournalBook": ["View"], "ChartOfAccounts": ["View"], "TrialBalance": ["View"], "AuditLogs": ["View"]}),
         "المدير المالي": ("Finance Manager", {"ContractSettlements": ["View", "ManagerApprove"], "SettlementManagerApproval": ["View"], "JournalBook": ["View"], "ChartOfAccounts": ["View"], "TrialBalance": ["View"], "BalanceSheet": ["View"], "IncomeStatement": ["View"], "AnalyticsReports": ["View"]}),
-        "محاسب خزينة": ("Treasury Accountant", {"CashAnalysis": ["View"], "BankCibEgp": ["View", "Add", "Edit", "Post"], "CashEgp": ["View", "Add", "Edit", "Post"], "CashUsd": ["View", "Add", "Edit", "Post"], "BankCairoEgp": ["View", "Add", "Edit", "Post"], "BankHdbEgp": ["View", "Add", "Edit", "Post"], "BankHdbUsd": ["View", "Add", "Edit", "Post"], "BankCibUsd": ["View", "Add", "Edit", "Post"], "ChecksCib": ["View", "Add", "Edit"], "ChecksCairoEgp": ["View", "Add", "Edit"], "ChecksCairoUsd": ["View", "Add", "Edit"], "FinancialChecks": ["View", "Add", "Edit"]}),
+        "محاسب خزينة": ("Treasury Accountant", {"CashAnalysis": ["View"], "BankCibEgp": ["View", "Add", "Edit", "Post"], "CashEgp": ["View", "Add", "Edit", "Post"], "CashUsd": ["View", "Add", "Edit", "Post"],  "BankCibUsd": ["View", "Add", "Edit", "Post"], "ChecksCib": ["View", "Add", "Edit"], "ChecksCibUsd": ["View", "Add", "Edit"], "FinancialChecks": ["View", "Add", "Edit"]}),
         "مسؤول مشتريات": ("Procurement Officer", {"PurchaseCycle": ["View", "Add", "Edit"], "Counterparties": ["View"], "InventoryManagement": ["View"], "CostCenters": ["View"]}),
         "أمين مخزن": ("Storekeeper", {"InventoryManagement": ["View", "Add", "Edit"], "CostCenters": ["View"]}),
         "مراجع داخلي": ("Internal Auditor", {"AuditLogs": ["View"], "AnalyticsReports": ["View"], "Contracts": ["View"], "ContractRequests": ["View"], "ContractSettlements": ["View"], "JournalBook": ["View"], "CostCenters": ["View"], "ChartOfAccounts": ["View"], "TrialBalance": ["View"], "BalanceSheet": ["View"], "IncomeStatement": ["View"], "InventoryManagement": ["View"], "PurchaseCycle": ["View"], "Counterparties": ["View"], "FinancialChecks": ["View"]}),

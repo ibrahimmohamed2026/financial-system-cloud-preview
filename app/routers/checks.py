@@ -17,8 +17,9 @@ from ..models import (Account, Beneficiary, Check, CheckPrintTemplate, CheckStat
                       AccountClassification, JournalEntry, JournalEntryDetail, Project, TreasuryAccount,
                       TreasuryTransaction, User, utcnow, ContractSettlement, Contract, Counterparty)
 
-CHECK_SCREENS = {"ChecksCib", "ChecksCairoEgp", "ChecksCairoUsd"}
-CHECK_CURRENCY = {"ChecksCib": "EGP", "ChecksCairoEgp": "EGP", "ChecksCairoUsd": "USD"}
+CHECK_SCREENS = {"ChecksCib", "ChecksCibUsd"}
+CHECK_CURRENCY = {"ChecksCib": "EGP", "ChecksCibUsd": "USD"}
+CHECK_BANK_SCREEN = {"ChecksCib": "BankCibEgp", "ChecksCibUsd": "BankCibUsd"}
 STATUSES = ["جديد", "مطبوع", "تم التسليم", "تم الصرف", "ملغي", "مرتد"]
 # الانتقالات المسموحة
 NEXT = {"جديد": {"مطبوع", "تم التسليم", "ملغي"}, "مطبوع": {"تم التسليم", "ملغي"},
@@ -139,8 +140,10 @@ def get_account(screen_code: str, _: User = Depends(require_dynamic("View", CHEC
         AccountClassification.name_ar == "نقدية بالصندوق و البنوك")
     bank_gl_accounts = select(Account.account_id).where(Account.is_active == True,
                                                          Account.classification_id.in_(cash_bank_classes))
+    expected_bank_screen = CHECK_BANK_SCREEN[screen_code]
     banks = [{"treasury_account_id": b.treasury_account_id, "name_ar": b.name_ar, "currency_code": b.currency_code}
              for b in db.scalars(select(TreasuryAccount).where(TreasuryAccount.account_type == "Bank",
+                                                               TreasuryAccount.screen_code == expected_bank_screen,
                                                                TreasuryAccount.currency_code == CHECK_CURRENCY[screen_code],
                                                                TreasuryAccount.gl_account_id.in_(bank_gl_accounts),
                                                                TreasuryAccount.checks_screen_code.is_(None)))]
@@ -154,8 +157,9 @@ def link_account(screen_code: str, body: LinkIn, user: User = Depends(require_dy
     if _acc(db, screen_code):
         raise HTTPException(409, "الدفتر مربوط بحساب قبل كده")
     a = db.get(TreasuryAccount, body.treasury_account_id)
-    if a is None or a.account_type != "Bank":
-        raise HTTPException(400, "حساب البنك غير صحيح")
+    expected_bank_screen = {"ChecksCib": "BankCibEgp", "ChecksCibUsd": "BankCibUsd"}[screen_code]
+    if a is None or a.account_type != "Bank" or a.screen_code != expected_bank_screen:
+        raise HTTPException(400, "دفتر الشيكات يجب ربطه بحساب CIB المطابق له فقط")
     if a.currency_code != CHECK_CURRENCY[screen_code]:
         raise HTTPException(400, "عملة حساب البنك لا تطابق دفتر الشيكات")
     gl = db.get(Account, a.gl_account_id)

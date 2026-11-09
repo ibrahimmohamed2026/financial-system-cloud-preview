@@ -2,7 +2,7 @@ import { esc, money, today, toast, safe, formDialog } from "../ui.js";
 import { downloadFile } from "../api.js";
 import { openPrintDialog } from "../check_print.js";
 import { translate as tr } from "../i18n.js";
-const CODE = { "cib": "ChecksCib", "cairo-egp": "ChecksCairoEgp", "cairo-usd": "ChecksCairoUsd" };
+const CODE = { "cib": "ChecksCib", "cib-usd": "ChecksCibUsd" };
 const statusLabel = s => ({ "جديد":tr("جديد","New"), "مطبوعة":tr("مطبوعة","Printed"), "صادرة":tr("صادرة","Issued"), "ملغي":tr("ملغي","Cancelled"), "مرتد":tr("مرتد","Returned"), "مسلّم":tr("مسلّم","Delivered") }[s] || s || "—");
 export async function render(main, { api, auth, route }) {
   const SC = CODE[route.split("/").pop()], can = a => auth.can(SC, a), base = "/checks/" + SC;

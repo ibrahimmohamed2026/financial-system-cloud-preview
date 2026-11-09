@@ -44,13 +44,10 @@ def test_all_nine_movement_types_have_server_side_direction_and_classification_r
         ("BankCibEgp", "EGP"),
         ("CashUsd", "USD"),
         ("CashEgp", "EGP"),
-        ("BankCairoEgp", "EGP"),
-        ("BankHdbUsd", "USD"),
-        ("BankHdbEgp", "EGP"),
         ("BankCibUsd", "USD"),
     ],
 )
-def test_all_seven_bank_and_cash_screens_are_registered_with_expected_currency(
+def test_only_four_fixed_bank_and_cash_screens_are_registered_with_expected_currency(
     screen_code, expected_currency
 ):
     assert BANK_SCREENS[screen_code][1] == expected_currency

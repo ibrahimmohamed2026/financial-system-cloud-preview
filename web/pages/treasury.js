@@ -1,6 +1,6 @@
 import { esc, money, toast, safe, formDialog, today, errText } from "../ui.js";
 import { translate as tr } from "../i18n.js";
-const CODE = { "cib-egp": "BankCibEgp", "cash-usd": "CashUsd", "cash-egp": "CashEgp", "cairo-egp": "BankCairoEgp", "hdb-usd": "BankHdbUsd", "hdb-egp": "BankHdbEgp", "cib-usd": "BankCibUsd" };
+const CODE = { "cib-egp": "BankCibEgp", "cib-usd": "BankCibUsd", "cash-egp": "CashEgp", "cash-usd": "CashUsd" };
 const USD_TX_LABELS = { funding: tr("تمويل","Funding"), customer_collection: tr("تحصيل عميل","Customer collection"), customer_advance: tr("دفعة مقدمة من عميل","Customer advance"), direct_income: tr("إيراد مباشر","Direct income"), supplier_payment: tr("سداد مورد/مقاول","Supplier/contractor payment"), supplier_advance: tr("دفعة مقدمة لمورد","Supplier advance"), expense_payment: tr("مصروفات","Expenses"), asset_purchase: tr("شراء أصل/مخزون","Asset/inventory purchase"), cash_transfer: tr("تحويل نقدي","Cash transfer") };
 
 export async function render(main, { api, auth, route }) {
@@ -236,9 +236,10 @@ export async function render(main, { api, auth, route }) {
     main.querySelector("#go")?.addEventListener("click", safe(async () => {
       const gl = await api(base + "/gl-accounts"); const byLabel = Object.fromEntries(gl.map(g => [g.label, g.account_id]));
       const isUsdCash = SC === "CashUsd";
+      const fixedName = { "BankCibEgp": "البنك التجاري الدولي CIB - جنيه مصري", "BankCibUsd": "البنك التجاري الدولي CIB - دولار أمريكي", "CashEgp": "خزينة الجنيه المصري", "CashUsd": "خزينة الدولار" }[SC];
       const dlg = formDialog({ title: tr("تسجيل حساب الخزينة/البنك","Register treasury/bank account"),
-        values: { name_ar: isUsdCash ? "خزينة الدولار" : "", account_type: info.default_type, currency_code: info.default_currency },
-        fields: [{ name: "name_ar", label: tr("الاسم","Name"), required: true, full: true },
+        values: { name_ar: fixedName, account_type: info.default_type, currency_code: info.default_currency },
+        fields: [{ name: "name_ar", label: tr("الحساب الثابت","Fixed account"), readonly: true, required: true, full: true },
           ...(isUsdCash ? [] : [
             { name: "account_type", label: tr("النوع","Type"), type: "select", options: [["Bank", tr("بنك","Bank")], ["Cash", tr("خزينة","Cash")]] },
             { name: "currency_code", label: tr("العملة","Currency"), required: true },

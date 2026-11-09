@@ -22,7 +22,7 @@ const nextStatuses = cheque => NEXT_STATUS[cheque.check_type]?.[cheque.status] |
 const EGP = v => `${money(v)} <small class="ch-egp">EGP</small>`;
 
 export async function render(main, { api, auth }) {
-  const can = a => auth.can("FinancialChecks", a) || ["ChecksCib", "ChecksCairoEgp", "ChecksCairoUsd"].some(sc => auth.can(sc, a));
+  const can = a => auth.can("FinancialChecks", a) || ["ChecksCib", "ChecksCibUsd"].some(sc => auth.can(sc, a));
   const [opt, rows0] = await Promise.all([api("/checks-register/options"), api("/checks-register")]);
   let rows = rows0 || [], projectFilter = "all";
   const projects = opt.projects || [];
