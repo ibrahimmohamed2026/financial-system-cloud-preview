@@ -13,11 +13,32 @@ export async function render(main, { api, auth, route }) {
   const projs = await api("/projects/lookup").catch(() => []);
   main.innerHTML = `<h3 style="margin-top:0">${esc(localStorage.getItem("fs_lang")==="en"?(acc.name_en||acc.name_ar):acc.name_ar)} <small class="muted">${esc(acc.currency_code)} — ${esc(acc.gl_account)}</small> ${auth.can(SC,"Edit") || auth.can(SC,"Add") ? `<button class="btn sm" id="edit-gl-link">${tr("تصحيح ربط شجرة الحسابات","Fix chart of accounts link")}</button>` : ""}</h3>
     <div class="toolbar"><div class="w" style="width:150px"><label>${tr("من","From")}</label><input type="date" id="df"></div><div class="w" style="width:150px"><label>${tr("إلى","To")}</label><input type="date" id="dt"></div>
-    <div class="grow"><label>${tr("بحث","Search")}</label><input id="q"></div>${can("Add") ? `<button class="btn primary" id="add">+ ${tr("حركة","Transaction")}</button>` : ""}</div>
+    <div class="grow"><label>${tr("بحث","Search")}</label><input id="q"></div><button class="btn" id="balance-check">${tr("مطابقة رصيد الأستاذ","Ledger balance check")}</button>${can("Add") ? `<button class="btn primary" id="add">+ ${tr("حركة","Transaction")}</button>` : ""}</div>
     <div id="sum" class="muted" style="margin-bottom:8px"></div>
     <div class="tbl-wrap"><table><thead><tr><th>${tr("التاريخ","Date")}</th><th>${tr("من حساب","From account")}</th><th>${tr("إلى حساب","To account")}</th><th>${tr("وارد","Inflow")}</th><th>${tr("منصرف","Outflow")}</th><th>${tr("الرصيد","Balance")}</th><th>${tr("البيان","Description")}</th>${`<th>${tr("نوع الحركة","Transaction type")}</th><th>${tr("البطاقة المرجعية","Party reference")}</th>`}${acc.currency_code === "USD" ? `<th>${tr("سعر الصرف","Exchange rate")}</th>` : ""}<th>${tr("رقم الإذن","Voucher No.")}</th><th>${tr("الحالة","Status")}</th><th>${tr("المستلم","Recipient")}</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
   const $ = s => main.querySelector(s); let items = [];
   $("#edit-gl-link")?.addEventListener("click", safe(() => setup(info, true)));
+  $("#balance-check").onclick = safe(openBalanceReconciliation);
+  async function openBalanceReconciliation() {
+    const asOf = $("#dt").value || today();
+    const params = new URLSearchParams({ treasury_account_id: selectedTreasuryId, as_of_date: asOf });
+    const r = await api(base + "/balance-reconciliation?" + params);
+    const fmt = value => money(value) === "-" ? "0.00" : money(value);
+    const groups = Object.entries(r.excluded_movements || {}).map(([key, group]) => {
+      const rows = group.items.map(x => "<tr><td>" + (x.transaction_date || "") + "</td><td>" + esc(x.voucher_no || "—") + "</td><td>" + esc(x.description || "—") + "</td><td class="num">" + fmt(x.inflow) + "</td><td class="num">" + fmt(x.outflow) + "</td><td>" + esc(x.journal_entry_no || x.journal_status || "—") + "</td></tr>").join("");
+      return "<h4>" + esc(group.label || key) + " — " + group.count + "</h4><div class="tbl-wrap"><table><thead><tr><th>التاريخ</th><th>رقم الإذن</th><th>البيان</th><th>وارد</th><th>منصرف</th><th>القيد</th></tr></thead><tbody>" + (rows || "<tr><td colspan="6" class="muted">لا توجد حركات</td></tr>") + "</tbody></table></div>";
+    }).join("");
+    const ledgerRows = (r.posted_ledger_entries_without_treasury_movement || []).map(x => "<tr><td>" + x.entry_date + "</td><td>" + esc(x.entry_no) + "</td><td class="num">" + fmt(x.debit) + "</td><td class="num">" + fmt(x.credit) + "</td><td class="num">" + fmt(x.signed_balance) + "</td></tr>").join("") || "<tr><td colspan="5" class="muted">لا توجد قيود أستاذ منفصلة</td></tr>";
+    const missingRows = (r.posted_treasury_movements_without_gl_line || []).map(x => "<tr><td>" + x.transaction_date + "</td><td>" + esc(x.voucher_no || "—") + "</td><td>" + esc(x.journal_entry_no || "—") + "</td><td class="num">" + fmt(x.inflow) + "</td><td class="num">" + fmt(x.outflow) + "</td></tr>").join("") || "<tr><td colspan="5" class="muted">لا توجد حركات ناقصة القيد</td></tr>";
+    const dlg = document.createElement("dialog"); dlg.style.width = "min(1100px,97vw)"; dlg.style.maxHeight = "90vh"; dlg.style.overflow = "auto";
+    dlg.innerHTML = "<form method="dialog"><h3>مطابقة رصيد الخزينة مع الأستاذ العام</h3><p class="muted">" + esc(r.account_name) + " — " + esc(r.currency_code) + " — حتى " + r.as_of_date + "</p>" +
+      "<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px"><div class="card"><small>رصيد الأستاذ العام (القيود المرحلة)</small><h3>" + fmt(r.ledger_balance) + "</h3></div><div class="card"><small>صافي حركات الخزينة المرتبطة بمرحّل</small><h3>" + fmt(r.posted_treasury_movement_balance) + "</h3></div><div class="card"><small>الفرق</small><h3>" + fmt(r.difference) + "</h3></div></div>" +
+      "<p class="muted">أساس رصيد الافتتاح: " + esc(r.opening_balance_basis) + ". المسودات والقيود المعكوسة والحركات غير المرتبطة لا تدخل في الرصيد الرسمي.</p>" +
+      "<h4>قيود أستاذ مرحّلة بدون حركة خزينة مرتبطة</h4><div class="tbl-wrap"><table><thead><tr><th>التاريخ</th><th>رقم القيد</th><th>مدين</th><th>دائن</th><th>الصافي بعملة الحساب</th></tr></thead><tbody>" + ledgerRows + "</tbody></table></div>" +
+      "<h4>حركات خزينة مرتبطة بقيد مرحّل لكن القيد لا يحتوي حساب البنك</h4><div class="tbl-wrap"><table><thead><tr><th>التاريخ</th><th>الإذن</th><th>القيد</th><th>وارد</th><th>منصرف</th></tr></thead><tbody>" + missingRows + "</tbody></table></div>" + groups +
+      "<div class="actions"><button class="btn" value="close">إغلاق</button></div></form>";
+    document.body.appendChild(dlg); dlg.addEventListener("close", () => dlg.remove()); dlg.showModal();
+  }
   const load = async () => {
     const p = new URLSearchParams({ limit: 500 }); for (const [k, id] of [["date_from", "#df"], ["date_to", "#dt"], ["q", "#q"]]) if ($(id).value.trim()) p.set(k, $(id).value.trim());
     p.set("treasury_account_id", selectedTreasuryId);
