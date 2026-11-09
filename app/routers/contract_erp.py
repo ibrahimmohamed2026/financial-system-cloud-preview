@@ -952,6 +952,13 @@ def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permi
     _,reserved_value,contract_value=contract_financial_summary(db,x.contract_id,x.settlement_side)
     if reserved_value>contract_value:
         raise HTTPException(409,"لا يمكن اعتماد المدير: إجمالي المستخلصات المعتمدة والمعلقة يتجاوز قيمة العقد المعدلة")
+    manager_rules={r.code:r for r in db.scalars(select(ContractDeductionRule).where(
+        ContractDeductionRule.contract_id==x.contract_id,
+        ContractDeductionRule.settlement_side==x.settlement_side)).all()}
+    for code, deduction in (x.deductions_json or {}).items():
+        rule=manager_rules.get(code)
+        if rule:
+            validate_rule_settlement_amount(db, x, rule, money(deduction.get("amount",0)))
     if x.is_final:
         unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
             ContractSettlement.contract_id == x.contract_id,
