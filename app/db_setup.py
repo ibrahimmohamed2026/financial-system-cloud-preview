@@ -190,7 +190,7 @@ def ensure_schema(engine: Engine) -> None:
     # to create their indexes. This is additive and leaves every existing row intact.
     existing_tables = set(inspect(engine).get_table_names())
     for table_name in ("Users", "Companies", "Counterparties", "ChartOfAccounts", "AccountClassifications", "ContractRequests", "Contracts", "ContractSettlements", "JournalEntries",
-                       "ContractItems", "ContractAddendums", "TechnicalSettlementEstimates", "TechnicalSettlementEstimateItems", "TreasuryTransactions", "PurchaseOrders", "SupplierInvoices", "Checks",
+                       "ContractItems", "ContractAddendums", "ContractSettlements", "ContractSettlementItems", "TechnicalSettlementEstimates", "TechnicalSettlementEstimateItems", "TreasuryTransactions", "PurchaseOrders", "SupplierInvoices", "Checks",
                        "CheckPrintTemplates", "FinancialChecks", "ContractDeductionRules"):
         if table_name in existing_tables:
             _add_model_columns(engine, table_name)

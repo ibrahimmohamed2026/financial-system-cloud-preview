@@ -263,7 +263,7 @@ def settlement_out(x, db: Session | None = None):
     return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"contract_no":contract.contract_no if contract else None,"contract_title":contract.title if contract else None,"contract_title_en":contract.title_en if contract else None,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"is_final":bool(getattr(x,"is_final",False)),"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":deductions,"vat_amount":str(x.vat_amount),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"remaining_amount":str(money(remaining)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
 def settlement_line_out(line, item=None):
     item = item
-    return {"settlement_item_id":line.settlement_item_id,"contract_item_id":line.contract_item_id,"item_no":item.item_no if item else "","description":item.description if item else "","unit":item.unit if item else "","contract_quantity":str(item.quantity) if item else "0","quantity":str(line.quantity),"unit_price":str(line.unit_price),"amount":str(line.amount),"account_id":getattr(line,"account_id",None) or (getattr(item,"account_id",None) if item else None)}
+    return {"settlement_item_id":line.settlement_item_id,"contract_item_id":line.contract_item_id,"item_no":item.item_no if item else "","description":item.description if item else "","unit":item.unit if item else "","contract_quantity":str(item.quantity) if item else "0","quantity":str(line.quantity),"unit_price":str(line.unit_price),"amount":str(line.amount),"explanatory_statement":getattr(line,"explanatory_statement",None),"account_id":getattr(line,"account_id",None) or (getattr(item,"account_id",None) if item else None)}
 
 class ItemIn(BaseModel):
     item_no: Optional[str] = Field(default=None,max_length=50); description: str = Field(min_length=1,max_length=500)
@@ -308,6 +308,7 @@ class ConfigIn(BaseModel):
 class SettlementLineIn(BaseModel):
     contract_item_id: int = Field(gt=0)
     quantity: Decimal = Field(gt=0)
+    explanatory_statement: str | None = None
 class SettlementIn(BaseModel):
     settlement_side: Literal["Customer","Subcontractor"]; settlement_no: str | None = Field(default=None,max_length=50)
     is_final: bool = False
@@ -730,7 +731,8 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     side_code = "CUS" if side == "Customer" else "SUB"
     x.settlement_no = f"ST-{side_code}-{body.settlement_date.year}-{x.settlement_id:06d}"
     for item, quantity, amount in lines:
-        db.add(ContractSettlementItem(settlement_id=x.settlement_id,contract_item_id=item.item_id,account_id=item.account_id,quantity=quantity,unit_price=item.unit_price,amount=amount))
+        requested_line = next((line for line in body.items if line.contract_item_id == item.item_id), None)
+        db.add(ContractSettlementItem(settlement_id=x.settlement_id,contract_item_id=item.item_id,account_id=item.account_id,quantity=quantity,unit_price=item.unit_price,amount=amount,explanatory_statement=((requested_line.explanatory_statement or "").strip() or None) if requested_line else None))
     write_audit(db,user.user_id,"Create","ContractSettlements",x.settlement_id,new=settlement_out(x, db));db.commit();db.refresh(x);return settlement_out(x, db)
 
 @router.get("/all-settlements")
