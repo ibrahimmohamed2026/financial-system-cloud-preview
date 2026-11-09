@@ -782,12 +782,25 @@ CREATE INDEX "ix_ContractSettlementItems_ContractItemId" ON "ContractSettlementI
 CREATE OR REPLACE VIEW "vw_EffectivePermissions" AS
 SELECT u."UserId" AS "UserId", p."PermissionId" AS "PermissionId",
        p."ScreenCode" AS "ScreenCode", p."ActionCode" AS "ActionCode",
-       CASE WHEN up."IsAllowed" IS NOT NULL THEN (CASE WHEN up."IsAllowed" THEN 1 ELSE 0 END)
-            WHEN rp."PermissionId" IS NOT NULL THEN 1 ELSE 0 END AS "IsAllowed"
+       CASE
+         WHEN up."IsAllowed" IS NOT NULL THEN CASE WHEN up."IsAllowed" THEN 1 ELSE 0 END
+         WHEN u."JobProfileId" IS NOT NULL THEN
+              CASE WHEN EXISTS (
+                    SELECT 1 FROM "JobProfilePermissions" jpp
+                    JOIN "JobProfiles" jp ON jp."JobProfileId"=jpp."JobProfileId"
+                    WHERE jpp."JobProfileId"=u."JobProfileId"
+                      AND jp."IsActive" IS TRUE
+                      AND jpp."PermissionId"=p."PermissionId"
+              ) THEN 1 ELSE 0 END
+         WHEN EXISTS (
+              SELECT 1 FROM "UserRoles" ur
+              JOIN "RolePermissions" rp ON rp."RoleId"=ur."RoleId"
+              WHERE ur."UserId"=u."UserId" AND rp."PermissionId"=p."PermissionId"
+         ) THEN 1
+         ELSE 0
+       END AS "IsAllowed"
 FROM "Users" u CROSS JOIN "Permissions" p
-LEFT JOIN "UserRoles" ur ON ur."UserId" = u."UserId"
-LEFT JOIN "RolePermissions" rp ON rp."RoleId" = ur."RoleId" AND rp."PermissionId" = p."PermissionId"
-LEFT JOIN "UserPermissions" up ON up."UserId" = u."UserId" AND up."PermissionId" = p."PermissionId";
+LEFT JOIN "UserPermissions" up ON up."UserId"=u."UserId" AND up."PermissionId"=p."PermissionId";
 
 CREATE INDEX IF NOT EXISTS "IX_AuditLog_Timestamp_UserId" ON "AuditLog" ("Timestamp", "UserId");
 CREATE UNIQUE INDEX IF NOT EXISTS "UX_TreasuryTransactions_CheckVoucher" ON "TreasuryTransactions" ("VoucherNo") WHERE "VoucherNo" LIKE 'CHK-%';

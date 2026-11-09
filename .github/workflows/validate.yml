@@ -35,3 +35,5 @@ jobs:
         run: node --check web/pages/financial_checks.js
       - name: Check treasury JavaScript
         run: node --check web/pages/treasury.js
+      - name: Check admin users and permissions JavaScript
+        run: node --input-type=module --check < web/pages/admin.js
