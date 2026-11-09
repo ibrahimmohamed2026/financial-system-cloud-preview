@@ -382,11 +382,26 @@ def normalized_deductions(x):
     return result
 def settlement_out(x, db: Session | None = None):
     paid = ZERO
+    reserved = ZERO
     if db is not None:
-        paid = Decimal(db.scalar(select(func.coalesce(func.sum(TreasuryTransaction.outflow), 0)).where(
-            TreasuryTransaction.settlement_id == x.settlement_id,
-            TreasuryTransaction.status == "تم الصرف")) or 0)
-    remaining = max(ZERO, Decimal(x.net_amount or 0) - paid)
+        amount_column = (TreasuryTransaction.inflow if x.settlement_side == "Customer"
+                         else TreasuryTransaction.outflow)
+        paid = money(db.scalar(
+            select(func.coalesce(func.sum(amount_column), 0))
+            .select_from(TreasuryTransaction)
+            .join(JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id)
+            .where(TreasuryTransaction.settlement_id == x.settlement_id,
+                   JournalEntry.status == "Posted")
+        ) or 0)
+        reserved = money(db.scalar(
+            select(func.coalesce(func.sum(amount_column), 0))
+            .select_from(TreasuryTransaction)
+            .join(JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id)
+            .where(TreasuryTransaction.settlement_id == x.settlement_id,
+                   JournalEntry.status == "Draft")
+        ) or 0)
+    remaining = max(ZERO, money(Decimal(x.net_amount or 0) - paid))
+    available = max(ZERO, money(Decimal(x.net_amount or 0) - paid - reserved))
     contract = db.get(Contract, x.contract_id) if db is not None else None
     deductions=normalized_deductions(x)
     if db is not None:
@@ -400,7 +415,7 @@ def settlement_out(x, db: Session | None = None):
                 d.setdefault("calculation_type",rule.calculation_type)
                 d.setdefault("rate",str(rule.rate))
                 d.setdefault("base_type",rule.base_type)
-    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"contract_no":contract.contract_no if contract else None,"contract_title":contract.title if contract else None,"contract_title_en":contract.title_en if contract else None,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"is_final":bool(getattr(x,"is_final",False)),"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":deductions,"vat_amount":str(x.vat_amount),"vat_rate":str(x.vat_rate) if getattr(x,"vat_rate",None) is not None else None,"vat_tax_status":getattr(x,"vat_tax_status",None),"vat_base_type":getattr(x,"vat_base_type",None),"vat_base_amount":str(x.vat_base_amount) if getattr(x,"vat_base_amount",None) is not None else None,"vat_account_id":getattr(x,"vat_account_id",None),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"remaining_amount":str(money(remaining)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
+    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"contract_no":contract.contract_no if contract else None,"contract_title":contract.title if contract else None,"contract_title_en":contract.title_en if contract else None,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"is_final":bool(getattr(x,"is_final",False)),"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":deductions,"vat_amount":str(x.vat_amount),"vat_rate":str(x.vat_rate) if getattr(x,"vat_rate",None) is not None else None,"vat_tax_status":getattr(x,"vat_tax_status",None),"vat_base_type":getattr(x,"vat_base_type",None),"vat_base_amount":str(x.vat_base_amount) if getattr(x,"vat_base_amount",None) is not None else None,"vat_account_id":getattr(x,"vat_account_id",None),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"reserved_amount":str(money(reserved)),"remaining_amount":str(money(remaining)),"available_amount":str(money(available)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
 def settlement_line_out(line, item=None):
     item = item
     return {"settlement_item_id":line.settlement_item_id,"contract_item_id":line.contract_item_id,"item_no":item.item_no if item else "","description":item.description if item else "","unit":item.unit if item else "","contract_quantity":str(item.quantity) if item else "0","quantity":str(line.quantity),"unit_price":str(line.unit_price),"amount":str(line.amount),"explanatory_statement":getattr(line,"explanatory_statement",None),"account_id":getattr(line,"account_id",None) or (getattr(item,"account_id",None) if item else None)}
@@ -1353,37 +1368,17 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
     if debit!=credit: raise HTTPException(422,f"القيد غير متوازن: مدين {debit} / دائن {credit}. راجع الحسابات وقواعد الخصم والضريبة.")
     # Number is unique; generated per company/year with row lock on the settlement and a uniqueness constraint in JournalEntries.
     entry_no=f"CS-{x.settlement_id:08d}"
-    entry=JournalEntry(entry_no=entry_no,entry_date=x.settlement_date,company_id=cfg.company_id,fiscal_year_id=cfg.fiscal_year_id,description=f"ترحيل مستخلص {x.settlement_no} للعقد {x.contract_id}",source_settlement_id=x.settlement_id,status="Posted",created_by=user.user_id,posted_by=user.user_id,posted_at=datetime.utcnow())
+    entry=JournalEntry(entry_no=entry_no,entry_date=x.settlement_date,company_id=cfg.company_id,fiscal_year_id=cfg.fiscal_year_id,description=f"ترحيل مستخلص {x.settlement_no} للعقد {x.contract_id}",source_settlement_id=x.settlement_id,status="Draft",created_by=user.user_id)
     db.add(entry);db.flush()
     contract=db.get(Contract,x.contract_id)
     for idx,(aid,dr,cr,desc,project_id) in enumerate(lines,1): db.add(JournalEntryDetail(journal_entry_id=entry.journal_entry_id,line_no=idx,account_id=aid,project_id=project_id or contract.project_id,debit_amount=dr,credit_amount=cr,description=desc))
     write_audit(db,user.user_id,"Create","JournalEntries",entry.journal_entry_id,new={"entry_no":entry.entry_no,"source":"ContractSettlement","settlement_id":x.settlement_id,"settlement_no":x.settlement_no,"contract_id":x.contract_id,"debit_total":str(debit),"credit_total":str(credit)})
-    x.journal_entry_id=entry.journal_entry_id;x.status="Posted"
-    linked_estimate = db.scalar(select(TechnicalSettlementEstimate).where(
-        TechnicalSettlementEstimate.financial_settlement_id == x.settlement_id))
-    if linked_estimate is not None:
-        linked_schedule = db.scalar(select(ContractSettlementSchedule).where(
-            ContractSettlementSchedule.technical_estimate_id == linked_estimate.estimate_id).with_for_update())
-        if linked_schedule is not None:
-            linked_schedule.status = "Completed"
-    # Close when the explicitly marked final settlement has been posted and
-    # every other settlement for this contract is posted as well.
-    posted_final = db.scalar(select(ContractSettlement.settlement_id).where(
-        ContractSettlement.contract_id==contract.contract_id,
-        ContractSettlement.is_final.is_(True),
-        ContractSettlement.status=="Posted").limit(1))
-    if posted_final:
-        unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
-            ContractSettlement.contract_id==contract.contract_id,
-            ContractSettlement.status!="Posted")) or 0
-        if unfinished == 0:
-            contract.status="Closed"
-            contract.closed_at=datetime.utcnow()
-            contract.closed_by=user.user_id
-            write_audit(db,user.user_id,"AutoClose","Contracts",contract.contract_id,
-                        old={"status":"Active"},new={"status":"Closed","closed_at":contract.closed_at.isoformat(),"reason":"Final settlement posted and all contract settlements completed"})
-    write_audit(db,user.user_id,"Post","ContractSettlements",x.settlement_id,new={**settlement_out(x, db),"journal_entry_id":entry.journal_entry_id});db.commit();db.refresh(x)
-    return {"settlement":settlement_out(x, db),"journal_entry_id":entry.journal_entry_id,"entry_no":entry.entry_no,"debit_total":str(debit),"credit_total":str(credit),"contract_status":contract.status,"contract_auto_closed":contract.status=="Closed"}
+    x.journal_entry_id=entry.journal_entry_id
+    x.status="JournalDraft"
+    write_audit(db,user.user_id,"Create","JournalEntries",entry.journal_entry_id,new={"entry_no":entry.entry_no,"source":"ContractSettlement","settlement_id":x.settlement_id,"settlement_no":x.settlement_no,"contract_id":x.contract_id,"status":"Draft","debit_total":str(debit),"credit_total":str(credit)})
+    write_audit(db,user.user_id,"CreateJournalDraft","ContractSettlements",x.settlement_id,new={**settlement_out(x, db),"journal_entry_id":entry.journal_entry_id})
+    db.commit();db.refresh(x)
+    return {"settlement":settlement_out(x, db),"journal_entry_id":entry.journal_entry_id,"entry_no":entry.entry_no,"journal_status":"Draft","debit_total":str(debit),"credit_total":str(credit),"contract_status":contract.status,"contract_auto_closed":False}
 
 
 @router.delete("/settlements/{settlement_id}", status_code=204)
