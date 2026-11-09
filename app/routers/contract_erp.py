@@ -112,15 +112,37 @@ def validate_unique_rule_account(db: Session, contract_id: int, settlement_side:
 
 
 def resolve_rule_account(rule_code, name_ar, gl_account_id, cfg):
-    """حساب القاعدة: المربوط صراحة أولًا، ثم الافتراضي من إعدادات العقد (بدون تخمين خاطئ)."""
-    if gl_account_id: return gl_account_id
-    if not cfg: return None
-    field = LEGACY_CFG_FIELD.get((rule_code or "").lower())
-    if field: return getattr(cfg, field)
-    code = (rule_code or "").lower()
-    if "retention" in code or "محتجز" in (name_ar or "") or "ضمان" in (name_ar or ""): return cfg.retention_account_id
-    if "advance" in code or "مقدم" in (name_ar or ""): return cfg.advance_account_id
-    return None
+    """Only an explicit rule-to-account link is authoritative; never reuse shared legacy defaults."""
+    return gl_account_id
+
+
+def validate_deduction_account_links(db: Session, settlement_side: str,
+                                     deductions: dict, live_rules: dict | None = None) -> None:
+    """Validate positive deduction accounts, posting direction, normal balance and uniqueness."""
+    live_rules = live_rules or {}
+    used_accounts: dict[int, str] = {}
+    expected_side = "Debit" if settlement_side == "Customer" else "Credit"
+    for code, deduction in deductions.items():
+        amount = money(deduction.get("amount", 0))
+        if amount <= ZERO:
+            continue
+        rule = live_rules.get(code)
+        account_id = deduction.get("account_id") or (rule.gl_account_id if rule else None)
+        if not account_id:
+            raise HTTPException(422, f"الاستقطاع «{deduction.get('name', code)}» موجب ولا يرتبط بحساب أستاذ مستقل")
+        account = leaf_account_or_422(db, account_id, f"حساب الاستقطاع {deduction.get('name', code)}: ")
+        previous_code = used_accounts.get(account.account_id)
+        if previous_code and previous_code != code:
+            raise HTTPException(422, f"الحساب {account.account_code} مربوط بأكثر من بند استقطاع ({previous_code} و{code})؛ خصص حسابًا مستقلًا لكل بند")
+        used_accounts[account.account_id] = code
+        posting_side = deduction.get("posting_side") or (rule.posting_side if rule else None)
+        if posting_side != expected_side:
+            raise HTTPException(422, f"جهة القيد للاستقطاع «{deduction.get('name', code)}» يجب أن تكون {expected_side} في هذا النوع من المستخلص")
+        expected_balance = "DR" if posting_side == "Debit" else "CR"
+        if account.normal_balance != expected_balance:
+            raise HTTPException(422, f"طبيعة الحساب {account.account_code} ({account.normal_balance}) لا تتوافق مع جهة قيد الاستقطاع {posting_side}")
+        deduction["account_id"] = account.account_id
+        deduction["posting_side"] = posting_side
 
 def final_settlement_quantity_gaps(db, contract_id, side, candidate=None):
     """Calculate final quantities once: linked technical/financial certificates are never double-counted."""
