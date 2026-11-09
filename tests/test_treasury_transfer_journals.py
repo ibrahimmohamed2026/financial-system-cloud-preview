@@ -163,7 +163,7 @@ def test_usd_transfer_creates_opposite_operational_movement(
     db.flush.assert_called_once()
 
 
-def test_usd_transfer_rejects_counterpart_without_active_usd_treasury():
+def test_usd_movement_with_non_treasury_counterpart_does_not_create_transfer_mirror():
     db = MagicMock()
     db.scalar.return_value = None
     source = SimpleNamespace(treasury_account_id=3, gl_account_id=10, currency_code="USD")
@@ -177,10 +177,8 @@ def test_usd_transfer_rejects_counterpart_without_active_usd_treasury():
         transaction_type="cash_transfer",
     )
 
-    from fastapi import HTTPException
-
-    with pytest.raises(HTTPException):
-        _create_usd_transfer_mirror(db, source, original, body, SimpleNamespace(user_id=7))
+    mirror = _create_usd_transfer_mirror(db, source, original, body, SimpleNamespace(user_id=7))
+    assert mirror is None
     db.add.assert_not_called()
 
 
