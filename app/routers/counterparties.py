@@ -51,7 +51,7 @@ def _out(db: Session, x: Counterparty):
             "linked_account_name_en": linked_account.account_name_en if linked_account else None,
             "aliases": aliases, "linked_records": counts}
 
-def _validate_linked_account(db: Session, account_id: int | None, party_type: str) -> None:
+def _validate_linked_account(db: Session, account_id: int | None, party_type: str, party_id: int | None = None) -> None:
     if account_id is None:
         return
     account = db.get(Account, account_id)
@@ -61,13 +61,53 @@ def _validate_linked_account(db: Session, account_id: int | None, party_type: st
         raise HTTPException(422, "لا يمكن ربط الطرف بحساب غير نشط")
     if db.scalar(select(Account.account_id).where(Account.parent_account_id == account_id).limit(1)):
         raise HTTPException(422, "اختر حسابًا فرعيًا من الشجرة، ولا تربط الطرف بحساب رئيسي")
-    if party_type in ("Customer", "Supplier", "Contractor"):
+    if party_type == "Customer":
         classification = db.get(AccountClassification, account.classification_id)
         class_name = (classification.name_ar if classification else "").casefold()
-        expected = ("عملاء",) if party_type == "Customer" else ("مورد", "دائن")
-        if not any(word in class_name for word in expected):
-            label = "العملاء" if party_type == "Customer" else "الموردين/الدائنين"
-            raise HTTPException(422, f"اختر حسابًا من تصنيف {label} لربط هذا الطرف")
+        if "عملاء" not in class_name:
+            raise HTTPException(422, "اختر حسابًا من تصنيف العملاء لربط بطاقة العميل")
+        if (account.normal_balance or "").upper() != "DR":
+            raise HTTPException(422, "حساب العميل يجب أن تكون طبيعته مدينة (DR)")
+        if (account.statement_type or "").casefold() != "balancesheet":
+            raise HTTPException(422, "حساب العميل يجب أن يكون ضمن الميزانية (BalanceSheet)")
+        duplicate = db.scalar(select(Counterparty.counterparty_id).where(
+            Counterparty.linked_account_id == account_id,
+            Counterparty.is_active.is_(True),
+            Counterparty.counterparty_id != (party_id or -1)).limit(1))
+        if duplicate is not None:
+            raise HTTPException(409, "حساب الأستاذ مرتبط ببطاقة طرف أخرى؛ لا يجوز تكرار الحساب")
+        return
+    if party_type in ("Supplier", "Contractor"):
+        classification = db.get(AccountClassification, account.classification_id)
+        class_name = (classification.name_ar if classification else "").casefold()
+        if not any(word in class_name for word in ("مورد", "دائن")):
+            raise HTTPException(422, "اختر حسابًا من تصنيف الموردين/الدائنين لربط هذا الطرف")
+
+@router.get("/contract-options")
+def contract_customer_options(_: User = Depends(require_permission("Contracts", "View")),
+                              db: Session = Depends(get_db)):
+    rows = db.scalars(select(Counterparty).where(
+        Counterparty.is_active.is_(True)
+    ).order_by(Counterparty.legal_name, Counterparty.counterparty_id).limit(1000)).all()
+    items = []
+    for party in rows:
+        roles = set(party.roles or [])
+        if party.party_type not in ("Customer", "Mixed") and "Customer" not in roles:
+            continue
+        if party.party_type == "Mixed" and "Customer" not in roles:
+            continue
+        linked = db.get(Account, party.linked_account_id) if party.linked_account_id else None
+        items.append({
+            "counterparty_id": party.counterparty_id,
+            "code": party.code,
+            "legal_name": party.legal_name or party.name,
+            "name_en": party.name_en,
+            "linked_account_id": party.linked_account_id,
+            "linked_account_code": linked.account_code if linked else None,
+            "linked_account_name": linked.account_name_ar if linked else None,
+        })
+    return {"items": items}
+
 
 @router.get("")
 def list_parties(q: str | None = None, party_type: PartyType | None = None,
@@ -245,7 +285,7 @@ def update_party(party_id: int, body: PartyIn, user: User = Depends(require_perm
     if not x.is_active and x.party_type in ("Customer", "Mixed") and body.linked_account_id != x.linked_account_id:
         raise HTTPException(409, "أعد تنشيط العميل قبل تغيير حساب الأستاذ المرتبط")
     if not (not x.is_active and x.party_type in ("Customer", "Mixed") and body.linked_account_id == x.linked_account_id):
-        _validate_linked_account(db, body.linked_account_id, body.party_type)
+        _validate_linked_account(db, body.linked_account_id, body.party_type, party_id)
     old = {k: getattr(x, k) for k in body.model_fields}
     for k, v in body.model_dump().items(): setattr(x, k, v)
     x.name = body.legal_name
