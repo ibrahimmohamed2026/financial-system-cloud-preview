@@ -1,6 +1,6 @@
 import { esc, money, toast, safe, formDialog, today, errText } from "../ui.js";
 import { translate as tr } from "../i18n.js";
-const CODE = { "cib-egp": "BankCibEgp", "cash-usd": "CashUsd", "cash-egp": "CashEgp", "cairo-egp": "BankCairoEgp", "hdb-usd": "BankHdbUsd", "hdb-egp": "BankHdbEgp", "cib-usd": "BankCibUsd" };
+const CODE = { "cib-egp": "BankCibEgp", "cib-usd": "BankCibUsd", "cash-egp": "CashEgp", "cash-usd": "CashUsd" };
 const USD_TX_LABELS = { funding: tr("تمويل","Funding"), customer_collection: tr("تحصيل عميل","Customer collection"), customer_advance: tr("دفعة مقدمة من عميل","Customer advance"), direct_income: tr("إيراد مباشر","Direct income"), supplier_payment: tr("سداد مورد/مقاول","Supplier/contractor payment"), supplier_advance: tr("دفعة مقدمة لمورد","Supplier advance"), expense_payment: tr("مصروفات","Expenses"), asset_purchase: tr("شراء أصل/مخزون","Asset/inventory purchase"), cash_transfer: tr("تحويل نقدي","Cash transfer") };
 
 export async function render(main, { api, auth, route }) {
