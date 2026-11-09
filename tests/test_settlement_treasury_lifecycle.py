@@ -285,7 +285,10 @@ def test_trial_balance_query_uses_posted_journals_only():
 
         def execute(self, statement):
             self.statement = statement
-            return []
+            class Rows(list):
+                def all(self):
+                    return list(self)
+            return Rows()
 
     db = CaptureDB()
     assert compute_tb(db) == []
