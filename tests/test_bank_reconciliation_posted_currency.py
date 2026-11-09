@@ -175,3 +175,20 @@ def test_balance_reconciliation_explains_drafts_reversals_unlinked_and_orphans(d
     assert result["excluded_movements"]["Unlinked"]["count"] == 1
     assert len(result["posted_ledger_entries_without_treasury_movement"]) == 1
     assert len(result["posted_treasury_movements_without_gl_line"]) == 1
+
+
+def test_usd_treasury_movement_balance_uses_posted_native_currency_rows_only(db):
+    treasury = _account(db, currency="USD", opening_debit="25000", opening_credit="5000")
+    posted_in = _entry(db, 41, status="Posted")
+    _line(db, posted_in, debit="5200", fcy="100")
+    _movement(db, 41, entry_id=41, inflow="100")
+    posted_out = _entry(db, 42, status="Posted")
+    _line(db, posted_out, credit="1040", fcy="20")
+    _movement(db, 42, entry_id=42, outflow="20")
+    draft = _entry(db, 43, status="Draft")
+    _line(db, draft, debit="2600", fcy="50")
+    _movement(db, 43, entry_id=43, inflow="50")
+    db.flush()
+
+    assert _posted_treasury_movement_balance(db, treasury) == Decimal("80.00")
+    assert balance_of(db, treasury.treasury_account_id) == Decimal("80.00")
