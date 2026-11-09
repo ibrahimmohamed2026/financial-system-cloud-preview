@@ -751,6 +751,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     rules=db.scalars(select(ContractDeductionRule).where(ContractDeductionRule.contract_id==contract_id,ContractDeductionRule.settlement_side==side,ContractDeductionRule.is_active.is_(True)).order_by(ContractDeductionRule.sort_order,ContractDeductionRule.rule_id)).all()
     seq=(db.scalar(select(func.max(ContractSettlement.sequence_no)).where(ContractSettlement.contract_id==contract_id,ContractSettlement.settlement_side==side)) or 0)+1
     deductions={}; total=ZERO
+    # Retention remains automatic: its cap-committed amount is recalculated cumulatively.
     if set(body.single_deduction_codes) - {r.code for r in rules}:
         raise HTTPException(422,"تم اختيار استقطاع غير معرف في قواعد العقد")
     for r in rules:
