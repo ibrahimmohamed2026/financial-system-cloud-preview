@@ -29,6 +29,7 @@ def test_customer_change_is_blocked_after_settlement_history_exists():
     assert "body.counterparty_id != c.counterparty_id" in update
     assert "ContractSettlement.settlement_id" in update
     assert "TechnicalSettlementEstimate.estimate_id" in update
+    assert "ProgressBilling.billing_id" in update
     assert "حفاظًا على هوية المستندات والسجل المحاسبي التاريخي" in update
 
 
