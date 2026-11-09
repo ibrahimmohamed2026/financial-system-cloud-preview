@@ -364,6 +364,12 @@ def create_account(screen_code: str, body: AccountIn,
         raise HTTPException(400, "نوع الحساب أو العملة لا يطابقان الشاشة المحددة")
     values = body.model_dump()
     values["currency_code"] = expected_currency
+    values["name_ar"] = {
+        "BankCibEgp": "البنك التجاري الدولي CIB - جنيه مصري",
+        "BankCibUsd": "البنك التجاري الدولي CIB - دولار أمريكي",
+        "CashEgp": "خزينة الجنيه المصري",
+        "CashUsd": "خزينة الدولار",
+    }[screen_code]
     if expected_type == "Cash":
         values["bank_account_number"] = None
     a = TreasuryAccount(**values, screen_code=screen_code)
