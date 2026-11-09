@@ -154,8 +154,9 @@ def link_account(screen_code: str, body: LinkIn, user: User = Depends(require_dy
     if _acc(db, screen_code):
         raise HTTPException(409, "الدفتر مربوط بحساب قبل كده")
     a = db.get(TreasuryAccount, body.treasury_account_id)
-    if a is None or a.account_type != "Bank":
-        raise HTTPException(400, "حساب البنك غير صحيح")
+    expected_bank_screen = {"ChecksCib": "BankCibEgp", "ChecksCibUsd": "BankCibUsd"}[screen_code]
+    if a is None or a.account_type != "Bank" or a.screen_code != expected_bank_screen:
+        raise HTTPException(400, "دفتر الشيكات يجب ربطه بحساب CIB المطابق له فقط")
     if a.currency_code != CHECK_CURRENCY[screen_code]:
         raise HTTPException(400, "عملة حساب البنك لا تطابق دفتر الشيكات")
     gl = db.get(Account, a.gl_account_id)
