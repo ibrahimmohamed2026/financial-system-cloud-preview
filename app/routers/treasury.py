@@ -471,16 +471,36 @@ def balance_reconciliation(screen_code: str, treasury_account_id: int | None = Q
 
     posted_tx = [(t, entry_no) for t, status, entry_no in rows if status == "Posted"]
     posted_entry_ids = {t.journal_entry_id for t, _ in posted_tx}
-    journal_line_ids = set(db.scalars(select(JournalEntryDetail.journal_entry_id).where(
-        JournalEntryDetail.account_id == a.gl_account_id,
-        JournalEntryDetail.journal_entry_id.in_(posted_entry_ids or {-1}),
-    )))
-    movements_without_gl_line = [{
-        "transaction_id": t.transaction_id, "transaction_date": t.transaction_date,
-        "voucher_no": t.voucher_no, "description": t.description,
-        "inflow": money(t.inflow), "outflow": money(t.outflow),
-        "journal_entry_id": t.journal_entry_id, "journal_entry_no": entry_no,
-    } for t, entry_no in posted_tx if t.journal_entry_id not in journal_line_ids]
+    gl_line_signed = (JournalEntryDetail.debit_amount - JournalEntryDetail.credit_amount
+                      if a.currency_code == "EGP" else
+                      case(
+                          (JournalEntryDetail.debit_amount > 0, func.coalesce(JournalEntryDetail.fcy_amount, 0)),
+                          (JournalEntryDetail.credit_amount > 0, -func.coalesce(JournalEntryDetail.fcy_amount, 0)),
+                          else_=0,
+                      ))
+    gl_amount_by_entry = dict(db.execute(
+        select(JournalEntryDetail.journal_entry_id, func.sum(gl_line_signed))
+        .where(JournalEntryDetail.account_id == a.gl_account_id,
+               JournalEntryDetail.journal_entry_id.in_(posted_entry_ids or {-1}))
+        .group_by(JournalEntryDetail.journal_entry_id)
+    ).all())
+    movements_without_gl_line, movement_amount_mismatches = [], []
+    for t, entry_no in posted_tx:
+        expected = Decimal(t.inflow or 0) - Decimal(t.outflow or 0)
+        actual = gl_amount_by_entry.get(t.journal_entry_id)
+        item = {
+            "transaction_id": t.transaction_id, "transaction_date": t.transaction_date,
+            "voucher_no": t.voucher_no, "description": t.description,
+            "inflow": money(t.inflow), "outflow": money(t.outflow),
+            "journal_entry_id": t.journal_entry_id, "journal_entry_no": entry_no,
+        }
+        if actual is None:
+            movements_without_gl_line.append(item)
+        elif Decimal(actual or 0) != expected:
+            movement_amount_mismatches.append({
+                **item, "treasury_signed_amount": money(expected),
+                "gl_signed_amount": money(actual), "difference": money(Decimal(actual) - expected),
+            })
 
     return {
         "treasury_account_id": a.treasury_account_id,
@@ -506,6 +526,7 @@ def balance_reconciliation(screen_code: str, treasury_account_id: int | None = Q
             "debit": money(row[3]), "credit": money(row[4]), "signed_balance": money(row[5]),
         } for row in ledger_only_rows],
         "posted_treasury_movements_without_gl_line": movements_without_gl_line,
+        "posted_treasury_movement_amount_mismatches": movement_amount_mismatches,
     }
 
 
