@@ -286,7 +286,7 @@ def test_usd_journal_builder_creates_balanced_entry_for_every_movement_type(
             0,
         ]
     else:
-        db.scalar.side_effect = [0, 0]
+        db.scalar.side_effect = [None, 0, 0]
     db.execute.return_value.all.return_value = [
         SimpleNamespace(fcy_amount=Decimal("1000"), debit_amount=Decimal("10000"),
                         credit_amount=Decimal("0"))
