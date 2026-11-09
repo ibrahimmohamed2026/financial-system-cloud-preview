@@ -318,6 +318,7 @@ def update_contract(contract_id: int, body: ContractIn, user: User = Depends(req
         has_history = (
             db.scalar(select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id == contract_id).limit(1)) is not None
             or db.scalar(select(TechnicalSettlementEstimate.estimate_id).where(TechnicalSettlementEstimate.contract_id == contract_id).limit(1)) is not None
+            or db.scalar(select(ProgressBilling.billing_id).where(ProgressBilling.contract_id == contract_id).limit(1)) is not None
         )
         if has_history:
             raise HTTPException(409, "لا يمكن تغيير العميل بعد إنشاء مستخلصات؛ حفاظًا على هوية المستندات والسجل المحاسبي التاريخي")
