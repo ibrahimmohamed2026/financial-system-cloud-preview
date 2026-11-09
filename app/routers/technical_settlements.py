@@ -121,7 +121,7 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
         prev=db.scalar(select(func.coalesce(func.sum(func.coalesce(TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)),0)).where(TechnicalSettlementEstimateItem.contract_item_id==item.item_id,TechnicalSettlementEstimateItem.estimate_id.in_(prev_ids))) or 0
         # Include posted/approved financial settlement quantities if the history predates this technical workflow.
         linked_financial_ids=select(TechnicalSettlementEstimate.financial_settlement_id).where(TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
-        valid_ids=select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==c.contract_id,ContractSettlement.settlement_side==body.settlement_side,ContractSettlement.status.in_(("Approved","Posted")),ContractSettlement.settlement_id.not_in(linked_financial_ids))
+        valid_ids=select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==c.contract_id,ContractSettlement.settlement_side==body.settlement_side,ContractSettlement.status.in_(("Approved","Posted","PendingFinalApproval")),ContractSettlement.settlement_id.not_in(linked_financial_ids))
         fin_prev=db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity),0)).where(ContractSettlementItem.contract_item_id==item.item_id,ContractSettlementItem.settlement_id.in_(valid_ids))) or 0
         previous=Decimal(str(prev))+Decimal(str(fin_prev))
         if req.current_quantity > Decimal(item.quantity)-previous: raise HTTPException(409,f"كمية البند {item.item_no} تتجاوز الكمية المتبقية")
@@ -292,7 +292,7 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session):
     # Use the same configured deductions as the existing financial-settlement engine.
     prior_technical=db.scalar(select(func.coalesce(func.sum(TechnicalSettlementEstimate.work_value),0)).where(TechnicalSettlementEstimate.contract_id==x.contract_id,TechnicalSettlementEstimate.settlement_side==x.settlement_side,TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved", "ForwardedToFinance")),TechnicalSettlementEstimate.estimate_id!=x.estimate_id)) or 0
     linked_financial_ids=select(TechnicalSettlementEstimate.financial_settlement_id).where(TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
-    prior_financial=db.scalar(select(func.coalesce(func.sum(ContractSettlement.work_value),0)).where(ContractSettlement.contract_id==x.contract_id,ContractSettlement.settlement_side==x.settlement_side,ContractSettlement.status.in_(("Approved","Posted")),ContractSettlement.settlement_id.not_in(linked_financial_ids))) or 0
+    prior_financial=db.scalar(select(func.coalesce(func.sum(ContractSettlement.work_value),0)).where(ContractSettlement.contract_id==x.contract_id,ContractSettlement.settlement_side==x.settlement_side,ContractSettlement.status.in_(("Approved","Posted","PendingFinalApproval")),ContractSettlement.settlement_id.not_in(linked_financial_ids))) or 0
     previous=money(Decimal(str(prior_technical))+Decimal(str(prior_financial)))
     # Match the financial settlement engine: remaining-contract deductions must use
     # the amended contract value, including approved change orders.
