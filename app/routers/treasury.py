@@ -389,6 +389,115 @@ def update_account_gl(screen_code: str, body: GLAccountLinkIn,
     return acc_out(db, a)
 
 
+@router.get("/{screen_code}/balance-reconciliation")
+def balance_reconciliation(screen_code: str, treasury_account_id: int | None = Query(None, gt=0),
+                           as_of_date: date | None = None,
+                           user: User = Depends(require_dynamic("View", set(BANK_SCREENS))),
+                           db: Session = Depends(get_db)):
+    """Compare posted treasury movements with the linked GL balance and expose excluded items."""
+    screen_account = _bound(db, screen_code)
+    a = db.get(TreasuryAccount, treasury_account_id) if treasury_account_id else screen_account
+    if a is None or not a.is_active or a.currency_code != screen_account.currency_code:
+        raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
+    if not has_permission(db, user.user_id, a.screen_code, "View"):
+        raise HTTPException(403, "ليس لديك صلاحية عرض حساب البنك أو الخزينة المحدد")
+    as_of = as_of_date or date.today()
+    ledger_balance = posted_book_balance(db, a, as_of)
+    movement_balance = _posted_treasury_movement_balance(db, a, upto=as_of)
+    T = TreasuryTransaction
+    rows = db.execute(
+        select(T, JournalEntry.status, JournalEntry.entry_no)
+        .outerjoin(JournalEntry, JournalEntry.journal_entry_id == T.journal_entry_id)
+        .where(T.treasury_account_id == a.treasury_account_id, T.transaction_date <= as_of)
+        .order_by(T.transaction_date, T.transaction_id)
+    ).all()
+    categories = {
+        "Unlinked": {"label": "حركات غير مرتبطة بقيد", "items": []},
+        "Draft": {"label": "قيود مسودة غير مرحّلة", "items": []},
+        "Reversed": {"label": "قيود ملغاة / معكوسة", "items": []},
+        "Missing": {"label": "مرجع قيد غير موجود", "items": []},
+    }
+    for t, journal_status, entry_no in rows:
+        state = journal_status or ("Unlinked" if t.journal_entry_id is None else "Missing")
+        if state == "Posted":
+            continue
+        if state not in categories:
+            continue
+        categories[state]["items"].append({
+            "transaction_id": t.transaction_id,
+            "transaction_date": t.transaction_date,
+            "voucher_no": t.voucher_no,
+            "description": t.description,
+            "inflow": money(t.inflow),
+            "outflow": money(t.outflow),
+            "journal_entry_id": t.journal_entry_id,
+            "journal_entry_no": entry_no,
+            "journal_status": state,
+        })
+
+    linked_journal_ids = select(T.journal_entry_id).where(
+        T.treasury_account_id == a.treasury_account_id,
+        T.journal_entry_id.is_not(None),
+    )
+    amount_expr = (func.coalesce(func.sum(JournalEntryDetail.debit_amount - JournalEntryDetail.credit_amount), 0)
+                   if a.currency_code == "EGP" else
+                   func.coalesce(func.sum(func.case(
+                       (JournalEntryDetail.debit_amount > 0, func.coalesce(JournalEntryDetail.fcy_amount, 0)),
+                       (JournalEntryDetail.credit_amount > 0, -func.coalesce(JournalEntryDetail.fcy_amount, 0)),
+                       else_=0,
+                   )), 0))
+    ledger_only_rows = db.execute(
+        select(JournalEntry.journal_entry_id, JournalEntry.entry_no, JournalEntry.entry_date,
+               func.coalesce(func.sum(JournalEntryDetail.debit_amount), 0),
+               func.coalesce(func.sum(JournalEntryDetail.credit_amount), 0),
+               amount_expr)
+        .join(JournalEntryDetail, JournalEntryDetail.journal_entry_id == JournalEntry.journal_entry_id)
+        .where(JournalEntryDetail.account_id == a.gl_account_id,
+               JournalEntry.status == "Posted", JournalEntry.entry_date <= as_of,
+               JournalEntry.journal_entry_id.not_in(linked_journal_ids))
+        .group_by(JournalEntry.journal_entry_id, JournalEntry.entry_no, JournalEntry.entry_date)
+        .order_by(JournalEntry.entry_date, JournalEntry.journal_entry_id)
+    ).all()
+
+    posted_tx = [(t, entry_no) for t, status, entry_no in rows if status == "Posted"]
+    posted_entry_ids = {t.journal_entry_id for t, _ in posted_tx}
+    journal_line_ids = set(db.scalars(select(JournalEntryDetail.journal_entry_id).where(
+        JournalEntryDetail.account_id == a.gl_account_id,
+        JournalEntryDetail.journal_entry_id.in_(posted_entry_ids or {-1}),
+    )))
+    movements_without_gl_line = [{
+        "transaction_id": t.transaction_id, "transaction_date": t.transaction_date,
+        "voucher_no": t.voucher_no, "description": t.description,
+        "inflow": money(t.inflow), "outflow": money(t.outflow),
+        "journal_entry_id": t.journal_entry_id, "journal_entry_no": entry_no,
+    } for t, entry_no in posted_tx if t.journal_entry_id not in journal_line_ids]
+
+    return {
+        "treasury_account_id": a.treasury_account_id,
+        "account_name": a.name_ar,
+        "gl_account_id": a.gl_account_id,
+        "currency_code": a.currency_code,
+        "as_of_date": as_of,
+        "ledger_balance": money(ledger_balance),
+        "posted_treasury_movement_balance": money(movement_balance),
+        "difference": money(ledger_balance - movement_balance),
+        "difference_explanation": (
+            "فرق بين رصيد الأستاذ العام وصافي الحركات المرتبطة بقيود مرحّلة. راجع القيود غير المرتبطة "
+            "بالحركات والحركات التي لا تحتوي قيودها على سطر لحساب البنك."
+        ),
+        "opening_balance_basis": "GL opening debit-credit" if a.currency_code == "EGP" else "FCY journal amounts; EGP opening balances excluded",
+        "excluded_movements": {
+            key: {"label": value["label"], "count": len(value["items"]), "items": value["items"]}
+            for key, value in categories.items()
+        },
+        "posted_ledger_entries_without_treasury_movement": [{
+            "journal_entry_id": row[0], "entry_no": row[1], "entry_date": row[2],
+            "debit": money(row[3]), "credit": money(row[4]), "signed_balance": money(row[5]),
+        } for row in ledger_only_rows],
+        "posted_treasury_movements_without_gl_line": movements_without_gl_line,
+    }
+
+
 @router.get("/{screen_code}/transactions")
 def transactions(screen_code: str, date_from: date | None = None, date_to: date | None = None, q: str | None = None,
                  treasury_account_id: int | None = Query(None, gt=0),
