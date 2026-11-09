@@ -746,12 +746,12 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
         base=contract_value if mode=="SingleSettlement" else (work if r.base_type=="CurrentWork" else cumulative if r.base_type=="CumulativeWork" else max(ZERO,contract_value-cumulative))
         amount=(cumulative_retention_amount(db,r,cumulative,contract_value) if is_retention_rule(r)
                 else money(base*r.rate/Decimal("100")) if r.calculation_type=="Percent" else money(r.rate))
-        if mode=="SingleSettlement":
+        if mode=="SingleSettlement" and not is_retention_rule(r):
             if r.code not in body.single_deduction_codes:
                 amount=ZERO
             elif retention_amount_used(db,r) > ZERO:
                 raise HTTPException(409,f"تم تطبيق الاستقطاع «{r.name_ar}» بالفعل على مستخلص آخر؛ لا يمكن تطبيقه مرة ثانية")
-        elif r.code in body.single_deduction_codes:
+        elif r.code in body.single_deduction_codes and not is_retention_rule(r):
             raise HTTPException(422,f"الاستقطاع «{r.name_ar}» مضبوط للتطبيق على كل المستخلصات ولا يحتاج اختيارًا يدويًا")
         cap=rule_cap_value(r,contract_value)
         if cap is not None:
