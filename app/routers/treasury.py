@@ -13,8 +13,8 @@ from ..models import (Account, AccountClassification, Counterparty, JournalEntry
 
 # شاشة → (نوع الحساب الافتراضي، العملة الافتراضية)
 BANK_SCREENS = {
-    "BankCibEgp": ("Bank", "EGP"), "CashUsd": ("Cash", "USD"), "CashEgp": ("Cash", "EGP"), "BankCairoEgp": ("Bank", "EGP"),
-    "BankHdbUsd": ("Bank", "USD"), "BankHdbEgp": ("Bank", "EGP"), "BankCibUsd": ("Bank", "USD"),
+    "BankCibEgp": ("Bank", "EGP"), "BankCibUsd": ("Bank", "USD"),
+    "CashEgp": ("Cash", "EGP"), "CashUsd": ("Cash", "USD"),
 }
 router = APIRouter(prefix="/treasury", tags=["Treasury"])
 D0 = Decimal("0")
