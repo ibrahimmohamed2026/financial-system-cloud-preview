@@ -25,7 +25,7 @@ def test_contract_creation_requires_customer_card_and_uses_master_names():
 
 def test_customer_change_is_blocked_after_settlement_history_exists():
     source = Path("app/routers/contracts.py").read_text(encoding="utf-8")
-    update = source.split("def update_contract", 1)[1].split("@router", 1)[0]
+    update = source.split("\ndef update_contract(", 1)[1].split("\n@router", 1)[0]
     assert "body.counterparty_id != c.counterparty_id" in update
     assert "ContractSettlement.settlement_id" in update
     assert "TechnicalSettlementEstimate.estimate_id" in update
