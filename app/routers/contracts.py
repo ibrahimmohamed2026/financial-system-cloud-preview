@@ -14,7 +14,7 @@ from ..models import (Contract, ContractAddendum, ContractAddendumLine, Contract
                       ContractDeductionRule, ContractAccountingConfig, ContractChangeOrder, ContractAttachment,
                       TechnicalSettlementEstimate, ContractSettlementItem, TechnicalSettlementEstimateItem, ContractSettlementSchedule)
 from ..contract_deletion import delete_settlement_tree, require_admin
-from .contract_erp import leaf_account_or_422
+from .contract_erp import leaf_account_or_422, validate_contract_rule_update, ensure_rule_not_linked
 
 router = APIRouter(prefix="/api/contracts", tags=["Contracts & Technical Office"])
 D0 = Decimal("0.00")
@@ -48,6 +48,8 @@ class ContractCreateDeductionRule(BaseModel):
     base_type: Literal["CurrentWork", "CumulativeWork", "RemainingContract"] = "CurrentWork"
     posting_side: Literal["Debit", "Credit"]
     cap_amount: Optional[Decimal] = Field(default=None, ge=0)
+    application_mode: Literal["PerSettlement", "SingleSettlement"] = "PerSettlement"
+    cap_percent: Optional[Decimal] = Field(default=None, ge=0, le=100)
     gl_account_id: Optional[int] = None
     is_active: bool = True
     sort_order: int = 0
@@ -55,6 +57,7 @@ class ContractCreateDeductionRule(BaseModel):
 class ContractActivationIn(BaseModel):
     # Full rule set reviewed by accounting; omitted means preserve existing rules.
     deduction_rules: list[ContractCreateDeductionRule] | None = Field(default=None, max_length=200)
+    deduction_rules_change_reason: str | None = Field(default=None, min_length=10, max_length=1000)
 
 class ContractScheduleItemIn(BaseModel):
     label: str | None = Field(default=None, max_length=200)
@@ -354,6 +357,7 @@ def approve_contract(contract_id: int, body: ContractActivationIn | None = None,
             incoming[key] = data
         for key, existing in current_by_key.items():
             if key not in incoming:
+                ensure_rule_not_linked(db, existing)
                 write_audit(db, user.user_id, "DeleteDuringActivation", "ContractDeductionRules", existing.rule_id,
                             old={"contract_id": contract_id, "code": existing.code, "name_ar": existing.name_ar}, new=None)
                 db.delete(existing)
@@ -361,9 +365,14 @@ def approve_contract(contract_id: int, body: ContractActivationIn | None = None,
             existing = current_by_key.get(key)
             if existing:
                 old_rule = {k: getattr(existing, k) for k in data}
+                validate_contract_rule_update(db, existing, data,
+                    controlled_reason=body.deduction_rules_change_reason)
                 for k, value in data.items(): setattr(existing, k, value)
+                audit_new = {**data, "rate": str(data["rate"])}
+                if body.deduction_rules_change_reason:
+                    audit_new["controlled_change_reason"] = body.deduction_rules_change_reason.strip()
                 write_audit(db, user.user_id, "AccountingReview", "ContractDeductionRules", existing.rule_id,
-                            old=old_rule, new={**data, "rate": str(data["rate"])})
+                            old=old_rule, new=audit_new)
             else:
                 rule = ContractDeductionRule(contract_id=contract_id, **data)
                 db.add(rule); db.flush()

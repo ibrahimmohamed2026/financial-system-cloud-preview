@@ -627,6 +627,8 @@ class ContractDeductionRule(Base):
     base_type: Mapped[str] = C("BaseType", Unicode(30), default="CurrentWork")
     posting_side: Mapped[str] = C("PostingSide", Unicode(10), default="Credit") # Debit | Credit
     cap_amount: Mapped[Optional[Decimal]] = C("CapAmount", Numeric(18, 2), nullable=True)
+    application_mode: Mapped[str] = C("ApplicationMode", Unicode(30), default="PerSettlement")
+    cap_percent: Mapped[Optional[Decimal]] = C("CapPercent", Numeric(9, 4), nullable=True)
     gl_account_id: Mapped[Optional[int]] = C("GLAccountId", ForeignKey("ChartOfAccounts.AccountId"), nullable=True)
     is_active: Mapped[bool] = C("IsActive", Boolean, default=True)
     sort_order: Mapped[int] = C("SortOrder", Integer, default=0)
