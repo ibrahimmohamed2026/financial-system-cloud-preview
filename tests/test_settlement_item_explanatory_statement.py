@@ -13,7 +13,7 @@ def test_settlement_item_explanatory_statement_is_persisted_and_forwarded():
 
     financial = Path("app/routers/contract_erp.py").read_text(encoding="utf-8")
     assert '"explanatory_statement":getattr(line,"explanatory_statement",None)' in financial
-    assert "explanatory_statement=((requested_line.explanatory_statement or "").strip() or None)" in financial
+    assert 'explanatory_statement=((requested_line.explanatory_statement or "").strip() or None)' in financial
 
     setup = Path("app/db_setup.py").read_text(encoding="utf-8")
     assert '"ContractSettlementItems", "TechnicalSettlementEstimates", "TechnicalSettlementEstimateItems"' in setup
