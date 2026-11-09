@@ -16,7 +16,7 @@ from ..models import (User, Contract, ContractItem, ContractSettlement, Contract
     TechnicalSettlementEstimate, TechnicalSettlementEstimateItem, ContractDeductionRule,
     ContractAccountingConfig, ProgressBilling, ContractAddendum, ContractChangeOrder, ContractSettlementSchedule)
 
-from .contract_erp import resolve_rule_account, is_retention_rule, cumulative_retention_amount
+from .contract_erp import resolve_rule_account, is_retention_rule, cumulative_retention_amount, calculate_vat
 from ..contract_deletion import delete_settlement_tree, require_admin
 router = APIRouter(prefix="/api/technical-settlements", tags=["Technical Office Settlements"])
 CENT = Decimal("0.01")
@@ -415,7 +415,8 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, allo
             continue
         deductions[code] = {"name": label, "amount": "0.00", "account_id": None,
                             "posting_side": "Debit" if x.settlement_side == "Customer" else "Credit"}
-    vat_rate=Decimal(str(cfg.default_vat_rate if cfg else 0)); vat=money(work*vat_rate/Decimal("100")); net=money(work+vat-total_d)
+    vat_data=calculate_vat(cfg,work,cumulative,contract_value,db=db)
+    vat=vat_data["amount"]; net=money(work+vat-total_d)
     if net<0: raise HTTPException(422,"الخصومات أكبر من صافي الأعمال والضريبة")
     fin=db.get(ContractSettlement,x.financial_settlement_id) if x.financial_settlement_id else None
     if fin and fin.status not in ("AwaitingTechnicalApproval", "Draft"):
@@ -425,7 +426,7 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, allo
         fin=ContractSettlement(contract_id=x.contract_id,settlement_side=x.settlement_side,sequence_no=seq,
             settlement_no=f"FIN-{x.estimate_id:06d}",settlement_date=x.estimate_date,
             counterparty_name=x.counterparty_name,work_value=work,cumulative_work_value=cumulative,
-            deductions_json=deductions,vat_amount=vat,net_amount=net,
+            deductions_json=deductions,vat_amount=vat,vat_rate=vat_data["rate"],vat_base_amount=vat_data["base_amount"],vat_base_type=vat_data["base_type"],vat_tax_status=vat_data["tax_status"],vat_account_id=vat_data["account_id"],net_amount=net,
             status="Draft",
             is_final=bool(getattr(x,"is_final",False)),
             notes=f"تم إنشاؤه تلقائياً من المستخلص الفني {x.estimate_no}. {x.notes or ''}".strip(),
@@ -439,6 +440,8 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, allo
         fin.cumulative_work_value=cumulative
         fin.deductions_json=deductions
         fin.vat_amount=vat
+        fin.vat_rate=vat_data["rate"];fin.vat_base_amount=vat_data["base_amount"]
+        fin.vat_base_type=vat_data["base_type"];fin.vat_tax_status=vat_data["tax_status"];fin.vat_account_id=vat_data["account_id"]
         fin.net_amount=net
         fin.is_final=bool(getattr(x,"is_final",False))
         fin.status="Draft"
