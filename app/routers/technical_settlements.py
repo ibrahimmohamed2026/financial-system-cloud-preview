@@ -117,7 +117,7 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
         seen.add(req.contract_item_id)
         item=db.scalar(select(ContractItem).where(ContractItem.item_id==req.contract_item_id,ContractItem.contract_id==c.contract_id))
         if not item: raise HTTPException(422,f"البند {req.contract_item_id} لا يتبع العقد")
-        prev_ids=select(TechnicalSettlementEstimate.estimate_id).where(TechnicalSettlementEstimate.contract_id==c.contract_id,TechnicalSettlementEstimate.settlement_side==body.settlement_side,TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")))
+        prev_ids=select(TechnicalSettlementEstimate.estimate_id).where(TechnicalSettlementEstimate.contract_id==c.contract_id,TechnicalSettlementEstimate.settlement_side==body.settlement_side,TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved", "ForwardedToFinance")))
         prev=db.scalar(select(func.coalesce(func.sum(func.coalesce(TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)),0)).where(TechnicalSettlementEstimateItem.contract_item_id==item.item_id,TechnicalSettlementEstimateItem.estimate_id.in_(prev_ids))) or 0
         # Include posted/approved financial settlement quantities if the history predates this technical workflow.
         linked_financial_ids=select(TechnicalSettlementEstimate.financial_settlement_id).where(TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
@@ -290,7 +290,7 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session):
     cfg=db.scalar(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==x.contract_id,ContractAccountingConfig.settlement_side==x.settlement_side))
     rules=db.scalars(select(ContractDeductionRule).where(ContractDeductionRule.contract_id==x.contract_id,ContractDeductionRule.settlement_side==x.settlement_side,ContractDeductionRule.is_active.is_(True)).order_by(ContractDeductionRule.sort_order,ContractDeductionRule.rule_id)).all()
     # Use the same configured deductions as the existing financial-settlement engine.
-    prior_technical=db.scalar(select(func.coalesce(func.sum(TechnicalSettlementEstimate.work_value),0)).where(TechnicalSettlementEstimate.contract_id==x.contract_id,TechnicalSettlementEstimate.settlement_side==x.settlement_side,TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")),TechnicalSettlementEstimate.estimate_id!=x.estimate_id)) or 0
+    prior_technical=db.scalar(select(func.coalesce(func.sum(TechnicalSettlementEstimate.work_value),0)).where(TechnicalSettlementEstimate.contract_id==x.contract_id,TechnicalSettlementEstimate.settlement_side==x.settlement_side,TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved", "ForwardedToFinance")),TechnicalSettlementEstimate.estimate_id!=x.estimate_id)) or 0
     linked_financial_ids=select(TechnicalSettlementEstimate.financial_settlement_id).where(TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
     prior_financial=db.scalar(select(func.coalesce(func.sum(ContractSettlement.work_value),0)).where(ContractSettlement.contract_id==x.contract_id,ContractSettlement.settlement_side==x.settlement_side,ContractSettlement.status.in_(("Approved","Posted")),ContractSettlement.settlement_id.not_in(linked_financial_ids))) or 0
     previous=money(Decimal(str(prior_technical))+Decimal(str(prior_financial)))

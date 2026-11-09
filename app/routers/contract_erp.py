@@ -426,7 +426,7 @@ def settlement_summary(contract_id: int, settlement_side: Literal["Customer","Su
     valid_estimate_ids = select(TechnicalSettlementEstimate.estimate_id).where(
         TechnicalSettlementEstimate.contract_id == contract_id,
         TechnicalSettlementEstimate.settlement_side == settlement_side,
-        TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")))
+        TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved", "ForwardedToFinance")))
     technical_rows = db.execute(select(TechnicalSettlementEstimateItem.contract_item_id,
         func.sum(func.coalesce(TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)))
         .where(TechnicalSettlementEstimateItem.estimate_id.in_(valid_estimate_ids))
