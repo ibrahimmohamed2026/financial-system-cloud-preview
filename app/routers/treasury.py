@@ -292,13 +292,8 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
         if party is None or not party.is_active:
             raise HTTPException(422, "البطاقة المرجعية غير موجودة أو غير نشطة")
     parents = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
-    # Select directly from active leaf accounts in the COA. A counterpart that is
-    # linked to another treasury account is recognized as a transfer by that link.
-    other_currency_treasury_gl_ids = select(TreasuryAccount.gl_account_id).where(
-        TreasuryAccount.is_active == True,
-        TreasuryAccount.currency_code != treasury.currency_code,
-        TreasuryAccount.screen_code.in_(BANK_SCREENS),
-    )
+    # Select directly from active leaf accounts in the COA. A counterpart linked
+    # to another accessible same-currency treasury account is recognized as a transfer.
     treasury_rows = db.scalars(select(TreasuryAccount).where(
         TreasuryAccount.is_active == True,
         TreasuryAccount.currency_code == treasury.currency_code,
@@ -310,8 +305,6 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
         and has_permission(db, user.user_id, ta.screen_code, "Add")]
     treasury_gl_ids = {ta.gl_account_id for ta in accessible_treasuries}
     inaccessible_treasury_gl_ids = select(TreasuryAccount.gl_account_id).where(
-        TreasuryAccount.is_active == True,
-        TreasuryAccount.currency_code == treasury.currency_code,
         TreasuryAccount.screen_code.in_(BANK_SCREENS),
     ).where(TreasuryAccount.gl_account_id.not_in(treasury_gl_ids))
     rows = db.execute(
@@ -319,7 +312,6 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
         .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
         .where(Account.is_active == True, Account.account_id != treasury.gl_account_id,
                Account.account_id.not_in(parents),
-               Account.account_id.not_in(other_currency_treasury_gl_ids),
                Account.account_id.not_in(inaccessible_treasury_gl_ids),
                Account.account_code.not_in(("32102001", "47101001")))
         .order_by(Account.account_code).limit(500)
