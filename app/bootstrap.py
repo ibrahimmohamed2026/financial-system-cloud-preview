@@ -77,7 +77,8 @@ def seed_screens(db: Session) -> None:
     # Hide retired bank/cheque screens without deleting historical treasury or cheque records.
     retired_codes = {"BankCairoEgp", "BankHdbUsd", "BankHdbEgp", "ChecksCairoEgp", "ChecksCairoUsd"}
     for old in db.scalars(select(Screen).where(Screen.screen_code.in_(retired_codes))):
-        old.is_active = False\n    # الشاشات المؤقتة اللي register_excel_screens.py كان بيسجلها (EXCEL_SHEET_xx) بتتعطّل عشان ماتتكررش
+        old.is_active = False
+    # الشاشات المؤقتة اللي register_excel_screens.py كان بيسجلها (EXCEL_SHEET_xx) بتتعطّل عشان ماتتكررش
     for old in db.scalars(select(Screen).where(Screen.screen_code.like("EXCEL\\_SHEET\\_%", escape="\\"))):
         old.is_active = False
     db.commit()
