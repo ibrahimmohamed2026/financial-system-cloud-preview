@@ -257,3 +257,21 @@ def test_optional_party_reference_only_checks_consistency_with_selected_chart_ac
     with pytest.raises(HTTPException) as exc:
         treasury._validate_optional_counterparty_reference(DB(), mismatching)
     assert exc.value.status_code == 422
+
+
+def test_funding_account_can_be_selected_without_type_classification_filter(monkeypatch):
+    db, account, user, counterpart = _setup(monkeypatch, "مصروفات عمومية و ادارية")
+    movement = SimpleNamespace(journal_entry_id=None)
+
+    entry_no = treasury._create_egp_journal(
+        db, account, movement, _body("funding", inflow="125000"), user,
+    )
+
+    assert entry_no == "JV-TEST-0001"
+    details = db.added_many
+    assert len(details) == 2
+    assert [(d.account_id, d.debit_amount, d.credit_amount) for d in details] == [
+        (10, Decimal("125000"), Decimal("0")),
+        (20, Decimal("0"), Decimal("125000")),
+    ]
+    _assert_balanced(details)
