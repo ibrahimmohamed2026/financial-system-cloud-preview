@@ -151,6 +151,10 @@ def test_balance_reconciliation_explains_drafts_reversals_unlinked_and_orphans(d
         debit_amount=Decimal("20"), credit_amount=Decimal("0"),
     ))
     _movement(db, 36, entry_id=36, outflow="20")
+    # A posted movement linked to a journal with a different bank-line amount.
+    mismatch = _entry(db, 37, status="Posted")
+    _line(db, mismatch, debit="40")
+    _movement(db, 37, entry_id=37, inflow="60")
     other = Account(
         account_id=20, account_code="201", account_name_ar="طرف مقابل",
         classification_id=1, normal_balance="DR", opening_debit=0,
@@ -167,14 +171,16 @@ def test_balance_reconciliation_explains_drafts_reversals_unlinked_and_orphans(d
         type("UserStub", (), {"user_id": 1})(), db,
     )
 
-    assert result["ledger_balance"] == "1350.00"
-    assert result["posted_treasury_movement_balance"] == "1380.00"
-    assert result["difference"] == "-30.00"
+    assert result["ledger_balance"] == "1390.00"
+    assert result["posted_treasury_movement_balance"] == "1440.00"
+    assert result["difference"] == "-50.00"
     assert result["excluded_movements"]["Draft"]["count"] == 1
     assert result["excluded_movements"]["Reversed"]["count"] == 1
     assert result["excluded_movements"]["Unlinked"]["count"] == 1
     assert len(result["posted_ledger_entries_without_treasury_movement"]) == 1
     assert len(result["posted_treasury_movements_without_gl_line"]) == 1
+    assert len(result["posted_treasury_movement_amount_mismatches"]) == 1
+    assert result["posted_treasury_movement_amount_mismatches"][0]["difference"] == "-20.00"
 
 
 def test_usd_treasury_movement_balance_uses_posted_native_currency_rows_only(db):
