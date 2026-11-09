@@ -236,6 +236,47 @@ def ensure_schema(engine: Engine) -> None:
                 conn.execute(text(
                     'ALTER TABLE "AuditLog" ALTER COLUMN "ActionType" TYPE VARCHAR(100)'
                 ))
+    # Move already-saved legacy linked drafts into the approved workflow once.
+    # This preserves submitted quantities, marks them technically approved as per the
+    # current save-time rule, and unlocks Finance without creating or posting journals.
+    if engine.dialect.name == "postgresql":
+        workflow_tables = set(inspect(engine).get_table_names())
+        if {"TechnicalSettlementEstimates", "TechnicalSettlementEstimateItems", "ContractSettlements"}.issubset(workflow_tables):
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    UPDATE "TechnicalSettlementEstimateItems" AS line
+                    SET "ApprovedQuantity" = line."CurrentQuantity"
+                    WHERE line."ApprovedQuantity" IS NULL
+                      AND line."EstimateId" IN (
+                        SELECT estimate."EstimateId"
+                        FROM "TechnicalSettlementEstimates" AS estimate
+                        JOIN "ContractSettlements" AS financial
+                          ON financial."SettlementId" = estimate."FinancialSettlementId"
+                        WHERE financial."Status" = 'AwaitingTechnicalApproval'
+                          AND estimate."Status" IN ('UnderReview', 'TechnicalReviewed')
+                      )
+                """))
+                conn.execute(text("""
+                    UPDATE "TechnicalSettlementEstimates" AS estimate
+                    SET "Status" = 'ForwardedToFinance',
+                        "TechnicalReviewedBy" = COALESCE(estimate."TechnicalReviewedBy", estimate."CreatedBy"),
+                        "TechnicalReviewedAt" = COALESCE(estimate."TechnicalReviewedAt", CURRENT_TIMESTAMP)
+                    FROM "ContractSettlements" AS financial
+                    WHERE financial."SettlementId" = estimate."FinancialSettlementId"
+                      AND financial."Status" = 'AwaitingTechnicalApproval'
+                      AND estimate."Status" IN ('UnderReview', 'TechnicalReviewed')
+                """))
+                conn.execute(text("""
+                    UPDATE "ContractSettlements"
+                    SET "Status" = 'Draft'
+                    WHERE "Status" = 'AwaitingTechnicalApproval'
+                      AND "SettlementId" IN (
+                        SELECT estimate."FinancialSettlementId"
+                        FROM "TechnicalSettlementEstimates" AS estimate
+                        WHERE estimate."Status" = 'ForwardedToFinance'
+                          AND estimate."FinancialSettlementId" IS NOT NULL
+                      )
+                """))
     # Capture the pre-addendum BOQ baseline exactly once; never overwrite it on later revisions.
     if "ContractItems" in inspect(engine).get_table_names():
         with engine.begin() as conn:
