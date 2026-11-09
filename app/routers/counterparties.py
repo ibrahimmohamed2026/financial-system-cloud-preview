@@ -92,6 +92,8 @@ def contract_customer_options(_: User = Depends(require_permission("Contracts", 
     ).order_by(Counterparty.legal_name, Counterparty.counterparty_id).limit(1000)).all()
     items = []
     for party in rows:
+        if party.party_type == "Mixed" and "Customer" not in (party.roles or []):
+            continue
         linked = db.get(Account, party.linked_account_id) if party.linked_account_id else None
         items.append({
             "counterparty_id": party.counterparty_id,
