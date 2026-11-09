@@ -1066,20 +1066,20 @@ def _validate_settlement_payment(db: Session, body: TxIn, treasury_account: Trea
         if body.outflow <= 0 or body.transaction_type != "supplier_payment":
             raise HTTPException(422, "مستخلص المقاول يرتبط بصرف منصرف من نوع سداد مورد/مقاول")
         amount_column = TreasuryTransaction.outflow
-    paid = money(db.scalar(
+    paid = Decimal(money(db.scalar(
         select(func.coalesce(func.sum(amount_column), 0))
         .select_from(TreasuryTransaction)
         .join(JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id)
         .where(TreasuryTransaction.settlement_id == settlement.settlement_id,
                JournalEntry.status == "Posted")
-    ) or 0)
-    reserved = money(db.scalar(
+    ) or 0))
+    reserved = Decimal(money(db.scalar(
         select(func.coalesce(func.sum(amount_column), 0))
         .select_from(TreasuryTransaction)
         .join(JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id)
         .where(TreasuryTransaction.settlement_id == settlement.settlement_id,
                JournalEntry.status == "Draft")
-    ) or 0)
+    ) or 0))
     available = money(Decimal(str(settlement.net_amount or 0)) - paid - reserved)
     if amount <= 0 or amount > available:
         raise HTTPException(409, f"قيمة الحركة تتجاوز المتبقي المتاح للمستخلص. المتاح بعد الحجوزات: {available}")
