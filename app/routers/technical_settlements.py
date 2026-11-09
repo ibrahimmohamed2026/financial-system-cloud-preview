@@ -128,18 +128,23 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
         amount=money(req.current_quantity*item.unit_price); total+=amount; prepared.append((item,previous,req.current_quantity,amount))
     total=money(total)
     if total<=0: raise HTTPException(422,"قيمة الأعمال يجب أن تكون أكبر من صفر")
+    # New estimates must enter the independent engineering queue. Submitted quantities
+    # are not approved quantities and must never create a financial settlement here.
     x=TechnicalSettlementEstimate(contract_id=c.contract_id,settlement_side=body.settlement_side,estimate_no=estimate_no,
        estimate_date=(body.estimate_date if body.estimate_date else datetime.utcnow().date()),counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,
-       work_value=total,status="TechnicalReviewed",is_final=body.is_final,notes=body.notes,created_by=user.user_id)
+       work_value=total,status="UnderReview",is_final=body.is_final,notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
     if planned_row is not None:
         planned_row.technical_estimate_id = x.estimate_id
         planned_row.status = "Submitted"
     for item,prev,qty,amount in prepared:
-        db.add(TechnicalSettlementEstimateItem(estimate_id=x.estimate_id,contract_item_id=item.item_id,previous_quantity=prev,current_quantity=qty,approved_quantity=qty,unit_price=item.unit_price,amount=amount))
-    write_audit(db,user.user_id,"Create","TechnicalSettlementEstimates",x.estimate_id,new={"estimate_no":x.estimate_no,"work_value":str(total),"status":"ForwardedToFinance","engineering_approval":False})
-    db.flush()
-    return _create_financial_from_estimate(x.estimate_id, user, db, allow_creator=True)
+        db.add(TechnicalSettlementEstimateItem(estimate_id=x.estimate_id,contract_item_id=item.item_id,previous_quantity=prev,current_quantity=qty,approved_quantity=None,unit_price=item.unit_price,amount=amount))
+    write_audit(db,user.user_id,"Create","TechnicalSettlementEstimates",x.estimate_id,
+        new={"estimate_no":x.estimate_no,"work_value":str(total),"status":"UnderReview","engineering_approval":False})
+    db.commit()
+    db.refresh(x)
+    return {"estimate":estimate_out(x,db),"financial_settlement_id":None,"financial_settlement_no":None,
+        "financial_status":None,"message":"تم حفظ المستخلص وإرساله إلى قائمة المراجعة الفنية. لن يُنشأ مستخلص مالي قبل المراجعة والاعتماد الفني."}
 
 @router.post("/{estimate_id}/return")
 def return_estimate_for_correction(estimate_id: int, body: TechnicalReturnIn,
@@ -273,11 +278,11 @@ def review_estimate(estimate_id: int, body: TechnicalReviewIn,
     return {"estimate": estimate_out(x, db), "message": "تم حفظ مراجعة البنود. المستخلص جاهز للاعتماد الفني النهائي."}
 
 
-def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, *, allow_creator: bool = False):
+def _create_financial_from_estimate(estimate_id:int, user:User, db:Session):
     x=db.scalar(select(TechnicalSettlementEstimate).where(TechnicalSettlementEstimate.estimate_id==estimate_id).with_for_update())
     if not x: raise HTTPException(404,"المستخلص الفني غير موجود")
     if x.status!="TechnicalReviewed": raise HTTPException(409,"يجب إتمام مراجعة البنود الفنية أولاً")
-    if not allow_creator and (x.technical_reviewed_by == user.user_id or x.created_by == user.user_id): raise HTTPException(403,"لا يجوز لمُعدّ المستخلص أو مراجع البنود اعتماده فنياً")
+    if x.technical_reviewed_by == user.user_id or x.created_by == user.user_id: raise HTTPException(403,"لا يجوز لمُعدّ المستخلص أو مراجع البنود اعتماده فنياً")
     c=db.get(Contract,x.contract_id)
     if not c or (c.status or "").lower()!="active": raise HTTPException(409,"العقد لم يعد نشطاً")
     lines=db.scalars(select(TechnicalSettlementEstimateItem).where(TechnicalSettlementEstimateItem.estimate_id==x.estimate_id)).all()

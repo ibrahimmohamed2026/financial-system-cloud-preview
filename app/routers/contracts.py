@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import require_permission, write_audit, get_current_user, has_permission
-from ..models import (Contract, ContractAddendum, ContractAddendumLine, ContractItem, ItemCatalog, ProgressBilling, User, ContractSettlement,
+from ..models import (Contract, ContractAddendum, ContractAddendumLine, ContractItem, ItemCatalog, ProgressBilling, Project, User, ContractSettlement,
                       ContractDeductionRule, ContractAccountingConfig, ContractChangeOrder, ContractAttachment,
                       TechnicalSettlementEstimate, ContractSettlementItem, TechnicalSettlementEstimateItem, ContractSettlementSchedule)
 from ..contract_deletion import delete_settlement_tree, require_admin
@@ -170,6 +170,15 @@ def list_contracts(q: str | None = None, skip: int = Query(0, ge=0), limit: int 
 
 @router.post("", status_code=201)
 def create_contract(body: ContractIn, user: User = Depends(require_permission("Contracts", "Add")), db: Session = Depends(get_db)):
+    if body.project_id is not None:
+        project = db.get(Project, body.project_id)
+        if project is None or not project.is_active:
+            raise HTTPException(422, "مركز تكلفة العقد غير موجود أو غير نشط")
+    for line in body.items:
+        if line.project_id is not None:
+            project = db.get(Project, line.project_id)
+            if project is None or not project.is_active:
+                raise HTTPException(422, f"مركز التكلفة المحدد للبند غير موجود أو غير نشط: {line.project_id}")
     prepared_items = []
     for line in body.items:
         catalog = db.get(ItemCatalog, line.catalog_item_id)
@@ -235,6 +244,10 @@ def update_contract(contract_id: int, body: ContractIn, user: User = Depends(req
         raise HTTPException(404, "العقد غير موجود")
     if body.contract_no is not None and body.contract_no != c.contract_no:
         raise HTTPException(409, "رقم العقد يُنشأ تلقائيًا ولا يمكن تغييره")
+    if body.project_id is not None:
+        project = db.get(Project, body.project_id)
+        if project is None or not project.is_active:
+            raise HTTPException(422, "مركز تكلفة العقد غير موجود أو غير نشط")
     old = _contract(c)
     values = body.model_dump(exclude={"items", "deduction_rules"})
     values.pop("contract_no", None)

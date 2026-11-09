@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..deps import require_permission, write_audit
-from ..models import Check, JournalEntryDetail, Project, TreasuryTransaction, User
+from ..models import Check, Contract, ContractItem, JournalEntryDetail, Project, TreasuryTransaction, User
 
 SCREEN = "CostCenters"
 router = APIRouter(prefix="/projects", tags=["CostCenters"])
@@ -37,7 +37,8 @@ def list_projects(q: str | None = None, is_active: bool | None = None,
                   _: User = Depends(require_permission(SCREEN, "View")), db: Session = Depends(get_db)):
     stmt = select(Project)
     if q and q.strip():
-        stmt = stmt.where(Project.name_ar.ilike(f"%{q.strip()}%"))
+        like = f"%{q.strip()}%"
+        stmt = stmt.where((Project.name_ar.ilike(like)) | (Project.name_en.ilike(like)))
     if is_active is not None:
         stmt = stmt.where(Project.is_active.is_(is_active))
     return db.scalars(stmt.order_by(Project.project_id)).all()
@@ -84,7 +85,7 @@ def update(pid: int, body: ProjectIn, user: User = Depends(require_permission(SC
 def delete(pid: int, user: User = Depends(require_permission(SCREEN, "Delete")), db: Session = Depends(get_db)):
     p = _get(db, pid)
     used = sum(db.scalar(select(func.count()).select_from(m).where(m.project_id == pid)) or 0
-               for m in (JournalEntryDetail, TreasuryTransaction, Check))
+               for m in (JournalEntryDetail, TreasuryTransaction, Check, Contract, ContractItem))
     if used:
         raise HTTPException(status.HTTP_409_CONFLICT, f"المشروع مستخدم في {used} حركة — عطّله بدل الحذف")
     write_audit(db, user.user_id, "Delete", "Projects", pid, {"name_ar": p.name_ar}, None)
