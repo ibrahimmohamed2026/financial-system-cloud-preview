@@ -73,6 +73,8 @@ def validate_customer_party(db: Session, counterparty_id: int | None, *, require
     if not party.is_active:
         raise HTTPException(409, "بطاقة العميل موقوفة؛ أعد تنشيطها قبل إنشاء معاملات جديدة")
     roles = set(party.roles or [])
+    if party.party_type == "Mixed" and "Customer" not in roles:
+        raise HTTPException(422, "يجب أن يكون دور العميل مضافًا إلى بطاقة الطرف المختلط")
     if party.party_type not in ("Customer", "Mixed") and "Customer" not in roles:
         raise HTTPException(422, "الطرف المحدد ليس مصنفًا كعميل")
     if not party.linked_account_id:
