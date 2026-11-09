@@ -402,24 +402,47 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
         raise HTTPException(403, "ليس لديك صلاحية عرض حساب البنك أو الخزينة المحدد")
     tid = a.treasury_account_id
     T = TreasuryTransaction
-    opening = D0
     if date_from:
-        opening = Decimal(db.scalar(select(func.coalesce(func.sum(T.inflow - T.outflow), 0)).where(
-            T.treasury_account_id == tid, T.transaction_date < date_from)) or 0)
-    stmt = select(T).where(T.treasury_account_id == tid)
+        from datetime import timedelta
+        opening = posted_book_balance(db, a, date_from - timedelta(days=1))
+    else:
+        opening = D0
+        if a.currency_code == "EGP":
+            gl = db.get(Account, a.gl_account_id)
+            if gl is not None:
+                opening = Decimal(gl.opening_debit or 0) - Decimal(gl.opening_credit or 0)
+
+    stmt = (select(T, JournalEntry.status)
+            .outerjoin(JournalEntry, JournalEntry.journal_entry_id == T.journal_entry_id)
+            .where(T.treasury_account_id == tid))
     if date_from:
         stmt = stmt.where(T.transaction_date >= date_from)
     if date_to:
         stmt = stmt.where(T.transaction_date <= date_to)
-    if q and q.strip():
-        like = f"%{q.strip()}%"
-        stmt = stmt.where(or_(T.description.ilike(like), T.recipient_name.ilike(like), T.voucher_no.ilike(like)))
-    rows = db.scalars(stmt.order_by(T.transaction_date, T.transaction_id)).all()
+    rows = db.execute(stmt.order_by(T.transaction_date, T.transaction_id)).all()
     run, out, tin, tout = opening, [], D0, D0
-    for t in rows:
-        run += t.inflow - t.outflow
-        tin += t.inflow
-        tout += t.outflow
+    pending = {
+        "Draft": {"count": 0, "inflow": D0, "outflow": D0},
+        "Reversed": {"count": 0, "inflow": D0, "outflow": D0},
+        "Unlinked": {"count": 0, "inflow": D0, "outflow": D0},
+        "Missing": {"count": 0, "inflow": D0, "outflow": D0},
+    }
+    treasury_gl = db.get(Account, a.gl_account_id)
+    treasury_label = (f"{treasury_gl.account_code} — {treasury_gl.account_name_ar}"
+                      if treasury_gl else a.name_ar)
+    for t, journal_status in rows:
+        effective_status = journal_status or ("Unlinked" if t.journal_entry_id is None else "Missing")
+        included = effective_status == "Posted"
+        if included:
+            run += t.inflow - t.outflow
+            tin += t.inflow
+            tout += t.outflow
+        elif effective_status in pending:
+            bucket = pending[effective_status]
+            bucket["count"] += 1
+            bucket["inflow"] += t.inflow
+            bucket["outflow"] += t.outflow
+
         counterpart = db.get(Account, t.counterpart_account_id) if t.counterpart_account_id else None
         counterpart_label = (f"{counterpart.account_code} — {counterpart.account_name_ar}"
                              if counterpart else "حساب غير محدد")
@@ -427,15 +450,13 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
         counterparty_reference = (
             f"{party.code} — {party.legal_name or party.name}" if party else None
         )
-        treasury_gl = db.get(Account, a.gl_account_id)
-        treasury_label = (f"{treasury_gl.account_code} — {treasury_gl.account_name_ar}"
-                          if treasury_gl else a.name_ar)
         from_label, to_label = _movement_route(treasury_label, counterpart_label, t.inflow > 0)
         out.append({"transaction_id": t.transaction_id, "transaction_date": t.transaction_date,
                     "treasury_account_id": a.treasury_account_id, "treasury_account_name": a.name_ar,
                     "treasury_account_type": a.account_type,
                     "inflow": money(t.inflow), "outflow": money(t.outflow), "balance": money(run),
                     "description": t.description, "voucher_no": t.voucher_no, "status": t.status,
+                    "journal_status": effective_status, "included_in_balance": included,
                     "recipient_name": t.recipient_name, "project_id": t.project_id,
                     "transaction_type": t.transaction_type,
                     "exchange_rate": str(t.exchange_rate) if t.exchange_rate is not None else None,
@@ -446,8 +467,20 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
                     "counterparty_label": counterparty_reference,
                     "journal_entry_id": t.journal_entry_id,
                     "locked": t.journal_entry_id is not None})
-    return {"total": len(out), "opening_balance": money(opening), "total_inflow": money(tin),
-            "total_outflow": money(tout), "closing_balance": money(run), "items": out[skip:skip + limit]}
+    if q and q.strip():
+        needle = q.strip().casefold()
+        out = [item for item in out if needle in " ".join(str(item.get(k) or "") for k in
+               ("description", "recipient_name", "voucher_no", "transaction_id")).casefold()]
+    ledger_closing = posted_book_balance(db, a, date_to)
+    movement_closing = run
+    return {"total": len(out), "opening_balance": money(opening),
+            "total_inflow": money(tin), "total_outflow": money(tout),
+            "movement_closing_balance": money(movement_closing),
+            "closing_balance": money(ledger_closing),
+            "balance_difference": money(ledger_closing - movement_closing),
+            "pending": {key: {"count": value["count"], "inflow": money(value["inflow"]),
+                              "outflow": money(value["outflow"])} for key, value in pending.items()},
+            "items": out[skip:skip + limit]}
 
 
 def _check_project(db: Session, pid: int | None):
