@@ -33,23 +33,23 @@ def _allowed(conn, user_id, permission_id):
     ).scalar_one()
 
 
-def test_job_profile_is_the_only_permission_source_for_assigned_users():
+def test_per_user_overrides_take_precedence_over_job_profile_baseline():
     engine = _permission_db()
     with engine.connect() as conn:
-        # User-level grant and ordinary role grant cannot add Delete.
-        assert _allowed(conn, 1, 2) == 0
-        # User-level denial and ordinary role cannot remove/add outside profile.
-        assert _allowed(conn, 2, 1) == 1
+        # Explicit user grant adds a permission outside the assigned profile.
+        assert _allowed(conn, 1, 2) == 1
+        # Explicit user denial removes a permission inherited from the profile.
+        assert _allowed(conn, 2, 1) == 0
         assert _allowed(conn, 2, 2) == 0
-        # The profile's assigned View permission is granted.
+        # No override means the profile remains the baseline.
         assert _allowed(conn, 3, 1) == 1
 
 
 def test_legacy_admin_role_does_not_bypass_job_profile_permissions():
     engine = _permission_db()
     with engine.connect() as conn:
-        # User 3 still has the legacy Admin role, but its assigned job profile
-        # remains the sole permission source.
+        # User 3 still has the legacy Admin role, but the assigned job profile
+        # remains the baseline when there is no explicit user override.
         assert _allowed(conn, 3, 1) == 1
         assert _allowed(conn, 3, 2) == 0
 
@@ -57,7 +57,9 @@ def test_legacy_admin_role_does_not_bypass_job_profile_permissions():
 def test_profile_permission_changes_apply_immediately_without_user_permission_copy():
     engine = _permission_db()
     with engine.begin() as conn:
-        assert _allowed(conn, 1, 2) == 0
+        assert _allowed(conn, 1, 2) == 1  # explicit user grant remains effective
+        conn.execute(text('DELETE FROM "UserPermissions" WHERE "UserId"=1 AND "PermissionId"=2'))
+        assert _allowed(conn, 1, 2) == 0  # profile baseline restored when override is removed
         conn.execute(text('INSERT INTO "JobProfilePermissions" VALUES (10, 2)'))
         assert _allowed(conn, 1, 2) == 1
         conn.execute(text('DELETE FROM "JobProfilePermissions" WHERE "JobProfileId"=10 AND "PermissionId"=2'))
@@ -87,3 +89,15 @@ def test_legacy_users_keep_user_override_then_role_fallback():
         assert _allowed(conn, 5, 2) == 0  # explicit denial overrides role
         assert _allowed(conn, 6, 1) == 0  # no override and no role grant
         assert _allowed(conn, 6, 2) == 1  # role fallback
+
+
+
+def test_explicit_user_override_wins_over_profile_and_legacy_roles():
+    engine = _permission_db()
+    with engine.begin() as conn:
+        # The legacy role grants Delete, but the profile baseline denies it.
+        assert _allowed(conn, 3, 2) == 0
+        conn.execute(text('INSERT INTO "UserPermissions" VALUES (3, 2, 1)'))
+        assert _allowed(conn, 3, 2) == 1
+        conn.execute(text('UPDATE "UserPermissions" SET "IsAllowed"=0 WHERE "UserId"=3 AND "PermissionId"=1'))
+        assert _allowed(conn, 3, 1) == 0
