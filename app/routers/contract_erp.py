@@ -250,6 +250,10 @@ def cumulative_retention_amount(db: Session, rule: ContractDeductionRule, cumula
 
 def validate_rule_settlement_amount(db: Session, settlement: ContractSettlement, rule: ContractDeductionRule, amount: Decimal) -> None:
     amount = money(amount)
+    # Standard deductions are manually adjustable without rate or cap restrictions.
+    # Retention remains system-calculated and immutable.
+    if not is_retention_rule(rule):
+        return
     _contract, _previous, contract_value = contract_financial_summary(db, rule.contract_id, rule.settlement_side)
     if is_retention_rule(rule):
         expected = cumulative_retention_amount(db, rule, Decimal(str(settlement.cumulative_work_value)),
@@ -747,6 +751,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     rules=db.scalars(select(ContractDeductionRule).where(ContractDeductionRule.contract_id==contract_id,ContractDeductionRule.settlement_side==side,ContractDeductionRule.is_active.is_(True)).order_by(ContractDeductionRule.sort_order,ContractDeductionRule.rule_id)).all()
     seq=(db.scalar(select(func.max(ContractSettlement.sequence_no)).where(ContractSettlement.contract_id==contract_id,ContractSettlement.settlement_side==side)) or 0)+1
     deductions={}; total=ZERO
+    # Retention remains automatic: its cap-committed amount is recalculated cumulatively.
     if set(body.single_deduction_codes) - {r.code for r in rules}:
         raise HTTPException(422,"تم اختيار استقطاع غير معرف في قواعد العقد")
     for r in rules:
@@ -761,24 +766,17 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
                 raise HTTPException(409,f"تم تطبيق الاستقطاع «{r.name_ar}» بالفعل على مستخلص آخر؛ لا يمكن تطبيقه مرة ثانية")
         elif r.code in body.single_deduction_codes and not is_retention_rule(r):
             raise HTTPException(422,f"الاستقطاع «{r.name_ar}» مضبوط للتطبيق على كل المستخلصات ولا يحتاج اختيارًا يدويًا")
-        cap=rule_cap_value(r,contract_value)
-        if cap is not None and not is_retention_rule(r):
-            committed=retention_amount_used(db,r,before_sequence_no=seq)
-            amount=min(amount,max(ZERO,cap-committed))
-        if r.cap_amount is not None and not is_retention_rule(r): amount=min(amount,money(r.cap_amount))
+        # Keep the rule's calculated value for audit, but allow unrestricted manual
+        # overrides for every standard deduction except automatic retention.
+        calculated_amount=money(amount)
         if r.code in body.deduction_overrides:
             requested=money(body.deduction_overrides[r.code])
             if is_retention_rule(r) and requested != amount:
                 raise HTTPException(422,f"لا يمكن تعديل التأمين المحجوز يدويًا؛ القيمة الآلية لهذا المستخلص هي {amount}")
-            if mode=="SingleSettlement" or getattr(r,"cap_percent",None) is not None:
-                if requested > amount:
-                    raise HTTPException(422,f"قيمة الخصم {r.name_ar} تتجاوز المبلغ المسموح في هذا المستخلص {amount}")
-            elif r.cap_amount is not None and requested > money(r.cap_amount):
-                raise HTTPException(422,f"قيمة الخصم {r.name_ar} تتجاوز الحد الأقصى المسموح {money(r.cap_amount)}")
             amount=requested
         rule_account=resolve_rule_account(r.code,r.name_ar,r.gl_account_id,cfg)
         if amount>0 and not rule_account: raise HTTPException(422,f"قاعدة الخصم «{r.name_ar}» غير مربوطة بحساب في شجرة الحسابات. افتح تفاصيل العقد ← بنود الخصومات ← «ربط تلقائي بالشجرة» أو اختر الحساب يدويًا.")
-        deductions[r.code]={"name":r.name_ar,"amount":str(amount),"account_id":rule_account,"posting_side":r.posting_side,"source":"contract","calculation_type":r.calculation_type,"rate":str(r.rate),"base_type":r.base_type,"base_value":str(money(base)),"application_mode":mode,"cap_percent":str(r.cap_percent) if getattr(r,"cap_percent",None) is not None else None,"cap_amount":str(r.cap_amount) if r.cap_amount is not None else None};total+=amount
+        deductions[r.code]={"name":r.name_ar,"amount":str(amount),"calculated_amount":str(calculated_amount),"manually_overridden":amount != calculated_amount,"account_id":rule_account,"posting_side":r.posting_side,"source":"contract","calculation_type":r.calculation_type,"rate":str(r.rate),"base_type":r.base_type,"base_value":str(money(base)),"application_mode":mode,"cap_percent":str(r.cap_percent) if getattr(r,"cap_percent",None) is not None else None,"cap_amount":str(r.cap_amount) if r.cap_amount is not None else None};total+=amount
     unknown=set(body.deduction_overrides)-{r.code for r in rules}
     if unknown: raise HTTPException(422,"أكواد خصم غير معرفة: "+", ".join(sorted(unknown)))
     vat_rate=body.vat_rate if body.vat_rate is not None else (cfg.default_vat_rate if cfg else Decimal("0"))
@@ -878,9 +876,8 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
         amount=requested_amount
         if amount<0: raise HTTPException(422,f"قيمة الخصم {code} لا يمكن أن تكون سالبة")
         rule=live.get(code)
-        if rule and rule.cap_amount is not None and amount > money(rule.cap_amount):
-            raise HTTPException(422,f"قيمة الخصم {d.get('name',code)} تتجاوز الحد الأقصى المسموح {money(rule.cap_amount)}")
-        # Contract calculation type and rate are immutable from the settlement screen.
+        calculated_amount=money(d.get("calculated_amount", d.get("amount", 0)) or 0)
+        # Standard deductions may be adjusted freely; only automatic retention is immutable.
         if rule:
             validate_rule_settlement_amount(db, x, rule, amount)
             d["source"]="contract"; d["calculation_type"]=rule.calculation_type
@@ -888,6 +885,8 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
             d["application_mode"]=getattr(rule,"application_mode",None) or "PerSettlement"
             d["cap_percent"]=str(rule.cap_percent) if getattr(rule,"cap_percent",None) is not None else None
         d["amount"]=str(amount)
+        d["calculated_amount"]=str(calculated_amount)
+        d["manually_overridden"]=amount != calculated_amount
         total+=amount
     added_codes=[]
     previous,contract_value=contract_financial_summary(db,x.contract_id,x.settlement_side)[1:]

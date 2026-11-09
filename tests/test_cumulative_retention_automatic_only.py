@@ -113,3 +113,45 @@ def test_prior_retention_offset_is_limited_to_earlier_settlements():
     assert "before_sequence_no: int | None = None" in helper
     assert "ContractSettlement.sequence_no < before_sequence_no" in helper
     assert "before_sequence_no=settlement.sequence_no" in source
+
+
+
+def test_standard_deduction_override_validation_does_not_apply_caps():
+    rule = SimpleNamespace(
+        code="PROFIT_TAX", name_ar="ضرائب أرباح", contract_id=1,
+        settlement_side="Subcontractor", cap_amount=Decimal("100"),
+        cap_percent=Decimal("1"),
+    )
+    # Non-retention standard deductions accept any non-negative manually entered value.
+    contract_erp.validate_rule_settlement_amount(
+        None, SimpleNamespace(), rule, Decimal("999999")
+    )
+
+
+def test_settlement_creation_allows_standard_override_above_rule_caps():
+    source = open("app/routers/contract_erp.py", encoding="utf-8").read()
+    create = source.split("def create_settlement", 1)[1].split(
+        '@router.get("/all-settlements")', 1
+    )[0]
+    assert "if is_retention_rule(r) and requested != amount" in create
+    assert "if mode==\"SingleSettlement\" or getattr(r,\"cap_percent\",None) is not None" not in create
+    assert "requested > money(r.cap_amount)" not in create
+    assert '"calculated_amount":str(calculated_amount)' in create
+    assert '"manually_overridden":amount != calculated_amount' in create
+
+
+def test_financial_review_allows_standard_override_above_rule_caps():
+    source = open("app/routers/contract_erp.py", encoding="utf-8").read()
+    update = source.split("def update_settlement_deductions", 1)[1].split(
+        "class FinancialReviewLine", 1
+    )[0]
+    assert "rule.cap_amount" not in update
+    assert "validate_rule_settlement_amount(db, x, rule, amount)" in update
+    assert 'd["calculated_amount"]=str(calculated_amount)' in update
+    assert 'd["manually_overridden"]=amount != calculated_amount' in update
+
+
+def test_technical_settlement_draft_does_not_apply_standard_deduction_caps():
+    source = open("app/routers/technical_settlements.py", encoding="utf-8").read()
+    assert "if not is_retention_rule(r) and r.cap_amount is not None" not in source
+    assert '"calculated_amount":str(amount)' in source

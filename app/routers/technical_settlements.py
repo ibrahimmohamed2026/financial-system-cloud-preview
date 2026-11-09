@@ -388,10 +388,11 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, allo
         amount=(cumulative_retention_amount(db,r,cumulative,contract_value,exclude_settlement_id=x.financial_settlement_id,before_sequence_no=current_sequence_no)
                 if is_retention_rule(r) else
                 money(base*Decimal(str(r.rate))/Decimal("100")) if r.calculation_type=="Percent" else money(r.rate))
-        if not is_retention_rule(r) and r.cap_amount is not None: amount=min(amount,money(r.cap_amount))
+        # Standard deductions may be overridden later by Finance without rule caps.
+        # Retention is the sole automatic-only exception.
         account=resolve_rule_account(r.code,r.name_ar,r.gl_account_id,cfg)
         if amount>0 and not account: raise HTTPException(422,f"قاعدة الخصم «{r.name_ar}» غير مربوطة بحساب في شجرة الحسابات. اربطها من تفاصيل العقد (ربط تلقائي بالشجرة) ثم أعد حفظ المستخلص.")
-        deductions[r.code]={"name":r.name_ar,"amount":str(amount),"account_id":account,"posting_side":r.posting_side};total_d+=amount
+        deductions[r.code]={"name":r.name_ar,"amount":str(amount),"calculated_amount":str(amount),"manually_overridden":False,"account_id":account,"posting_side":r.posting_side};total_d+=amount
     # Add the standard settlement-template deduction rows to every incoming financial draft.
     # They start at zero and can be edited by Finance; positive values still require a
     # properly configured contract deduction rule/account before journal posting.
