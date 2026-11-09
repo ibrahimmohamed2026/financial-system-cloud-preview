@@ -214,6 +214,8 @@ class SettlementPostingDB:
             return Rows(self.details)
         if self.scalar_calls == 2:
             return Rows(self.accounts)
+        if self.scalar_calls == 4:
+            return Rows([5])
         return Rows()
 
     def scalar(self, statement):
@@ -318,6 +320,19 @@ def test_treasury_ledger_balance_query_uses_posted_journals_only():
     assert "JournalEntries" in str(compiled)
     assert "Status" in str(compiled)
     assert "Posted" in compiled.params.values()
+
+
+def test_linked_settlement_journal_cannot_be_cancelled_without_reversal_workflow(monkeypatch):
+    entry = SimpleNamespace(
+        journal_entry_id=41, entry_no="CS-00000071",
+        entry_date=__import__("datetime").date(2026, 11, 9),
+        status="Posted", source_settlement_id=71,
+    )
+    monkeypatch.setattr(journal, "_get", lambda _db, _eid: entry)
+    with pytest.raises(HTTPException) as exc:
+        journal.cancel_entry(41, SimpleNamespace(user_id=5), SimpleNamespace())
+    assert exc.value.status_code == 409
+    assert "تسوية عكسية معتمدة" in str(exc.value.detail)
 
 
 def test_treasury_api_accepts_settlement_link_and_validates_before_journal_creation():
