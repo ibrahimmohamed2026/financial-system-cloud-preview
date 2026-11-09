@@ -533,8 +533,12 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
             ContractSettlement.contract_id == contract_id,
             ContractSettlement.settlement_side == side,
             ContractSettlement.status != "Posted")) or 0
-        if unfinished:
-            raise HTTPException(409, "لا يمكن إنشاء المستخلص الختامي قبل اعتماد وترحيل المستخلصات السابقة غير المكتملة")
+        pending_technical = db.scalar(select(func.count()).select_from(TechnicalSettlementEstimate).where(
+            TechnicalSettlementEstimate.contract_id == contract_id,
+            TechnicalSettlementEstimate.settlement_side == side,
+            TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved")))) or 0
+        if unfinished or pending_technical:
+            raise HTTPException(409, "لا يمكن إنشاء المستخلص الختامي قبل استكمال المستخلصات السابقة قيد المراجعة أو الاعتماد أو الترحيل")
         candidate = {item.item_id: quantity for item, quantity, _amount in lines}
         gaps = final_settlement_quantity_gaps(db, contract_id, side, candidate=candidate)
         if gaps:
@@ -879,8 +883,12 @@ def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permi
             ContractSettlement.settlement_side == x.settlement_side,
             ContractSettlement.settlement_id != x.settlement_id,
             ContractSettlement.status != "Posted")) or 0
-        if unfinished:
-            raise HTTPException(409, "لا يمكن اعتماد المستخلص الختامي قبل اكتمال وترحيل المستخلصات السابقة")
+        pending_technical = db.scalar(select(func.count()).select_from(TechnicalSettlementEstimate).where(
+            TechnicalSettlementEstimate.contract_id == x.contract_id,
+            TechnicalSettlementEstimate.settlement_side == x.settlement_side,
+            TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved")))) or 0
+        if unfinished or pending_technical:
+            raise HTTPException(409, "لا يمكن اعتماد المستخلص الختامي قبل استكمال وترحيل المستخلصات السابقة قيد المراجعة أو الاعتماد")
         gaps = final_settlement_quantity_gaps(db, x.contract_id, x.settlement_side)
         if gaps:
             reject_incomplete_final_settlement(gaps, "اعتماد المدير")
