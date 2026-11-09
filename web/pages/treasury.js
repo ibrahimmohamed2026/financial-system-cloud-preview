@@ -32,7 +32,6 @@ export async function render(main, { api, auth, route }) {
     const initialDirection = t ? (+t.inflow > 0 ? "inflow" : "outflow") : "inflow";
     const initialType = t?.transaction_type || "";
     const initialParties = await api(base + "/counterparties").catch(() => []);
-    const initialCounterpartyId = t?.counterparty_id ? String(t.counterparty_id) : "";
     const initialCounterparts = initialType
       ? await api(base + "/counterpart-accounts?direction=" + initialDirection + "&transaction_type=" + encodeURIComponent(initialType) + "&treasury_account_id=" + encodeURIComponent(t?.treasury_account_id || selectedTreasuryId)).catch(() => []) : [];
     return formDialog({
@@ -74,7 +73,8 @@ export async function render(main, { api, auth, route }) {
       const partySelect = formEl.elements.namedItem("counterparty_id");
       const accountSelect = formEl.elements.namedItem("treasury_account_id");
       const typeSelect = formEl.elements.namedItem("transaction_type");
-      let currentPartyOptions = initialParties;
+      let counterpartIsTreasury = initialCounterparts.some(a =>
+        String(a.account_id) === String(t?.counterpart_account_id) && a.is_treasury_account);
       const amount = formEl.elements.namedItem("amount");
       const setFieldLabel = (field, label) => {
         const labelElement = field?.parentElement?.querySelector("label");
@@ -83,10 +83,10 @@ export async function render(main, { api, auth, route }) {
       const updateFieldLabels = () => {
         const type = typeSelect.value, direction = movementDirectionSelect.value;
         setFieldLabel(accountSelect, tr("حساب البنك / الخزينة","Bank / cash account"));
-        const counterpartLabel = type === "funding"
-          ? tr("حساب الممول (من شجرة الحسابات)","Funding account (from chart of accounts)")
-          : type === "cash_transfer"
-            ? (direction === "inflow" ? tr("حساب المصدر","Source account") : tr("حساب المستلم","Receiving account"))
+        const counterpartLabel = counterpartIsTreasury
+          ? (direction === "inflow" ? tr("حساب المصدر","Source account") : tr("حساب المستلم","Receiving account"))
+          : type === "funding"
+            ? tr("حساب الممول (من شجرة الحسابات)","Funding account (from chart of accounts)")
             : tr("الحساب المقابل من شجرة الحسابات","Counterpart account from chart of accounts");
         setFieldLabel(counterpartSelect, counterpartLabel);
       };
@@ -97,7 +97,6 @@ export async function render(main, { api, auth, route }) {
         partySelect.disabled = true;
         try {
           const options = await api(base + "/counterparties");
-          currentPartyOptions = options;
           partySelect.innerHTML = '<option value="">—</option>' + options.map(p =>
             `<option value="${String(p.counterparty_id)}">${esc(p.label)} — ${esc(p.account_label)}</option>`).join("");
           if (options.some(p => String(p.counterparty_id) === selected)) partySelect.value = selected;
@@ -116,6 +115,9 @@ export async function render(main, { api, auth, route }) {
           counterpartSelect.innerHTML = '<option value="">—</option>' + options.map(a =>
             `<option value="${String(a.account_id)}">${esc(a.label)}</option>`).join("");
           if (options.some(a => String(a.account_id) === selected)) counterpartSelect.value = selected;
+          const selectedOption = options.find(a => String(a.account_id) === String(counterpartSelect.value));
+          counterpartIsTreasury = Boolean(selectedOption?.is_treasury_account);
+          updateFieldLabels();
           updateHint();
         } catch (e) {
           counterpartSelect.innerHTML = '<option value="">—</option>';
@@ -126,7 +128,7 @@ export async function render(main, { api, auth, route }) {
         const d = currentDirection(), type = typeSelect.value;
         const cashLabel = accountSelect.options[accountSelect.selectedIndex]?.text || "حساب البنك / الخزينة";
         const counterpartLabel = counterpartSelect.options[counterpartSelect.selectedIndex]?.text || "الحساب المقابل";
-        const isTransfer = type === "cash_transfer";
+        const isTransfer = counterpartIsTreasury;
         const routeLabel = isTransfer
           ? (d === "inflow"
             ? "من حساب المصدر " + counterpartLabel + " إلى حساب المستلم " + cashLabel
