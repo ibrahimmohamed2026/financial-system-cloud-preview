@@ -544,8 +544,7 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
     tid = a.treasury_account_id
     T = TreasuryTransaction
     if date_from:
-        from datetime import timedelta
-        opening = posted_book_balance(db, a, date_from - timedelta(days=1))
+        opening = _posted_treasury_movement_balance(db, a, before=date_from)
     else:
         opening = D0
         if a.currency_code == "EGP":
