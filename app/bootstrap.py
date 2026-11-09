@@ -36,12 +36,7 @@ _S = [  # (section, code, title_en, title_ar, route)
     ("TREASURY", "BankReconciliation", "Bank Reconciliation", "مذكرة تسوية البنك", "/treasury/reconciliation"),  # 10
     ("TREASURY", "CashUsd", "Cash - USD", "خزينة دولار", "/treasury/cash-usd"),                           # 11
     ("TREASURY", "CashEgp", "Cash - EGP", "صندوق خزينة الجنيه المصري", "/treasury/cash-egp"),
-    ("TREASURY", "BankCairoEgp", "Banque du Caire - EGP", "بنك القاهرة جنيه مصري", "/treasury/cairo-egp"),  # 12
-    ("TREASURY", "BankHdbUsd", "Real Estate Bank - USD", "البنك العقاري المصري دولار", "/treasury/hdb-usd"),  # 13
-    ("TREASURY", "BankHdbEgp", "Real Estate Bank - EGP", "البنك العقاري جنيه مصري", "/treasury/hdb-egp"),  # 14
     ("TREASURY", "BankCibUsd", "CIB Bank - USD", "البنك التجاري دولار", "/treasury/cib-usd"),             # 15
-    ("CHECKS", "ChecksCairoEgp", "Banque du Caire Checks - EGP", "أرقام شيكات بنك القاهرة جنيه", "/checks/cairo-egp"),  # 16
-    ("CHECKS", "ChecksCairoUsd", "Banque du Caire Checks - USD", "أرقام شيكات بنك القاهرة دولار", "/checks/cairo-usd"),  # 17
     ("CHECKS", "FinancialChecks", "Financial Checks Register", "إدارة الشيكات المالية", "/checks/register"),
     ("REPORTS", "AuditLogs", "Audit Logs", "سجل المراجعة والنشاطات", "/audit-logs"),  # 18
     ("REPORTS", "AnalyticsReports", "Reports & Analytics", "التقارير والرسوم البيانية", "/reports"),  # 19
@@ -79,7 +74,10 @@ def seed_screens(db: Session) -> None:
             existing_screen.title_ar = item["title_ar"]
             existing_screen.title_en = item["title_en"]
             existing_screen.is_active = True
-    # Hide retired bank/cheque screens without deleting their historical treasury or cheque records.\n    retired_codes = {"BankCairoEgp", "BankHdbUsd", "BankHdbEgp", "ChecksCairoEgp", "ChecksCairoUsd"}\n    for old in db.scalars(select(Screen).where(Screen.screen_code.in_(retired_codes))):\n        old.is_active = False\n    # الشاشات المؤقتة اللي register_excel_screens.py كان بيسجلها (EXCEL_SHEET_xx) بتتعطّل عشان ماتتكررش
+    # Hide retired bank/cheque screens without deleting historical treasury or cheque records.
+    retired_codes = {"BankCairoEgp", "BankHdbUsd", "BankHdbEgp", "ChecksCairoEgp", "ChecksCairoUsd"}
+    for old in db.scalars(select(Screen).where(Screen.screen_code.in_(retired_codes))):
+        old.is_active = False\n    # الشاشات المؤقتة اللي register_excel_screens.py كان بيسجلها (EXCEL_SHEET_xx) بتتعطّل عشان ماتتكررش
     for old in db.scalars(select(Screen).where(Screen.screen_code.like("EXCEL\\_SHEET\\_%", escape="\\"))):
         old.is_active = False
     db.commit()
