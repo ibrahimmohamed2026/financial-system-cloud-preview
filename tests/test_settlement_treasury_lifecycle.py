@@ -343,3 +343,23 @@ def test_treasury_api_accepts_settlement_link_and_validates_before_journal_creat
     assert "_validate_settlement_payment(db, body, a)" in add
     assert "JournalEntry.status == \"Posted\"" in source
     assert "JournalEntry.status == \"Draft\"" in source
+
+def test_settlement_output_with_no_paid_or_reserved_treasury_transactions():
+    settlement = SimpleNamespace(
+        settlement_id=72, contract_id=9, settlement_side="Customer",
+        sequence_no=1, settlement_no="CUS-2", is_final=False,
+        settlement_date=__import__("datetime").date(2026, 11, 9),
+        counterparty_name="Customer", counterparty_name_en=None,
+        work_value=Decimal("1000"), cumulative_work_value=Decimal("1000"),
+        deductions_json={}, vat_amount=Decimal("0"), vat_rate=None,
+        vat_tax_status=None, vat_base_type=None, vat_base_amount=None,
+        vat_account_id=None, net_amount=Decimal("1000"), status="Posted",
+        financial_approved_by=None, financial_approved_at=None,
+        manager_approved_by=None, manager_approved_at=None,
+        journal_entry_id=82, notes=None,
+    )
+    result = contract_erp.settlement_out(settlement, SettlementOutputDB("0", "0"))
+    assert result["paid_amount"] == "0.00"
+    assert result["reserved_amount"] == "0.00"
+    assert result["remaining_amount"] == "1000.00"
+    assert result["available_amount"] == "1000.00"
