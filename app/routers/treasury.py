@@ -325,7 +325,8 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
             .where(Account.is_active == True, Account.account_id != treasury.gl_account_id,
                    Account.account_id.not_in(parents),
                    Account.account_code.not_in(("32102001", "47101001")),
-                   AccountClassification.name_ar.in_(config["classifications"]))
+                   *([] if transaction_type == "funding" else
+                     [AccountClassification.name_ar.in_(config["classifications"])]))
             .order_by(Account.account_code).limit(500)
         ).all()
     posting_side = "credit" if direction == "inflow" else "debit"
@@ -500,7 +501,8 @@ def _create_usd_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
         ))
         if target_treasury is None:
             raise HTTPException(400, "التحويل لازم يكون إلى خزينة أو بنك آخر مُسجّل بالدولار")
-    elif counterpart_class is None or counterpart_class.name_ar not in config["classifications"]:
+    elif body.transaction_type != "funding" and (
+            counterpart_class is None or counterpart_class.name_ar not in config["classifications"]):
         raise HTTPException(400, "الحساب المختار لا يتبع التصنيف المسموح لنوع الحركة")
     counterpart_posting_side = "credit" if direction == "inflow" else "debit"
     if counterpart_posting_side not in ("credit", "debit"):
@@ -715,7 +717,7 @@ def _create_egp_journal(db: Session, a: TreasuryAccount, t: TreasuryTransaction,
         ))
         if target is None:
             raise HTTPException(400, "التحويل لازم يكون إلى خزينة أو بنك آخر مسجل بنفس العملة")
-    else:
+    elif body.transaction_type != "funding":
         classification = db.get(AccountClassification, counterpart.classification_id)
         if classification is None or classification.name_ar not in config["classifications"]:
             raise HTTPException(400, "الحساب المختار لا يتبع التصنيف المسموح لنوع الحركة")
