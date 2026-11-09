@@ -64,6 +64,7 @@ export async function render(main, { api, auth, route }) {
     const initialDirection = t ? (+t.inflow > 0 ? "inflow" : "outflow") : "inflow";
     const initialType = t?.transaction_type || "";
     const initialParties = await api(base + "/counterparties").catch(() => []);
+    const initialSettlements = t ? { items: [] } : await api("/api/contracts-erp/settlements/treasury-link-options").catch(() => ({ items: [] }));
     const initialCounterparts = initialType
       ? await api(base + "/counterpart-accounts?direction=" + initialDirection + "&transaction_type=" + encodeURIComponent(initialType) + "&treasury_account_id=" + encodeURIComponent(t?.treasury_account_id || selectedTreasuryId)).catch(() => []) : [];
     return formDialog({
@@ -84,6 +85,8 @@ export async function render(main, { api, auth, route }) {
       ...(acc.currency_code === "USD" ? [{ name: "exchange_rate", label: tr("سعر الدولار مقابل الجنيه","USD exchange rate to EGP"), type: "number", step: "0.000001", min: "0.000001", required: true }] : []),
       { name: "direction", label: tr("اتجاه الحركة","Movement direction"), type: "select", options: [["inflow", tr("وارد","Inflow")], ["outflow", tr("منصرف","Outflow")]], required: true },
       { name: "counterparty_id", label: tr("بطاقة الطرف (مرجع اختياري)","Party card (optional reference)"), type: "select", searchable: true, options: initialParties.map(p => [String(p.counterparty_id), p.label]), optional: true, full: true },
+      ...(!t ? [{ name: "settlement_id", label: tr("ربط بمستخلص مرحّل (اختياري)","Link to posted settlement (optional)"), type: "select", searchable: true, optional: true, full: true,
+        options: initialSettlements.items.map(x => [String(x.settlement_id), (x.contract_no || "") + " — " + x.settlement_no + " — " + x.counterparty_name + " — " + tr("متاح","Available") + " " + money(x.available_amount)]) }] : []),
       { name: "counterpart_account_id", label: tr("الحساب المقابل من شجرة الحسابات","Counterpart account from chart of accounts"), type: "select", searchable: true, options: initialCounterparts.map(a => [String(a.account_id), a.label]), required: true, full: true },
       { name: "amount", label: tr("قيمة الحركة","Transaction amount"), type: "number", step: "0.01", min: "0.01", required: true }, { name: "voucher_no", label: tr("رقم الإذن","Voucher No.") },
       { name: "description", label: tr("البيان","Description"), full: true }, { name: "status", label: tr("الحالة (مثال: تمويل)","Status (e.g. Funding)") }, { name: "recipient_name", label: tr("المستلم","Recipient") },
@@ -95,6 +98,7 @@ export async function render(main, { api, auth, route }) {
         exchange_rate: acc.currency_code === "USD" ? v.exchange_rate : null,
         counterpart_account_id: v.counterpart_account_id ? Number(v.counterpart_account_id) : null,
         counterparty_id: v.counterparty_id ? Number(v.counterparty_id) : null,
+        settlement_id: v.settlement_id ? Number(v.settlement_id) : null,
         treasury_account_id: Number(v.treasury_account_id), transaction_type: v.transaction_type } });
       selectedTreasuryId = String(v.treasury_account_id);
       toast(`${tr("تم الحفظ وإنشاء القيد كمسودة","Saved; draft journal created")}: ${saved.journal_entry_no || "—"}`); await load();
