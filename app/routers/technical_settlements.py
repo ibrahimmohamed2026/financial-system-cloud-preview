@@ -350,6 +350,14 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session):
     c=db.get(Contract,x.contract_id)
     if not c or (c.status or "").lower()!="active": raise HTTPException(409,"العقد لم يعد نشطاً")
     lines=db.scalars(select(TechnicalSettlementEstimateItem).where(TechnicalSettlementEstimateItem.estimate_id==x.estimate_id)).all()
+    if x.is_final:
+        candidate = {}
+        for line in lines:
+            candidate[line.contract_item_id] = candidate.get(line.contract_item_id, Decimal("0")) + Decimal(str(line.approved_quantity or 0))
+        gaps = final_quantity_gaps(db, x.contract_id, x.settlement_side,
+                                   candidate=candidate, exclude_estimate_id=x.estimate_id)
+        if gaps:
+            final_quantity_error(gaps, "اعتماد المستخلص الفني")
     work=money(x.work_value)
     cfg=db.scalar(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==x.contract_id,ContractAccountingConfig.settlement_side==x.settlement_side))
     rules=db.scalars(select(ContractDeductionRule).where(ContractDeductionRule.contract_id==x.contract_id,ContractDeductionRule.settlement_side==x.settlement_side,ContractDeductionRule.is_active.is_(True)).order_by(ContractDeductionRule.sort_order,ContractDeductionRule.rule_id)).all()
