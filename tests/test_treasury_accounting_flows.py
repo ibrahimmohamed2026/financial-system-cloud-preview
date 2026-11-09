@@ -120,6 +120,24 @@ def test_supplier_payment_posts_supplier_debit_bank_credit(monkeypatch):
     _assert_balanced(details)
 
 
+
+
+def test_funding_type_can_be_used_for_an_outflow(monkeypatch):
+    db, account, user, counterpart = _setup(monkeypatch, "مصروفات عمومية و ادارية")
+    movement = SimpleNamespace(journal_entry_id=None)
+
+    treasury._create_egp_journal(
+        db, account, movement, _body("funding", outflow="125000"), user,
+    )
+
+    details = db.added_many
+    assert [(d.account_id, d.debit_amount, d.credit_amount) for d in details] == [
+        (10, Decimal("0"), Decimal("125000")),
+        (20, Decimal("125000"), Decimal("0")),
+    ]
+    _assert_balanced(details)
+
+
 def test_egp_bank_to_cash_transfer_posts_one_journal_and_two_cash_movements(monkeypatch):
     target = SimpleNamespace(
         treasury_account_id=2, gl_account_id=20, name_ar="الخزينة",
@@ -170,7 +188,7 @@ def test_party_reference_is_optional_and_counterpart_options_come_from_chart(mon
         classification_id=8, is_active=True, normal_balance="DR",
     )
     classification = SimpleNamespace(
-        name_ar="عملاء وأوراق قبض", statement_type="BalanceSheet",
+        name_ar="مصروفات عمومية و ادارية", statement_type="IncomeStatement",
     )
     screen = SimpleNamespace(
         treasury_account_id=1, gl_account_id=10, currency_code="EGP",
