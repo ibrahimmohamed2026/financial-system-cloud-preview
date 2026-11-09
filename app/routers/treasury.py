@@ -3,7 +3,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..common import money, require_dynamic
@@ -441,7 +441,7 @@ def balance_reconciliation(screen_code: str, treasury_account_id: int | None = Q
     )
     amount_expr = (func.coalesce(func.sum(JournalEntryDetail.debit_amount - JournalEntryDetail.credit_amount), 0)
                    if a.currency_code == "EGP" else
-                   func.coalesce(func.sum(func.case(
+                   func.coalesce(func.sum(case(
                        (JournalEntryDetail.debit_amount > 0, func.coalesce(JournalEntryDetail.fcy_amount, 0)),
                        (JournalEntryDetail.credit_amount > 0, -func.coalesce(JournalEntryDetail.fcy_amount, 0)),
                        else_=0,
