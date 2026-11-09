@@ -9,8 +9,8 @@ from app.routers import contract_erp, treasury
 
 
 class SettlementPaymentDB:
-    def __init__(self, settlement, config, paid, reserved, contract):
-        self.values = [settlement, config, paid, reserved]
+    def __init__(self, settlement, config, paid, reserved, contract, duplicate_count=0):
+        self.values = [settlement, config, duplicate_count, paid, reserved]
         self.contract = contract
 
     def scalar(self, statement):
@@ -20,7 +20,7 @@ class SettlementPaymentDB:
         return self.contract
 
 
-def _payment_fixture(side, *, paid="200", reserved="100", net="1000"):
+def _payment_fixture(side, *, paid="200", reserved="100", net="1000", duplicate_count=0):
     settlement = SimpleNamespace(
         settlement_id=71, contract_id=9, settlement_side=side,
         status="Posted", journal_entry_id=81, net_amount=Decimal(net),
@@ -28,7 +28,7 @@ def _payment_fixture(side, *, paid="200", reserved="100", net="1000"):
     )
     config = SimpleNamespace(control_account_id=20)
     contract = SimpleNamespace(project_id=5)
-    db = SettlementPaymentDB(settlement, config, Decimal(paid), Decimal(reserved), contract)
+    db = SettlementPaymentDB(settlement, config, Decimal(paid), Decimal(reserved), contract, duplicate_count)
     return db, settlement
 
 
@@ -42,6 +42,7 @@ def _payment_body(*, side, amount, direction=None):
         counterparty_id=17,
         project_id=5,
         settlement_id=71,
+        voucher_no="VOUCHER-TEST-01",
         transaction_type="customer_collection" if side == "Customer" else "supplier_payment",
     )
 
@@ -76,6 +77,28 @@ def test_payment_cannot_exceed_remaining_amount_after_draft_reservations(side, a
         )
     assert exc.value.status_code == 409
     assert "المتاح بعد الحجوزات" in str(exc.value.detail)
+
+
+@pytest.mark.parametrize("side,paid,reserved", [
+    ("Customer", "200", "100"),
+    ("Subcontractor", "300", "200"),
+])
+def test_full_remaining_amount_can_be_paid_exactly_once(side, paid, reserved):
+    db, _ = _payment_fixture(side, paid=paid, reserved=reserved)
+    available = Decimal("1000") - Decimal(paid) - Decimal(reserved)
+    treasury._validate_settlement_payment(
+        db, _payment_body(side=side, amount=str(available))
+    )
+
+
+def test_duplicate_payment_voucher_is_rejected():
+    db, _ = _payment_fixture("Customer", duplicate_count=1)
+    with pytest.raises(HTTPException) as exc:
+        treasury._validate_settlement_payment(
+            db, _payment_body(side="Customer", amount="100")
+        )
+    assert exc.value.status_code == 409
+    assert "مستخدم بالفعل" in str(exc.value.detail)
 
 
 def test_customer_settlement_rejects_outflow_link():
