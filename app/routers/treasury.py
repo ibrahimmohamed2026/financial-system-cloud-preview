@@ -299,11 +299,14 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
         TreasuryAccount.currency_code != treasury.currency_code,
         TreasuryAccount.screen_code.in_(BANK_SCREENS),
     )
-    accessible_treasuries = [ta for ta in db.scalars(select(TreasuryAccount).where(
+    treasury_rows = db.scalars(select(TreasuryAccount).where(
         TreasuryAccount.is_active == True,
         TreasuryAccount.currency_code == treasury.currency_code,
         TreasuryAccount.screen_code.in_(BANK_SCREENS),
-    )).all() if has_permission(db, user.user_id, ta.screen_code, "View")
+    ))
+    treasury_rows = treasury_rows.all() if hasattr(treasury_rows, "all") else list(treasury_rows)
+    accessible_treasuries = [ta for ta in treasury_rows
+        if has_permission(db, user.user_id, ta.screen_code, "View")
         and has_permission(db, user.user_id, ta.screen_code, "Add")]
     treasury_gl_ids = {ta.gl_account_id for ta in accessible_treasuries}
     inaccessible_treasury_gl_ids = select(TreasuryAccount.gl_account_id).where(
