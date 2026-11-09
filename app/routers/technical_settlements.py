@@ -377,10 +377,15 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, allo
     cumulative=money(previous+work)
     if cumulative > contract_value:
         raise HTTPException(409,f"إجمالي الأعمال التراكمي {cumulative} يتجاوز قيمة العقد المعدلة {contract_value}")
+    existing_financial=db.get(ContractSettlement,x.financial_settlement_id) if x.financial_settlement_id else None
+    current_sequence_no=(existing_financial.sequence_no if existing_financial else
+        (db.scalar(select(func.max(ContractSettlement.sequence_no)).where(
+            ContractSettlement.contract_id==x.contract_id,
+            ContractSettlement.settlement_side==x.settlement_side)) or 0)+1)
     deductions={}; total_d=Decimal("0")
     for r in rules:
         base=work if r.base_type=="CurrentWork" else cumulative if r.base_type=="CumulativeWork" else max(Decimal("0"),contract_value-cumulative)
-        amount=(cumulative_retention_amount(db,r,cumulative,contract_value,exclude_settlement_id=x.financial_settlement_id)
+        amount=(cumulative_retention_amount(db,r,cumulative,contract_value,exclude_settlement_id=x.financial_settlement_id,before_sequence_no=current_sequence_no)
                 if is_retention_rule(r) else
                 money(base*Decimal(str(r.rate))/Decimal("100")) if r.calculation_type=="Percent" else money(r.rate))
         if not is_retention_rule(r) and r.cap_amount is not None: amount=min(amount,money(r.cap_amount))
