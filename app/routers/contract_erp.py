@@ -29,7 +29,9 @@ VAT_BASE_TYPES = {"CurrentWork", "CumulativeWork", "RemainingContract", "Manual"
 def calculate_vat(cfg, work, cumulative, contract_value, *, db=None, rate=None,
                   tax_status=None, base_type=None, base_amount=None):
     """Calculate VAT from contract defaults or an explicit invoice-level override."""
-    enabled = bool(getattr(cfg, "vat_enabled", False)) if cfg is not None else False
+    enabled_value = getattr(cfg, "vat_enabled", None) if cfg is not None else False
+    enabled = (bool(enabled_value) if enabled_value is not None else
+               Decimal(str(getattr(cfg, "default_vat_rate", 0) or 0)) > ZERO) if cfg is not None else False
     status = tax_status or ((getattr(cfg, "vat_tax_status", None) or "Taxable") if enabled else "NotSubject")
     if status not in VAT_STATUSES:
         raise HTTPException(422, "حالة ضريبة القيمة المضافة غير صحيحة")
@@ -679,7 +681,7 @@ def save_config(contract_id:int,body:ConfigIn,user:User=Depends(require_permissi
 @router.get("/{contract_id}/accounting-config")
 def get_config(contract_id:int, _:User=Depends(require_permission("Contracts","View")),db:Session=Depends(get_db)):
     rows=db.scalars(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==contract_id)).all()
-    return {"items":[{"settlement_side":x.settlement_side,"company_id":x.company_id,"fiscal_year_id":x.fiscal_year_id,"control_account_id":x.control_account_id,"work_account_id":x.work_account_id,"retention_account_id":x.retention_account_id,"advance_account_id":x.advance_account_id,"tax_account_id":x.tax_account_id,"vat_account_id":x.vat_account_id,"default_vat_rate":str(x.default_vat_rate),"vat_enabled":bool(getattr(x,"vat_enabled",False)),"vat_tax_status":getattr(x,"vat_tax_status",None) or "NotSubject","vat_base_type":getattr(x,"vat_base_type",None) or "CurrentWork"} for x in rows]}
+    return {"items":[{"settlement_side":x.settlement_side,"company_id":x.company_id,"fiscal_year_id":x.fiscal_year_id,"control_account_id":x.control_account_id,"work_account_id":x.work_account_id,"retention_account_id":x.retention_account_id,"advance_account_id":x.advance_account_id,"tax_account_id":x.tax_account_id,"vat_account_id":x.vat_account_id,"default_vat_rate":str(x.default_vat_rate),"vat_enabled":(bool(x.vat_enabled) if getattr(x,"vat_enabled",None) is not None else Decimal(str(x.default_vat_rate or 0))>ZERO),"vat_tax_status":getattr(x,"vat_tax_status",None) or ("Taxable" if (bool(x.vat_enabled) if getattr(x,"vat_enabled",None) is not None else Decimal(str(x.default_vat_rate or 0))>ZERO) else "NotSubject"),"vat_base_type":getattr(x,"vat_base_type",None) or "CurrentWork"} for x in rows]}
 
 def contract_financial_summary(db: Session, contract_id: int, side: str):
     c = db.get(Contract, contract_id)
