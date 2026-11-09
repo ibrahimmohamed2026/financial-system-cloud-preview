@@ -213,13 +213,13 @@ def is_retention_rule(rule: ContractDeductionRule | None) -> bool:
     if code in {"retention", "retention_insurance", "retentioninsurance", "withheld_retention"}:
         return True
     name = str(getattr(rule, "name_ar", "") or "").casefold()
-    name = name.translate(str.maketrans({"أ":"ا", "إ":"ا", "آ":"ا", "ى":"ي"}))
+    name = name.translate(str.maketrans({"أ":"ا", "إ":"ا", "آ":"ا", "ى":"ي"})).replace("ال", "")
     return any(term in name for term in ("تامين محجوز", "تامين محتجز"))
 
 def is_manual_retention_name(name: str | None) -> bool:
     """Catch attempts to recreate retention as an ordinary/manual deduction."""
     value = str(name or "").strip().casefold()
-    value = value.translate(str.maketrans({"أ":"ا", "إ":"ا", "آ":"ا", "ى":"ي"}))
+    value = value.translate(str.maketrans({"أ":"ا", "إ":"ا", "آ":"ا", "ى":"ي"})).replace("ال", "")
     return any(term in value for term in ("تامين محجوز", "تامين محتجز", "retention"))
 
 def cumulative_retention_due(cumulative_work: Decimal, rate: Decimal, previously_reserved: Decimal,
