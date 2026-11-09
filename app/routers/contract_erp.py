@@ -839,6 +839,8 @@ def approve_settlement(settlement_id:int, body:FinancialSettlementReview, user:U
             raise HTTPException(422, f"قيمة الخصم {code} لا يمكن أن تكون سالبة")
         deduction_total+=amount
         rule=live_rules.get(code)
+        if rule and rule.cap_amount is not None and amount>money(rule.cap_amount):
+            raise HTTPException(422, f"قيمة الخصم {d.get('name',code)} تتجاوز الحد الأقصى المتفق عليه")
         if rule:
             validate_rule_settlement_amount(db, x, rule, amount)
         if amount>ZERO:
@@ -965,8 +967,11 @@ def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permi
         ContractDeductionRule.settlement_side==x.settlement_side)).all()}
     for code, deduction in (x.deductions_json or {}).items():
         rule=manager_rules.get(code)
+        amount=money(deduction.get("amount",0))
+        if rule and rule.cap_amount is not None and amount>money(rule.cap_amount):
+            raise HTTPException(422, f"قيمة الخصم {deduction.get('name',code)} تتجاوز الحد الأقصى المتفق عليه")
         if rule:
-            validate_rule_settlement_amount(db, x, rule, money(deduction.get("amount",0)))
+            validate_rule_settlement_amount(db, x, rule, amount)
     if x.is_final:
         unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
             ContractSettlement.contract_id == x.contract_id,
