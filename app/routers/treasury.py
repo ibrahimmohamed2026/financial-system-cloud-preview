@@ -283,7 +283,8 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
     """Return only accounts allowed for the selected transaction type and direction."""
     screen_account = _bound(db, screen_code)
     treasury = db.get(TreasuryAccount, treasury_account_id) if treasury_account_id else screen_account
-    if treasury is None or not treasury.is_active or treasury.currency_code != screen_account.currency_code:
+    if (treasury is None or not treasury.is_active or treasury.screen_code not in BANK_SCREENS
+            or treasury.currency_code != screen_account.currency_code):
         raise HTTPException(400, "اختَر حساب بنك أو خزينة نشطًا بنفس عملة الشاشة")
     if not has_permission(db, user.user_id, treasury.screen_code, "Add"):
         raise HTTPException(403, "ليس لديك صلاحية إضافة حركة على حساب البنك أو الخزينة المحدد")
