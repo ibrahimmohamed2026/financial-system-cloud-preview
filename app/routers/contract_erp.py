@@ -386,20 +386,20 @@ def settlement_out(x, db: Session | None = None):
     if db is not None:
         amount_column = (TreasuryTransaction.inflow if x.settlement_side == "Customer"
                          else TreasuryTransaction.outflow)
-        paid = money(db.scalar(
+        paid = Decimal(str(money(db.scalar(
             select(func.coalesce(func.sum(amount_column), 0))
             .select_from(TreasuryTransaction)
             .join(JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id)
             .where(TreasuryTransaction.settlement_id == x.settlement_id,
                    JournalEntry.status == "Posted")
-        ) or 0)
-        reserved = money(db.scalar(
+        ) or 0)))
+        reserved = Decimal(str(money(db.scalar(
             select(func.coalesce(func.sum(amount_column), 0))
             .select_from(TreasuryTransaction)
             .join(JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id)
             .where(TreasuryTransaction.settlement_id == x.settlement_id,
                    JournalEntry.status == "Draft")
-        ) or 0)
+        ) or 0)))
     remaining = max(ZERO, money(Decimal(x.net_amount or 0) - paid))
     available = max(ZERO, money(Decimal(x.net_amount or 0) - paid - reserved))
     contract = db.get(Contract, x.contract_id) if db is not None else None
