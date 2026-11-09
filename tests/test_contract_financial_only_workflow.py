@@ -64,3 +64,15 @@ def test_final_financial_settlement_is_rechecked_at_api_creation_manager_approva
     assert "technical_qty" in source and "financial_qty" in source
     assert 'TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance"))' in source
     assert "لا يمكن اعتماد المستخلص الختامي قبل اكتمال وترحيل المستخلصات السابقة" in source
+
+def test_contract_settlement_status_length_and_existing_postgres_schema_upgrade():
+    models = Path("app/models.py").read_text(encoding="utf-8")
+    settlement_model = models.split("class ContractSettlement(Base):", 1)[1].split(
+        "\nclass ", 1
+    )[0]
+    assert 'C("Status", Unicode(40), default="Draft")' in settlement_model
+
+    setup = Path("app/db_setup.py").read_text(encoding="utf-8")
+    assert 'if engine.dialect.name == "postgresql" and "ContractSettlements" in inspect(engine).get_table_names():' in setup
+    assert 'ALTER TABLE "ContractSettlements" ALTER COLUMN "Status" TYPE VARCHAR(40)' in setup
+    assert 'status_length < 40' in setup
