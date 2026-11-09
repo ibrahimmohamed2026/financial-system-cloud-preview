@@ -14,7 +14,7 @@ from ..models import (Contract, ContractAddendum, ContractAddendumLine, Contract
                       ContractDeductionRule, ContractAccountingConfig, ContractChangeOrder, ContractAttachment,
                       TechnicalSettlementEstimate, ContractSettlementItem, TechnicalSettlementEstimateItem, ContractSettlementSchedule)
 from ..contract_deletion import delete_settlement_tree, require_admin
-from .contract_erp import leaf_account_or_422, validate_contract_rule_update, ensure_rule_not_linked
+from .contract_erp import leaf_account_or_422, validate_contract_rule_update, ensure_rule_not_linked, validate_unique_rule_account
 
 router = APIRouter(prefix="/api/contracts", tags=["Contracts & Technical Office"])
 D0 = Decimal("0.00")
@@ -201,6 +201,13 @@ def create_contract(body: ContractIn, user: User = Depends(require_permission("C
         data = rule.model_dump()
         data["code"] = rule.code.strip()
         data["name_ar"] = rule.name_ar.strip()
+        if data["gl_account_id"] and any(
+            existing["settlement_side"] == data["settlement_side"]
+            and existing["gl_account_id"] == data["gl_account_id"]
+            and existing["code"].casefold() != data["code"].casefold()
+            for existing in prepared_rules
+        ):
+            raise HTTPException(422, "لا يجوز ربط حساب الأستاذ نفسه بأكثر من بند استقطاع لنفس نوع المستخلص")
         prepared_rules.append(data)
     values = body.model_dump(exclude={"items", "deduction_rules"})
     # New contracts go directly to accounting review; there is no engineering approval stage.
@@ -352,6 +359,10 @@ def approve_contract(contract_id: int, body: ContractActivationIn | None = None,
                 raise HTTPException(422, f"كود الخصم {rule.code} مكرر لنفس نوع المستخلص")
             if rule.gl_account_id:
                 leaf_account_or_422(db, rule.gl_account_id, "حساب الخصم: ")
+                validate_unique_rule_account(db, contract_id, rule.settlement_side,
+                                             rule.gl_account_id, rule.code,
+                                             current_by_key.get((rule.settlement_side, rule.code.strip().casefold())).rule_id
+                                             if current_by_key.get((rule.settlement_side, rule.code.strip().casefold())) else None)
             data = rule.model_dump()
             data["code"] = rule.code.strip(); data["name_ar"] = rule.name_ar.strip()
             incoming[key] = data
