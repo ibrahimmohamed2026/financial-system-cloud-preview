@@ -81,7 +81,7 @@ def test_contract_settlement_status_length_and_existing_postgres_schema_upgrade(
 def test_audit_log_action_type_length_and_existing_postgres_schema_upgrade():
     models = Path("app/models.py").read_text(encoding="utf-8")
     audit_model = models.split("class AuditLog(Base):", 1)[1].split(
-        "\\nclass ", 1
+        "\nclass ", 1
     )[0]
     assert 'C("ActionType", Unicode(100))' in audit_model
 
