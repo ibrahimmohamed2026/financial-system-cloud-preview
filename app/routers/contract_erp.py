@@ -502,7 +502,9 @@ def update_rule(rule_id:int,body:RuleIn,user:User=Depends(require_permission("Co
     write_audit(db,user.user_id,"Update","ContractDeductionRules",x.rule_id,old=old,new=rule_out(x));db.commit();db.refresh(x);return rule_out(x)
 
 @router.put("/deduction-rules/{rule_id}/controlled")
-def controlled_update_rule(rule_id:int,body:ControlledRuleUpdateIn,user:User=Depends(require_permission("Contracts","Edit")),db:Session=Depends(get_db)):
+def controlled_update_rule(rule_id:int,body:ControlledRuleUpdateIn,user:User=Depends(get_current_user),db:Session=Depends(get_db)):
+    if not has_permission(db, user.user_id, "Contracts", "FinancialApprove"):
+        raise HTTPException(403, "ليس لديك صلاحية الاعتماد المالي لتعديل شروط استقطاع مرتبطة بمستخلصات")
     x=db.get(ContractDeductionRule,rule_id)
     if not x: raise HTTPException(404,"قاعدة الخصم غير موجودة")
     if body.gl_account_id: leaf_account_or_422(db,body.gl_account_id,"حساب الخصم: ")
