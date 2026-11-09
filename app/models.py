@@ -669,7 +669,7 @@ class ContractSettlement(Base):
     deductions_json: Mapped[dict] = C("DeductionsJson", JSON, default=dict)
     vat_amount: Mapped[Decimal] = C("VatAmount", Numeric(18, 2), default=Decimal("0"))
     net_amount: Mapped[Decimal] = C("NetAmount", Numeric(18, 2), default=Decimal("0"))
-    status: Mapped[str] = C("Status", Unicode(20), default="Draft")
+    status: Mapped[str] = C("Status", Unicode(40), default="Draft")
     financial_approved_by: Mapped[Optional[int]] = C("FinancialApprovedBy", ForeignKey("Users.UserId"), nullable=True)
     financial_approved_at: Mapped[Optional[datetime]] = C("FinancialApprovedAt", DateTime, nullable=True)
     manager_approved_by: Mapped[Optional[int]] = C("ManagerApprovedBy", ForeignKey("Users.UserId"), nullable=True)

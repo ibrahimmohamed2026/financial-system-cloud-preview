@@ -213,6 +213,18 @@ def ensure_schema(engine: Engine) -> None:
                 with engine.begin() as conn:
                     conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {sql_type}'))
     Base.metadata.create_all(engine)
+    # Existing PostgreSQL installations keep the original VARCHAR(20) definition
+    # because create_all() does not alter columns on existing tables. Widen it
+    # before the application writes workflow states such as AwaitingTechnicalApproval.
+    if engine.dialect.name == "postgresql" and "ContractSettlements" in inspect(engine).get_table_names():
+        settlement_columns = {col["name"]: col for col in inspect(engine).get_columns("ContractSettlements")}
+        status_type = settlement_columns.get("Status", {}).get("type")
+        status_length = getattr(status_type, "length", None)
+        if status_length is not None and status_length < 40:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    'ALTER TABLE "ContractSettlements" ALTER COLUMN "Status" TYPE VARCHAR(40)'
+                ))
     # Capture the pre-addendum BOQ baseline exactly once; never overwrite it on later revisions.
     if "ContractItems" in inspect(engine).get_table_names():
         with engine.begin() as conn:
