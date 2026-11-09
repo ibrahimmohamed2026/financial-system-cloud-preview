@@ -24,7 +24,7 @@ def test_technical_estimate_creates_locked_financial_draft_on_save_then_unlocks_
     assert 'status="AwaitingTechnicalApproval" if allow_unreviewed else "Draft"' in forwarding
     assert "line.current_quantity if allow_unreviewed" in forwarding
     assert 'x.status="ForwardedToFinance"' in forwarding
-    assert 'fin.status="Draft"' in forwarding
+    assert 'fin.status="AwaitingTechnicalApproval" if allow_unreviewed else "Draft"' in forwarding
     assert 'x.created_by == user.user_id' in forwarding
     assert 'x.technical_reviewed_by == user.user_id' in forwarding
     assert "return _create_financial_from_estimate(estimate_id, user, db)" in approval_endpoint
