@@ -52,6 +52,11 @@ def company_profile_out(company: Company) -> dict:
 
 class UserPermissionOverride(BaseModel):
     permission_id: int
+    is_allowed: bool | None
+
+
+class UserCreatePermissionOverride(BaseModel):
+    permission_id: int
     is_allowed: bool
 
 
@@ -63,7 +68,7 @@ class UserCreate(BaseModel):
     role_ids: list[int] = []
     job_profile_id: int | None = None
     project_id: int | None = None
-    permission_overrides: list[UserPermissionOverride] = Field(default_factory=list)
+    permission_overrides: list[UserCreatePermissionOverride] = Field(default_factory=list)
 
     @field_validator("password")
     @classmethod
