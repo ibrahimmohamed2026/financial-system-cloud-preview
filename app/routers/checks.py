@@ -17,8 +17,8 @@ from ..models import (Account, Beneficiary, Check, CheckPrintTemplate, CheckStat
                       AccountClassification, JournalEntry, JournalEntryDetail, Project, TreasuryAccount,
                       TreasuryTransaction, User, utcnow, ContractSettlement, Contract, Counterparty)
 
-CHECK_SCREENS = {"ChecksCib", "ChecksCairoEgp", "ChecksCairoUsd"}
-CHECK_CURRENCY = {"ChecksCib": "EGP", "ChecksCairoEgp": "EGP", "ChecksCairoUsd": "USD"}
+CHECK_SCREENS = {"ChecksCib", "ChecksCibUsd"}
+CHECK_CURRENCY = {"ChecksCib": "EGP", "ChecksCibUsd": "USD"}
 STATUSES = ["جديد", "مطبوع", "تم التسليم", "تم الصرف", "ملغي", "مرتد"]
 # الانتقالات المسموحة
 NEXT = {"جديد": {"مطبوع", "تم التسليم", "ملغي"}, "مطبوع": {"تم التسليم", "ملغي"},
