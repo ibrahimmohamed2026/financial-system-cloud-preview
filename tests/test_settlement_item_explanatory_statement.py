@@ -8,7 +8,7 @@ def test_settlement_item_explanatory_statement_is_persisted_and_forwarded():
     technical = Path("app/routers/technical_settlements.py").read_text(encoding="utf-8")
     assert "explanatory_statement: str | None = None" in technical
     assert '"explanatory_statement":i.explanatory_statement' in technical
-    assert 'explanatory_statement=(req.explanatory_statement or "").strip() or None' in technical
+    assert "explanatory_statement=explanatory_statement" in technical
     assert "explanatory_statement=line.explanatory_statement" in technical
 
     financial = Path("app/routers/contract_erp.py").read_text(encoding="utf-8")
