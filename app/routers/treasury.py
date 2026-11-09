@@ -279,11 +279,17 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
                Account.account_code.not_in(("32102001", "47101001")))
         .order_by(Account.account_code).limit(500)
     ).all()
+    treasury_gl_ids = set(db.scalars(select(TreasuryAccount.gl_account_id).where(
+        TreasuryAccount.is_active == True,
+        TreasuryAccount.currency_code == treasury.currency_code,
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
+    )))
     posting_side = "credit" if direction == "inflow" else "debit"
     side_ar = "دائن بالقيد" if direction == "inflow" else "مدين بالقيد"
     return [{"account_id": a.account_id, "label": f"{a.account_code} — {a.account_name_ar} ({side_ar})",
              "classification": cl.name_ar, "statement_type": cl.statement_type,
-             "normal_balance": a.normal_balance, "posting_side": posting_side} for a, cl in rows]
+             "normal_balance": a.normal_balance, "posting_side": posting_side,
+             "is_treasury_account": a.account_id in treasury_gl_ids} for a, cl in rows]
 
 
 @router.post("/{screen_code}/account", status_code=201)
