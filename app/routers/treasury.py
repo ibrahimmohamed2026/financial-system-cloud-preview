@@ -438,6 +438,7 @@ def balance_reconciliation(screen_code: str, treasury_account_id: int | None = Q
     linked_journal_ids = select(T.journal_entry_id).where(
         T.treasury_account_id == a.treasury_account_id,
         T.journal_entry_id.is_not(None),
+        T.transaction_date <= as_of,
     )
     amount_expr = (func.coalesce(func.sum(JournalEntryDetail.debit_amount - JournalEntryDetail.credit_amount), 0)
                    if a.currency_code == "EGP" else
