@@ -72,3 +72,21 @@ def test_contract_ui_selects_customer_card_instead_of_free_text_identity():
     assert "name:'counterparty_id'" in source
     assert "readonly:true" in source
     assert "v.client_name=selectedCustomer.legal_name" in source
+
+
+
+def test_customer_name_is_not_entered_again_on_technical_statement():
+    technical = Path("app/routers/technical_settlements.py").read_text(encoding="utf-8")
+    ui = Path("web/pages/settlements.js").read_text(encoding="utf-8")
+    assert "counterparty_name: str | None = Field(default=None" in technical
+    assert 'body.settlement_side == "Subcontractor" and not (body.counterparty_name or "").strip()' in technical
+    assert "const syncPartyFields=()=>{const customer=form.settlement_side.value==='Customer'" in ui
+    assert "counterparty_name:data.counterparty_name||null" in ui
+
+
+def test_direct_customer_settlement_also_inherits_contract_party():
+    source = Path("app/routers/contract_erp.py").read_text(encoding="utf-8")
+    create = source.split("def create_settlement", 1)[1].split("@router.get", 1)[0]
+    assert 'validate_customer_party(db, c.counterparty_id) if side == "Customer"' in create
+    assert "counterparty_id=customer_party.counterparty_id if customer_party else None" in create
+    assert "if side == " + '"Subcontractor"' + " and not (body.counterparty_name or \"\").strip()" in create
