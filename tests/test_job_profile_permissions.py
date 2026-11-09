@@ -99,5 +99,5 @@ def test_explicit_user_override_wins_over_profile_and_legacy_roles():
         assert _allowed(conn, 3, 2) == 0
         conn.execute(text('INSERT INTO "UserPermissions" VALUES (3, 2, 1)'))
         assert _allowed(conn, 3, 2) == 1
-        conn.execute(text('UPDATE "UserPermissions" SET "IsAllowed"=0 WHERE "UserId"=3 AND "PermissionId"=1'))
+        conn.execute(text('INSERT INTO "UserPermissions" VALUES (3, 1, 0)'))
         assert _allowed(conn, 3, 1) == 0
