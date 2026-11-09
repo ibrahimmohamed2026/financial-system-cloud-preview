@@ -63,6 +63,44 @@ def resolve_rule_account(rule_code, name_ar, gl_account_id, cfg):
     if "advance" in code or "مقدم" in (name_ar or ""): return cfg.advance_account_id
     return None
 
+def final_settlement_quantity_gaps(db, contract_id, side, candidate=None):
+    """Calculate final quantities once: linked technical/financial certificates are never double-counted."""
+    linked_financial_ids = select(TechnicalSettlementEstimate.financial_settlement_id).where(
+        TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
+    estimate_ids = select(TechnicalSettlementEstimate.estimate_id).where(
+        TechnicalSettlementEstimate.contract_id == contract_id,
+        TechnicalSettlementEstimate.settlement_side == side,
+        TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved", "ForwardedToFinance")))
+    financial_ids = select(ContractSettlement.settlement_id).where(
+        ContractSettlement.contract_id == contract_id,
+        ContractSettlement.settlement_side == side,
+        ContractSettlement.status.in_(("Approved", "Posted", "PendingFinalApproval")),
+        ContractSettlement.settlement_id.not_in(linked_financial_ids))
+    candidate = candidate or {}
+    gaps = []
+    for item in db.scalars(select(ContractItem).where(ContractItem.contract_id == contract_id).order_by(ContractItem.item_no)).all():
+        technical_qty = db.scalar(select(func.coalesce(func.sum(func.coalesce(
+            TechnicalSettlementEstimateItem.approved_quantity,
+            TechnicalSettlementEstimateItem.current_quantity)), 0)).where(
+                TechnicalSettlementEstimateItem.contract_item_id == item.item_id,
+                TechnicalSettlementEstimateItem.estimate_id.in_(estimate_ids))) or 0
+        financial_qty = db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity), 0)).where(
+            ContractSettlementItem.contract_item_id == item.item_id,
+            ContractSettlementItem.settlement_id.in_(financial_ids))) or 0
+        settled = Decimal(str(technical_qty)) + Decimal(str(financial_qty)) + Decimal(str(candidate.get(item.item_id, 0)))
+        remaining = Decimal(str(item.quantity)) - settled
+        if remaining != 0:
+            gaps.append({"item_no": item.item_no, "description": item.description,
+                         "contract_quantity": str(item.quantity), "settled_quantity": str(settled),
+                         "remaining_quantity": str(remaining), "unit": item.unit})
+    return gaps
+
+def reject_incomplete_final_settlement(gaps, stage):
+    details = "؛ ".join(
+        f"البند {g['item_no']} ({g['description']}): المتبقي {g['remaining_quantity']} {g['unit']} "
+        f"(التعاقدي {g['contract_quantity']}، المسوّى {g['settled_quantity']})" for g in gaps)
+    raise HTTPException(409, f"لا يمكن {stage} المستخلص الختامي قبل تسوية كامل كميات العقد. {details}")
+
 def item_out(x):
     # Keep old contract lines readable; new lines expose the linked central item/account.
     return {"item_id":x.item_id,"contract_id":x.contract_id,"item_no":x.item_no,"description":x.description,"unit":x.unit,"quantity":str(x.quantity),"unit_price":str(x.unit_price),"original_quantity":str(x.original_quantity) if getattr(x,"original_quantity",None) is not None else str(x.quantity),"original_unit_price":str(x.original_unit_price) if getattr(x,"original_unit_price",None) is not None else str(x.unit_price),"total":str(money(x.quantity*x.unit_price)),"catalog_item_id":getattr(x,"catalog_item_id",None),"account_id":getattr(x,"account_id",None),"project_id":getattr(x,"project_id",None)}
@@ -490,6 +528,11 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
         work=money(body.work_value)
     cumulative=money(previous+work)
     if cumulative>contract_value: raise HTTPException(409,f"إجمالي الأعمال المعتمدة {cumulative} يتجاوز قيمة العقد المعدلة {contract_value}")
+    if body.is_final:
+        candidate = {item.item_id: quantity for item, quantity, _amount in lines}
+        gaps = final_settlement_quantity_gaps(db, contract_id, side, candidate=candidate)
+        if gaps:
+            reject_incomplete_final_settlement(gaps, "إنشاء")
     cfg=db.scalar(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==contract_id,ContractAccountingConfig.settlement_side==side))
     rules=db.scalars(select(ContractDeductionRule).where(ContractDeductionRule.contract_id==contract_id,ContractDeductionRule.settlement_side==side,ContractDeductionRule.is_active.is_(True)).order_by(ContractDeductionRule.sort_order,ContractDeductionRule.rule_id)).all()
     deductions={}; total=ZERO
@@ -824,6 +867,10 @@ def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permi
     _,reserved_value,contract_value=contract_financial_summary(db,x.contract_id,x.settlement_side)
     if reserved_value>contract_value:
         raise HTTPException(409,"لا يمكن اعتماد المدير: إجمالي المستخلصات المعتمدة والمعلقة يتجاوز قيمة العقد المعدلة")
+    if x.is_final:
+        gaps = final_settlement_quantity_gaps(db, x.contract_id, x.settlement_side)
+        if gaps:
+            reject_incomplete_final_settlement(gaps, "اعتماد المدير")
     x.manager_approved_by=user.user_id
     x.manager_approved_at=datetime.utcnow()
     x.status="Approved"
@@ -845,6 +892,10 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
     if x.status!="Approved": raise HTTPException(409,"يجب اعتماد المستخلص قبل الترحيل")
     contract = db.scalar(select(Contract).where(Contract.contract_id==x.contract_id).with_for_update())
     if not contract or contract.status.lower() != "active": raise HTTPException(409,"لا يمكن ترحيل مستخلص لعقد غير فعّال")
+    if x.is_final:
+        gaps = final_settlement_quantity_gaps(db, x.contract_id, x.settlement_side)
+        if gaps:
+            reject_incomplete_final_settlement(gaps, "ترحيل")
     cfg=db.scalar(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==x.contract_id,ContractAccountingConfig.settlement_side==x.settlement_side))
     if not cfg: raise HTTPException(422,"لم يتم ضبط حسابات المحاسبة لهذا العقد ونوع المستخلص")
     fy=db.get(FiscalYear,cfg.fiscal_year_id)
