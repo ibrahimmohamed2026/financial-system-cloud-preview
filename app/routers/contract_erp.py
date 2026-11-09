@@ -104,7 +104,38 @@ def reject_incomplete_final_settlement(gaps, stage):
 def item_out(x):
     # Keep old contract lines readable; new lines expose the linked central item/account.
     return {"item_id":x.item_id,"contract_id":x.contract_id,"item_no":x.item_no,"description":x.description,"unit":x.unit,"quantity":str(x.quantity),"unit_price":str(x.unit_price),"original_quantity":str(x.original_quantity) if getattr(x,"original_quantity",None) is not None else str(x.quantity),"original_unit_price":str(x.original_unit_price) if getattr(x,"original_unit_price",None) is not None else str(x.unit_price),"total":str(money(x.quantity*x.unit_price)),"catalog_item_id":getattr(x,"catalog_item_id",None),"account_id":getattr(x,"account_id",None),"project_id":getattr(x,"project_id",None)}
-def rule_out(x): return {"rule_id":x.rule_id,"contract_id":x.contract_id,"settlement_side":x.settlement_side,"code":x.code,"name_ar":x.name_ar,"calculation_type":x.calculation_type,"rate":str(x.rate),"base_type":x.base_type,"posting_side":x.posting_side,"cap_amount":str(x.cap_amount) if x.cap_amount is not None else None,"gl_account_id":x.gl_account_id,"is_active":x.is_active,"sort_order":x.sort_order}
+def rule_out(x): return {"rule_id":x.rule_id,"contract_id":x.contract_id,"settlement_side":x.settlement_side,"code":x.code,"name_ar":x.name_ar,"calculation_type":x.calculation_type,"rate":str(x.rate),"base_type":x.base_type,"posting_side":x.posting_side,"cap_amount":str(x.cap_amount) if x.cap_amount is not None else None,"application_mode":getattr(x,"application_mode",None) or "PerSettlement","cap_percent":str(x.cap_percent) if getattr(x,"cap_percent",None) is not None else None,"gl_account_id":x.gl_account_id,"is_active":x.is_active,"sort_order":x.sort_order}
+
+def retention_amount_used(db: Session, rule: ContractDeductionRule, *, posted_only: bool = False, exclude_settlement_id: int | None = None) -> Decimal:
+    """Sum amounts already booked or reserved for this contract rule."""
+    statuses = ("Posted",) if posted_only else ("Draft", "PendingApproval", "PendingFinalApproval", "Approved", "Posted")
+    q = select(ContractSettlement).where(
+        ContractSettlement.contract_id == rule.contract_id,
+        ContractSettlement.settlement_side == rule.settlement_side,
+        ContractSettlement.status.in_(statuses))
+    if exclude_settlement_id is not None:
+        q = q.where(ContractSettlement.settlement_id != exclude_settlement_id)
+    total = ZERO
+    for settlement in db.scalars(q).all():
+        value = (settlement.deductions_json or {}).get(rule.code)
+        if isinstance(value, dict):
+            total += Decimal(str(value.get("amount", 0) or 0))
+    return money(total)
+
+def rule_cap_value(rule: ContractDeductionRule, contract_value: Decimal) -> Decimal | None:
+    percent = getattr(rule, "cap_percent", None)
+    if percent is not None:
+        return money(Decimal(str(contract_value)) * Decimal(str(percent)) / Decimal("100"))
+    if rule.cap_amount is not None:
+        return money(rule.cap_amount)
+    return None
+
+def rule_metrics(db: Session, rule: ContractDeductionRule) -> dict:
+    _contract, _previous, contract_value = contract_financial_summary(db, rule.contract_id, rule.settlement_side)
+    used = retention_amount_used(db, rule, posted_only=True)
+    cap = rule_cap_value(rule, contract_value)
+    return {"posted_amount": str(used), "cap_amount_effective": str(cap) if cap is not None else None,
+            "remaining_cap": str(max(ZERO, cap-used)) if cap is not None else None}
 STANDARD_SETTLEMENT_DEDUCTIONS = [
     ("ADVANCE_PAYMENT", "دفعة مقدمة"), ("RETENTION", "تأمين محجوز"),
     ("FINAL_INSURANCE", "تأمين نهائي"), ("PROFIT_TAX", "ضرائب أرباح"),
@@ -175,6 +206,8 @@ class RuleIn(BaseModel):
     settlement_side: Literal["Customer","Subcontractor"]; code: str = Field(min_length=1,max_length=50)
     name_ar: str = Field(min_length=1,max_length=150); calculation_type: Literal["Percent","Fixed"] = "Percent"
     rate: Decimal = Field(default=Decimal("0"),ge=0); base_type: Literal["CurrentWork","CumulativeWork","RemainingContract"] = "CurrentWork"
+    application_mode: Literal["PerSettlement","SingleSettlement"] = "PerSettlement"
+    cap_percent: Optional[Decimal] = Field(default=None,ge=0,le=100)
     posting_side: Literal["Debit","Credit"]; cap_amount: Optional[Decimal] = Field(default=None,ge=0)
     gl_account_id: Optional[int] = None; is_active: bool = True; sort_order: int = 0
 class ConfigIn(BaseModel):
@@ -193,6 +226,7 @@ class SettlementIn(BaseModel):
     items: list[SettlementLineIn] = Field(default_factory=list)
     vat_rate: Optional[Decimal] = Field(default=None,ge=0,le=100)
     deduction_overrides: dict[str,Decimal] = Field(default_factory=dict)
+    single_deduction_codes: list[str] = Field(default_factory=list)
     notes: Optional[str] = None
     @model_validator(mode="after")
     def valid_overrides(self):
@@ -355,12 +389,13 @@ def delete_item(contract_id:int,item_id:int,user:User=Depends(require_permission
 def list_rules(contract_id:int, settlement_side:Literal["Customer","Subcontractor"]|None=None, _:User=Depends(require_permission("Contracts","View")), db:Session=Depends(get_db)):
     q=select(ContractDeductionRule).where(ContractDeductionRule.contract_id==contract_id)
     if settlement_side: q=q.where(ContractDeductionRule.settlement_side==settlement_side)
-    return {"items":[rule_out(x) for x in db.scalars(q.order_by(ContractDeductionRule.sort_order,ContractDeductionRule.rule_id)).all()]}
+    return {"items":[{**rule_out(x), **rule_metrics(db,x)} for x in db.scalars(q.order_by(ContractDeductionRule.sort_order,ContractDeductionRule.rule_id)).all()]}
 
 @router.post("/{contract_id}/deduction-rules",status_code=201)
 def save_rule(contract_id:int,body:RuleIn,user:User=Depends(require_permission("Contracts","Edit")),db:Session=Depends(get_db)):
     if not db.get(Contract,contract_id): raise HTTPException(404,"العقد غير موجود")
     if body.gl_account_id: leaf_account_or_422(db,body.gl_account_id,"حساب الخصم: ")
+    if body.cap_percent is not None and body.calculation_type != "Percent": raise HTTPException(422,"الحد الأقصى كنسبة من العقد يتطلب أن تكون طريقة الحساب نسبة مئوية")
     duplicate=db.scalar(select(ContractDeductionRule).where(ContractDeductionRule.contract_id==contract_id,ContractDeductionRule.settlement_side==body.settlement_side,ContractDeductionRule.code==body.code))
     if duplicate: raise HTTPException(409,"كود الخصم موجود بالفعل لهذا العقد والجهة")
     x=ContractDeductionRule(contract_id=contract_id,**body.model_dump());db.add(x);db.flush();write_audit(db,user.user_id,"Create","ContractDeductionRules",x.rule_id,new=rule_out(x));db.commit();db.refresh(x);return rule_out(x)
@@ -371,6 +406,7 @@ def update_rule(rule_id:int,body:RuleIn,user:User=Depends(require_permission("Co
     if not x: raise HTTPException(404,"قاعدة الخصم غير موجودة")
     if body.gl_account_id: leaf_account_or_422(db,body.gl_account_id,"حساب الخصم: ")
     old=rule_out(x)
+    if body.cap_percent is not None and body.calculation_type != "Percent": raise HTTPException(422,"الحد الأقصى كنسبة من العقد يتطلب أن تكون طريقة الحساب نسبة مئوية")
     for k,v in body.model_dump().items(): setattr(x,k,v)
     write_audit(db,user.user_id,"Update","ContractDeductionRules",x.rule_id,old=old,new=rule_out(x));db.commit();db.refresh(x);return rule_out(x)
 
@@ -546,17 +582,32 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     cfg=db.scalar(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==contract_id,ContractAccountingConfig.settlement_side==side))
     rules=db.scalars(select(ContractDeductionRule).where(ContractDeductionRule.contract_id==contract_id,ContractDeductionRule.settlement_side==side,ContractDeductionRule.is_active.is_(True)).order_by(ContractDeductionRule.sort_order,ContractDeductionRule.rule_id)).all()
     deductions={}; total=ZERO
+    if set(body.single_deduction_codes) - {r.code for r in rules}:
+        raise HTTPException(422,"تم اختيار استقطاع غير معرف في قواعد العقد")
     for r in rules:
         base=work if r.base_type=="CurrentWork" else cumulative if r.base_type=="CumulativeWork" else max(ZERO,contract_value-cumulative)
         amount=money(base*r.rate/Decimal("100")) if r.calculation_type=="Percent" else money(r.rate)
+        mode=getattr(r,"application_mode",None) or "PerSettlement"
+        if mode=="SingleSettlement":
+            if r.code not in body.single_deduction_codes:
+                amount=ZERO
+            elif retention_amount_used(db,r) > ZERO:
+                raise HTTPException(409,f"تم تطبيق الاستقطاع «{r.name_ar}» بالفعل على مستخلص آخر؛ لا يمكن تطبيقه مرة ثانية")
+        elif r.code in body.single_deduction_codes:
+            raise HTTPException(422,f"الاستقطاع «{r.name_ar}» مضبوط للتطبيق على كل المستخلصات ولا يحتاج اختيارًا يدويًا")
+        cap=rule_cap_value(r,contract_value)
+        if cap is not None:
+            committed=retention_amount_used(db,r)
+            amount=min(amount,max(ZERO,cap-committed))
         if r.cap_amount is not None: amount=min(amount,money(r.cap_amount))
         if r.code in body.deduction_overrides:
-            amount=money(body.deduction_overrides[r.code])
-            if r.cap_amount is not None and amount > money(r.cap_amount):
-                raise HTTPException(422,f"قيمة الخصم {r.name_ar} تتجاوز الحد الأقصى المسموح {money(r.cap_amount)}")
+            requested=money(body.deduction_overrides[r.code])
+            if requested > amount:
+                raise HTTPException(422,f"قيمة الخصم {r.name_ar} تتجاوز المبلغ المسموح في هذا المستخلص {amount}")
+            amount=requested
         rule_account=resolve_rule_account(r.code,r.name_ar,r.gl_account_id,cfg)
         if amount>0 and not rule_account: raise HTTPException(422,f"قاعدة الخصم «{r.name_ar}» غير مربوطة بحساب في شجرة الحسابات. افتح تفاصيل العقد ← بنود الخصومات ← «ربط تلقائي بالشجرة» أو اختر الحساب يدويًا.")
-        deductions[r.code]={"name":r.name_ar,"amount":str(amount),"account_id":rule_account,"posting_side":r.posting_side,"source":"contract","calculation_type":r.calculation_type,"rate":str(r.rate),"base_type":r.base_type,"base_value":str(money(base))};total+=amount
+        deductions[r.code]={"name":r.name_ar,"amount":str(amount),"account_id":rule_account,"posting_side":r.posting_side,"source":"contract","calculation_type":r.calculation_type,"rate":str(r.rate),"base_type":r.base_type,"base_value":str(money(base)),"application_mode":mode,"cap_percent":str(r.cap_percent) if getattr(r,"cap_percent",None) is not None else None,"cap_amount":str(r.cap_amount) if r.cap_amount is not None else None};total+=amount
     unknown=set(body.deduction_overrides)-{r.code for r in rules}
     if unknown: raise HTTPException(422,"أكواد خصم غير معرفة: "+", ".join(sorted(unknown)))
     vat_rate=body.vat_rate if body.vat_rate is not None else (cfg.default_vat_rate if cfg else Decimal("0"))
