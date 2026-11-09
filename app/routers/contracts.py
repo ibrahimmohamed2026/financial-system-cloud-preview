@@ -12,8 +12,9 @@ from ..database import get_db
 from ..deps import require_permission, write_audit, get_current_user, has_permission
 from ..models import (Contract, ContractAddendum, ContractAddendumLine, ContractItem, ItemCatalog, ProgressBilling, Project, User, ContractSettlement,
                       ContractDeductionRule, ContractAccountingConfig, ContractChangeOrder, ContractAttachment,
-                      TechnicalSettlementEstimate, ContractSettlementItem, TechnicalSettlementEstimateItem, ContractSettlementSchedule)
+                      TechnicalSettlementEstimate, ContractSettlementItem, TechnicalSettlementEstimateItem, ContractSettlementSchedule, Counterparty)
 from ..contract_deletion import delete_settlement_tree, require_admin
+from ..counterparties import validate_customer_party
 from .contract_erp import leaf_account_or_422, validate_contract_rule_update, ensure_rule_not_linked, validate_unique_rule_account
 
 router = APIRouter(prefix="/api/contracts", tags=["Contracts & Technical Office"])
@@ -77,6 +78,7 @@ class ContractIn(BaseModel):
     contract_no: Optional[str] = Field(default=None, max_length=50)
     title: str = Field(min_length=1, max_length=250)
     title_en: str | None = Field(default=None, max_length=250)
+    counterparty_id: int = Field(gt=0)
     client_name: str = Field(min_length=1, max_length=200)
     client_name_en: str | None = Field(default=None, max_length=200)
     project_id: Optional[int] = None
@@ -136,7 +138,7 @@ class BillingIn(BaseModel):
         return self
 
 def _contract(c):
-    return {"contract_id":c.contract_id,"request_id":getattr(c,"request_id",None),"contract_no":c.contract_no,"title":c.title,"title_en":c.title_en,"client_name":c.client_name,"client_name_en":c.client_name_en,
+    return {"contract_id":c.contract_id,"request_id":getattr(c,"request_id",None),"contract_no":c.contract_no,"title":c.title,"title_en":c.title_en,"client_name":c.client_name,"client_name_en":c.client_name_en,"counterparty_id":c.counterparty_id,
             "project_id":c.project_id,"start_date":c.start_date,"end_date":c.end_date,"original_value":str(c.original_value),
             "status":c.status,"notes":c.notes,"created_at":c.created_at}
 def _addendum(a):
@@ -173,6 +175,7 @@ def list_contracts(q: str | None = None, skip: int = Query(0, ge=0), limit: int 
 
 @router.post("", status_code=201)
 def create_contract(body: ContractIn, user: User = Depends(require_permission("Contracts", "Add")), db: Session = Depends(get_db)):
+    party = validate_customer_party(db, body.counterparty_id)
     if body.project_id is not None:
         project = db.get(Project, body.project_id)
         if project is None or not project.is_active:
@@ -210,6 +213,8 @@ def create_contract(body: ContractIn, user: User = Depends(require_permission("C
             raise HTTPException(422, "لا يجوز ربط حساب الأستاذ نفسه بأكثر من بند استقطاع لنفس نوع المستخلص")
         prepared_rules.append(data)
     values = body.model_dump(exclude={"items", "deduction_rules"})
+    values["client_name"] = party.legal_name or party.name
+    values["client_name_en"] = party.name_en
     # New contracts go directly to accounting review; there is no engineering approval stage.
     values["status"] = "PendingFinancial"
     values["contract_no"] = f"CT-PENDING-{uuid4().hex}"
@@ -308,12 +313,22 @@ def update_contract(contract_id: int, body: ContractIn, user: User = Depends(req
         raise HTTPException(404, "العقد غير موجود")
     if body.contract_no is not None and body.contract_no != c.contract_no:
         raise HTTPException(409, "رقم العقد يُنشأ تلقائيًا ولا يمكن تغييره")
+    party = validate_customer_party(db, body.counterparty_id)
+    if body.counterparty_id != c.counterparty_id:
+        has_history = (
+            db.scalar(select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id == contract_id).limit(1)) is not None
+            or db.scalar(select(TechnicalSettlementEstimate.estimate_id).where(TechnicalSettlementEstimate.contract_id == contract_id).limit(1)) is not None
+        )
+        if has_history:
+            raise HTTPException(409, "لا يمكن تغيير العميل بعد إنشاء مستخلصات؛ حفاظًا على هوية المستندات والسجل المحاسبي التاريخي")
     if body.project_id is not None:
         project = db.get(Project, body.project_id)
         if project is None or not project.is_active:
             raise HTTPException(422, "مركز تكلفة العقد غير موجود أو غير نشط")
     old = _contract(c)
     values = body.model_dump(exclude={"items", "deduction_rules"})
+    values["client_name"] = party.legal_name or party.name
+    values["client_name_en"] = party.name_en
     values.pop("contract_no", None)
     requested_status = values.pop("status", None)
     if "status" in body.model_fields_set and requested_status != c.status:
