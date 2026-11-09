@@ -102,3 +102,15 @@ def test_positive_vat_requires_a_linked_account():
             Decimal("2000000"),
         )
     assert exc.value.status_code == 422
+
+
+def test_legacy_contract_rate_remains_enabled_when_new_flag_is_null():
+    legacy = SimpleNamespace(
+        default_vat_rate=Decimal("14"),
+        vat_tax_status=None,
+        vat_base_type=None,
+        vat_account_id=9001,
+    )
+    result = calculate_vat(legacy, Decimal("1000000"), Decimal("1200000"), Decimal("2000000"))
+    assert result["amount"] == Decimal("140000.00")
+    assert result["tax_status"] == "Taxable"
