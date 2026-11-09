@@ -197,10 +197,9 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
         db.add(TechnicalSettlementEstimateItem(estimate_id=x.estimate_id,contract_item_id=item.item_id,previous_quantity=prev,current_quantity=qty,approved_quantity=None,unit_price=item.unit_price,amount=amount))
     write_audit(db,user.user_id,"Create","TechnicalSettlementEstimates",x.estimate_id,
         new={"estimate_no":x.estimate_no,"work_value":str(total),"status":"UnderReview","engineering_approval":False})
-    db.commit()
-    db.refresh(x)
-    return {"estimate":estimate_out(x,db),"financial_settlement_id":None,"financial_settlement_no":None,
-        "financial_status":None,"message":"تم حفظ المستخلص وإرساله إلى قائمة المراجعة الفنية. لن يُنشأ مستخلص مالي قبل المراجعة والاعتماد الفني."}
+    # Create the linked financial draft immediately so Finance can see and track it.
+    # The draft remains locked from financial review until the technical approval step.
+    return _create_financial_from_estimate(x.estimate_id, user, db, allow_unreviewed=True)
 
 @router.post("/{estimate_id}/return")
 def return_estimate_for_correction(estimate_id: int, body: TechnicalReturnIn,
@@ -275,9 +274,7 @@ def resubmit_corrected_estimate(estimate_id: int, body: TechnicalCorrectionIn,
     x.notes = (x.notes or "") + f"\nإعادة تقديم بواسطة المهندس المُعد: {body.notes.strip()}"
     write_audit(db, user.user_id, "ResubmitAfterCorrection", "TechnicalSettlementEstimates", estimate_id,
         old={"status": old_status}, new={"status": x.status, "work_value": str(total), "items": changes, "notes": body.notes.strip()})
-    db.commit()
-    db.refresh(x)
-    return {"estimate": estimate_out(x, db), "message": "تم استكمال المستخلص وإعادة إرساله للمراجعة الفنية."}
+    return _create_financial_from_estimate(estimate_id, user, db, allow_unreviewed=True)
 
 
 @router.post("/{estimate_id}/review")
@@ -342,15 +339,18 @@ def review_estimate(estimate_id: int, body: TechnicalReviewIn,
     return {"estimate": estimate_out(x, db), "message": "تم حفظ مراجعة البنود. المستخلص جاهز للاعتماد الفني النهائي."}
 
 
-def _create_financial_from_estimate(estimate_id:int, user:User, db:Session):
+def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, allow_unreviewed:bool=False):
     x=db.scalar(select(TechnicalSettlementEstimate).where(TechnicalSettlementEstimate.estimate_id==estimate_id).with_for_update())
     if not x: raise HTTPException(404,"المستخلص الفني غير موجود")
-    if x.status!="TechnicalReviewed": raise HTTPException(409,"يجب إتمام مراجعة البنود الفنية أولاً")
-    if x.technical_reviewed_by == user.user_id or x.created_by == user.user_id: raise HTTPException(403,"لا يجوز لمُعدّ المستخلص أو مراجع البنود اعتماده فنياً")
+    if allow_unreviewed:
+        if x.status not in ("UnderReview", "ReturnedForCorrection", "TechnicalReviewed"):
+            raise HTTPException(409,"لا يمكن تحديث المسودة المالية من هذه الحالة الفنية")
+    else:
+        if x.status!="TechnicalReviewed": raise HTTPException(409,"يجب إتمام مراجعة البنود الفنية أولاً")
     c=db.get(Contract,x.contract_id)
     if not c or (c.status or "").lower()!="active": raise HTTPException(409,"العقد لم يعد نشطاً")
     lines=db.scalars(select(TechnicalSettlementEstimateItem).where(TechnicalSettlementEstimateItem.estimate_id==x.estimate_id)).all()
-    if x.is_final:
+    if x.is_final and not allow_unreviewed:
         candidate = {}
         for line in lines:
             candidate[line.contract_item_id] = candidate.get(line.contract_item_id, Decimal("0")) + Decimal(str(line.approved_quantity or 0))
@@ -406,19 +406,58 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session):
                             "posting_side": "Debit" if x.settlement_side == "Customer" else "Credit"}
     vat_rate=Decimal(str(cfg.default_vat_rate if cfg else 0)); vat=money(work*vat_rate/Decimal("100")); net=money(work+vat-total_d)
     if net<0: raise HTTPException(422,"الخصومات أكبر من صافي الأعمال والضريبة")
-    seq=(db.scalar(select(func.max(ContractSettlement.sequence_no)).where(ContractSettlement.contract_id==x.contract_id,ContractSettlement.settlement_side==x.settlement_side)) or 0)+1
-    fin=ContractSettlement(contract_id=x.contract_id,settlement_side=x.settlement_side,sequence_no=seq,settlement_no=f"FIN-{x.estimate_id:06d}",settlement_date=x.estimate_date,counterparty_name=x.counterparty_name,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,net_amount=net,status="Draft",is_final=bool(getattr(x,"is_final",False)),notes=f"تم إنشاؤه تلقائياً من المستخلص الفني {x.estimate_no}. {x.notes or ''}".strip(),created_by=user.user_id)
-    db.add(fin);db.flush()
+    fin=db.get(ContractSettlement,x.financial_settlement_id) if x.financial_settlement_id else None
+    if fin and fin.status!="AwaitingTechnicalApproval":
+        raise HTTPException(409,"المسودة المالية المرتبطة لم تعد في انتظار الاعتماد الفني؛ لا يمكن استبدال بياناتها")
+    if fin is None:
+        seq=(db.scalar(select(func.max(ContractSettlement.sequence_no)).where(ContractSettlement.contract_id==x.contract_id,ContractSettlement.settlement_side==x.settlement_side)) or 0)+1
+        fin=ContractSettlement(contract_id=x.contract_id,settlement_side=x.settlement_side,sequence_no=seq,
+            settlement_no=f"FIN-{x.estimate_id:06d}",settlement_date=x.estimate_date,
+            counterparty_name=x.counterparty_name,work_value=work,cumulative_work_value=cumulative,
+            deductions_json=deductions,vat_amount=vat,net_amount=net,
+            status="AwaitingTechnicalApproval" if allow_unreviewed else "Draft",
+            is_final=bool(getattr(x,"is_final",False)),
+            notes=f"تم إنشاؤه تلقائياً من المستخلص الفني {x.estimate_no}. {x.notes or ''}".strip(),
+            created_by=user.user_id)
+        db.add(fin);db.flush()
+        x.financial_settlement_id=fin.settlement_id
+    else:
+        fin.settlement_date=x.estimate_date
+        fin.counterparty_name=x.counterparty_name
+        fin.work_value=work
+        fin.cumulative_work_value=cumulative
+        fin.deductions_json=deductions
+        fin.vat_amount=vat
+        fin.net_amount=net
+        fin.is_final=bool(getattr(x,"is_final",False))
+        fin.status="AwaitingTechnicalApproval" if allow_unreviewed else "Draft"
+        fin.notes=f"تم إنشاؤه تلقائياً من المستخلص الفني {x.estimate_no}. {x.notes or ''}".strip()
+        for old_line in db.scalars(select(ContractSettlementItem).where(
+                ContractSettlementItem.settlement_id==fin.settlement_id)).all():
+            db.delete(old_line)
+        db.flush()
     for line in lines:
-        approved_qty = line.approved_quantity if line.approved_quantity is not None else Decimal("0")
+        approved_qty = (line.current_quantity if allow_unreviewed else
+                        (line.approved_quantity if line.approved_quantity is not None else Decimal("0")))
         if approved_qty > 0:
-            db.add(ContractSettlementItem(settlement_id=fin.settlement_id,contract_item_id=line.contract_item_id,quantity=approved_qty,unit_price=line.unit_price,amount=money(approved_qty*line.unit_price)))
-    x.status="ForwardedToFinance";x.reviewed_by=None;x.reviewed_at=None;x.financial_settlement_id=fin.settlement_id
+            db.add(ContractSettlementItem(settlement_id=fin.settlement_id,contract_item_id=line.contract_item_id,
+                quantity=approved_qty,unit_price=line.unit_price,amount=money(approved_qty*line.unit_price)))
+    if not allow_unreviewed:
+        x.status="ForwardedToFinance";x.reviewed_by=None;x.reviewed_at=None
     linked_schedule=db.scalar(select(ContractSettlementSchedule).where(ContractSettlementSchedule.technical_estimate_id==x.estimate_id).with_for_update())
     if linked_schedule is not None: linked_schedule.status="Submitted"
-    write_audit(db,user.user_id,"ForwardToFinance","TechnicalSettlementEstimates",x.estimate_id,new={"status":x.status,"financial_settlement_id":fin.settlement_id,"work_value":str(work),"engineering_approval":False})
-    db.commit();db.refresh(fin)
-    return {"estimate":estimate_out(x,db),"financial_settlement_id":fin.settlement_id,"financial_settlement_no":fin.settlement_no,"financial_status":fin.status,"net_amount":str(fin.net_amount),"message":"تم حفظ المستخلص وتحويله مباشرة إلى المالية دون اعتماد هندسي؛ المستخلص المالي الآن مسودة للمراجعة."}
+    audit_action="CreateFinancialDraftForTechnicalEstimate" if allow_unreviewed else "ForwardToFinance"
+    write_audit(db,user.user_id,audit_action,"TechnicalSettlementEstimates",x.estimate_id,
+        new={"status":x.status,"financial_settlement_id":fin.settlement_id,
+             "financial_status":fin.status,"work_value":str(work),
+             "engineering_approval":not allow_unreviewed})
+    db.commit();db.refresh(fin);db.refresh(x)
+    message=("تم حفظ المستخلص وإنشاء مسودة مالية مرتبطة به فوراً. تظل المراجعة المالية مقفلة حتى الاعتماد الفني."
+             if allow_unreviewed else
+             "تم الاعتماد الفني وتحويل المستخلص المالي المرتبط إلى قائمة المراجعة المالية.")
+    return {"estimate":estimate_out(x,db),"financial_settlement_id":fin.settlement_id,
+        "financial_settlement_no":fin.settlement_no,"financial_status":fin.status,
+        "net_amount":str(fin.net_amount),"message":message}
 
 
 @router.post("/{estimate_id}/approve")

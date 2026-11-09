@@ -802,7 +802,7 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
     x=db.scalar(select(ContractSettlement).where(ContractSettlement.settlement_id==settlement_id).with_for_update())
     if not x: raise HTTPException(404,"المستخلص غير موجود")
     if x.status not in ("Draft", "PendingApproval") or x.journal_entry_id is not None:
-        raise HTTPException(409,"لا يمكن تعديل الخصومات بعد الاعتماد المالي أو الترحيل؛ التعديل متاح قبل الاعتماد فقط")
+        raise HTTPException(409,"لا يمكن تعديل الخصومات قبل الاعتماد الفني أو بعد الاعتماد المالي أو الترحيل")
     deductions=normalized_deductions(x)
     unknown=set(body.amounts)-set(deductions)
     if unknown: raise HTTPException(422,"بنود خصم غير موجودة في هذا المستخلص: "+", ".join(sorted(unknown)))
@@ -881,6 +881,10 @@ def approve_settlement(settlement_id:int, body:FinancialSettlementReview, user:U
     x=db.scalar(select(ContractSettlement).where(ContractSettlement.settlement_id==settlement_id).with_for_update())
     if not x: raise HTTPException(404,"المستخلص غير موجود")
     if x.status not in ("Draft", "PendingApproval"): raise HTTPException(409,"المستخلص ليس بانتظار المراجعة المالية")
+    linked_estimate=db.scalar(select(TechnicalSettlementEstimate).where(
+        TechnicalSettlementEstimate.financial_settlement_id==x.settlement_id))
+    if linked_estimate and linked_estimate.status!="ForwardedToFinance":
+        raise HTTPException(409,"المراجعة المالية غير متاحة قبل الاعتماد الفني للمستخلص المرتبط")
     if x.created_by == user.user_id:
         raise HTTPException(403, "لا يجوز لمُعدّ المستخلص إجراء المراجعة المالية لنفسه")
     if set(body.checks) != REQUIRED_FINANCIAL_REVIEW_CHECKS or not all(body.checks.values()):
