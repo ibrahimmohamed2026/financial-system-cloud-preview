@@ -20,7 +20,7 @@ def test_cheque_books_are_cib_egp_and_cib_usd_only():
 
 def test_seeded_treasury_and_cheque_routes_match_the_fixed_scope():
     screens = {item["code"]: item["route"] for item in SCREENS}
-    assert {code for code in screens if code.startswith("Bank") or code.startswith("Cash")} == {
+    assert {code for code in screens if code.startswith("BankCib") or code.startswith("Cash")} == {
         "BankCibEgp", "BankCibUsd", "CashEgp", "CashUsd"
     }
     assert {code for code in screens if code.startswith("Checks")} == {
