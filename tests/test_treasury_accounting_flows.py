@@ -2,6 +2,9 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+
 from app.routers import treasury
 
 
@@ -155,7 +158,7 @@ def test_cash_transfer_api_direction_is_source_outflow_only():
     assert not treasury._movement_direction_allowed("cash_transfer", "inflow")
 
 
-def test_party_counterpart_options_require_selected_party_and_return_only_its_linked_account(monkeypatch):
+def test_party_reference_is_optional_and_counterpart_options_come_from_chart(monkeypatch):
     party = SimpleNamespace(
         counterparty_id=7, party_type="Customer", is_active=True,
         linked_account_id=20, account_id=21,
@@ -187,20 +190,70 @@ def test_party_counterpart_options_require_selected_party_and_return_only_its_li
         def scalar(self, statement):
             return None
 
+        def scalars(self, statement):
+            return []
+
+        def execute(self, statement):
+            return SimpleNamespace(all=lambda: [(linked, classification)])
+
     db = DB()
     user = SimpleNamespace(user_id=5)
     monkeypatch.setattr(treasury, "_bound", lambda *_: screen)
     monkeypatch.setattr(treasury, "has_permission", lambda *_: True)
 
-    assert treasury.counterpart_accounts(
+    rows_without_card = treasury.counterpart_accounts(
         "BankCibEgp", direction="inflow", transaction_type="customer_collection",
         counterparty_id=None, user=user, db=db,
-    ) == []
-    rows = treasury.counterpart_accounts(
+    )
+    rows_with_reference = treasury.counterpart_accounts(
         "BankCibEgp", direction="inflow", transaction_type="customer_collection",
         counterparty_id=7, user=user, db=db,
     )
-    assert len(rows) == 1
-    assert rows[0]["account_id"] == 20
-    assert "15401001" in rows[0]["label"]
-    assert "دائن بالقيد" in rows[0]["label"]
+    assert rows_without_card == rows_with_reference
+    assert len(rows_without_card) == 1
+    assert rows_without_card[0]["account_id"] == 20
+    assert "15401001" in rows_without_card[0]["label"]
+    assert "دائن بالقيد" in rows_without_card[0]["label"]
+
+
+
+def test_optional_party_reference_does_not_supply_the_account():
+    body = treasury.TxIn(
+        transaction_date=date(2026, 11, 8),
+        inflow=Decimal("100"),
+        outflow=Decimal("0"),
+        transaction_type="customer_collection",
+        counterpart_account_id=20,
+    )
+
+    class DB:
+        def get(self, model, key):
+            raise AssertionError("No party lookup should happen when reference is omitted")
+
+    treasury._validate_optional_counterparty_reference(DB(), body)
+    assert body.counterpart_account_id == 20
+    assert body.counterparty_id is None
+
+
+def test_optional_party_reference_only_checks_consistency_with_selected_chart_account():
+    party = SimpleNamespace(
+        is_active=True, party_type="Customer", account_id=20, linked_account_id=None,
+    )
+
+    class DB:
+        def get(self, model, key):
+            return party if model is treasury.Counterparty and key == 7 else None
+
+    matching = treasury.TxIn(
+        transaction_date=date(2026, 11, 8), inflow=Decimal("100"), outflow=Decimal("0"),
+        transaction_type="customer_collection", counterpart_account_id=20, counterparty_id=7,
+    )
+    treasury._validate_optional_counterparty_reference(DB(), matching)
+
+    mismatching = treasury.TxIn(
+        transaction_date=date(2026, 11, 8), inflow=Decimal("100"), outflow=Decimal("0"),
+        transaction_type="customer_collection", counterpart_account_id=21, counterparty_id=7,
+    )
+    with pytest.raises(HTTPException) as exc:
+        treasury._validate_optional_counterparty_reference(DB(), mismatching)
+    assert exc.value.status_code == 422
