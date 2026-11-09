@@ -37,7 +37,7 @@ export async function render(main, { api, auth, route }) {
     const initialCounterpartyId = t?.counterparty_id ? String(t.counterparty_id) : "";
     const initialCounterparts = initialType
       ? await api(base + "/counterpart-accounts?direction=" + initialDirection + "&transaction_type=" + encodeURIComponent(initialType) + "&treasury_account_id=" + encodeURIComponent(t?.treasury_account_id || selectedTreasuryId)
-        + (partyRequiredTypes.includes(initialType) && initialCounterpartyId ? "&counterparty_id=" + encodeURIComponent(initialCounterpartyId) : "")).catch(() => []) : [];
+).catch(() => []) : [];
     return formDialog({
     title: t ? tr("تعديل حركة","Edit transaction") : tr("حركة جديدة","New transaction"), values: t ? { ...t, amount: +t.inflow > 0 ? (+t.inflow || "") : (+t.outflow || ""), direction_label: +t.inflow > 0 ? tr("وارد","Inflow") : tr("منصرف","Outflow"), project_id: t.project_id ?? "", transaction_type: t.transaction_type || "", counterparty_id: t.counterparty_id ? String(t.counterparty_id) : "", treasury_account_id: String(t.treasury_account_id || selectedTreasuryId) } : { transaction_date: today(), transaction_type: "", amount: "", direction_label: tr("اختَر نوع الحركة أولًا","Select transaction type first"), treasury_account_id: selectedTreasuryId },
     fields: [{ name: "transaction_date", label: tr("التاريخ","Date"), type: "date", required: true },
@@ -54,7 +54,7 @@ export async function render(main, { api, auth, route }) {
           ["cash_transfer", tr("تحويل بين حسابات نقدية","Transfer between cash/bank accounts")]
         ], required: true, full: true },
       ...(acc.currency_code === "USD" ? [{ name: "exchange_rate", label: tr("سعر الدولار مقابل الجنيه","USD exchange rate to EGP"), type: "number", step: "0.000001", min: "0.000001", required: true }] : []),
-      { name: "counterparty_id", label: tr("بطاقة العميل / المورد / المقاول (للحركات المرتبطة بطرف)","Customer / supplier / contractor record (for party transactions)"), type: "select", searchable: true, options: initialParties.map(p => [String(p.counterparty_id), p.label]), required: ["customer_collection","customer_advance","supplier_payment","supplier_advance"].includes(initialType), full: true },
+      { name: "counterparty_id", label: tr("بطاقة العميل / المورد / المقاول (مرجع اختياري)","Customer / supplier / contractor (optional reference)"), type: "select", searchable: true, options: initialParties.map(p => [String(p.counterparty_id), p.label]), optional: true, full: true },
       { name: "counterpart_account_id", label: tr("الحساب المقابل (من حساب / إلى حساب)","Counterpart account (From / To)"), type: "select", searchable: true, options: initialCounterparts.map(a => [String(a.account_id), a.label]), required: true, full: true },
       { name: "amount", label: tr("قيمة الحركة","Transaction amount"), type: "number", step: "0.01", min: "0.01", required: true }, { name: "direction_label", label: tr("الاتجاه (تلقائي)","Direction (automatic)"), readonly: true }, { name: "voucher_no", label: tr("رقم الإذن","Voucher No.") },
       { name: "description", label: tr("البيان","Description"), full: true }, { name: "status", label: tr("الحالة (مثال: تمويل)","Status (e.g. Funding)") }, { name: "recipient_name", label: tr("المستلم","Recipient") },
@@ -112,7 +112,7 @@ export async function render(main, { api, auth, route }) {
       const refreshParties = async () => {
         const selected = partySelect.value, transactionType = typeSelect.value;
         const required = ["customer_collection","customer_advance","supplier_payment","supplier_advance"].includes(transactionType);
-        partySelect.required = required;
+        partySelect.required = false;
         partySelect.disabled = true;
         try {
           const options = required ? await api(base + "/counterparties?transaction_type=" + encodeURIComponent(transactionType)) : [];
@@ -130,22 +130,11 @@ export async function render(main, { api, auth, route }) {
             directionSelect.innerHTML = '<option value="">—</option>';
             return;
           }
-          if (partyRequiredTypes.includes(transactionType) && !partySelect.value) {
-            directionSelect.innerHTML = '<option value="">—</option>';
-            updateHint();
-            return;
-          }
           const accountSelect = formEl.elements.namedItem("treasury_account_id");
-          const partyQuery = partyRequiredTypes.includes(transactionType)
-            ? "&counterparty_id=" + encodeURIComponent(partySelect.value) : "";
-          const options = await api(base + "/counterpart-accounts?direction=" + direction + "&transaction_type=" + encodeURIComponent(transactionType) + "&treasury_account_id=" + encodeURIComponent(accountSelect.value) + partyQuery);
+          const options = await api(base + "/counterpart-accounts?direction=" + direction + "&transaction_type=" + encodeURIComponent(transactionType) + "&treasury_account_id=" + encodeURIComponent(accountSelect.value));
           directionSelect.innerHTML = '<option value="">—</option>' + options.map(a =>
             `<option value="${String(a.account_id)}">${esc(a.label)}</option>`).join("");
-          const selectedParty = currentPartyOptions.find(p => String(p.counterparty_id) === partySelect.value);
-          const linkedAccountId = selectedParty?.linked_account_id ? String(selectedParty.linked_account_id) : "";
-          if (linkedAccountId && options.some(a => String(a.account_id) === linkedAccountId)) {
-            directionSelect.value = linkedAccountId;
-          } else if (options.some(a => String(a.account_id) === selected)) {
+          if (options.some(a => String(a.account_id) === selected)) {
             directionSelect.value = selected;
           }
           updateHint();
