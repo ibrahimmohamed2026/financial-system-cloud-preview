@@ -55,7 +55,7 @@ const SCREENS = {
   "/audit-logs": L("./pages/audit_logs.js?v=20261105-audit-i18n-2"),
   "/treasury/analysis": L("./pages/cash_analysis.js?v=20261105-cash-analysis-i18n-2"),
   "/treasury/reconciliation": L("./pages/reconciliation.js?v=20261105-reconciliation-i18n-2"),
-  ...Object.fromEntries(["cib-egp", "cash-usd", "cash-egp", "cib-usd"].map(k => ["/treasury/" + k, L("./pages/treasury.js?v=20261109-ledger-reconciliation-3")])),
+  ...Object.fromEntries(["cib-egp", "cash-usd", "cash-egp", "cib-usd"].map(k => ["/treasury/" + k, L("./pages/treasury.js?v=20261109-ledger-reconciliation-4")])),
   ...Object.fromEntries(["cib", "cib-usd"].map(k => ["/checks/" + k, L("./pages/checks.js?v=20261109-fixed-cib-cheques-1")])),
 };
 
