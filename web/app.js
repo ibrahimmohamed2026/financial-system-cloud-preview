@@ -196,7 +196,7 @@ function titleOf(path) {
 
 function navHtml(path) {
   const link = (it, sub = true) => `<a class="nav-i${it.route === path ? " on" : ""}${SCREENS[it.route] || it.route === "/" ? "" : " soon"}" href="#${esc(it.route)}">${sub ? "" : ico(it.icon)}<span>${esc(it.title)}</span></a>`;
-  const all = sectionsOrdered().flatMap(s => screensOf(s).map(x => ({ ...x, _section: s.code })));
+  const all = sectionsOrdered().flatMap(s => screensOf(s).map(x => ({ ...x, _section: s.code }))).filter(x => x.route !== "/settlements");
   const used = new Set();
   let h = link({ route: "/", title: tr("الرئيسية", "Home"), icon: "home" }, false);
   const dashboardScreens = (NAV?.sections || []).flatMap(section => section.screens || []);
