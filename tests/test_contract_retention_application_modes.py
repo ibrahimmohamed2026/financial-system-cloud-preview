@@ -31,11 +31,13 @@ def test_retention_cap_uses_remaining_contract_cap_and_is_rechecked_before_appro
     create = erp.split("def create_settlement", 1)[1].split("@router.get", 1)[0]
     update = erp.split("def update_settlement_deductions", 1)[1].split("class FinancialReviewLine", 1)[0]
     approve = erp.split("def approve_settlement", 1)[1].split("@router.post", 1)[0]
+    manager = erp.split("def manager_approve_settlement", 1)[1].split("@router.post", 1)[0]
     post = erp.split("def post_settlement", 1)[1].split("@router.delete", 1)[0]
 
     assert "cap-committed" in create
     assert "validate_rule_settlement_amount(db, x, rule, amount)" in update
     assert "validate_rule_settlement_amount(db, x, rule, amount)" in approve
+    assert "validate_rule_settlement_amount(db, x, rule, amount)" in manager
     assert "validate_rule_settlement_amount(db, x, rule, amount)" in post
 
 
