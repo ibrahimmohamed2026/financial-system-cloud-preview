@@ -30,12 +30,12 @@ from app.routers.treasury import (
         ("cash_transfer", "either"),
     ],
 )
-def test_all_nine_movement_types_have_server_side_direction_and_classification_rules(
-    transaction_type, direction
-):
-    config = USD_TRANSACTION_TYPES[transaction_type]
-    assert config["direction"] == direction
-    assert config["classifications"]
+def test_all_nine_movement_types_are_descriptive_only(transaction_type, direction):
+    from app.routers.treasury import TREASURY_MOVEMENT_TYPES, _movement_direction_allowed
+
+    assert transaction_type in TREASURY_MOVEMENT_TYPES
+    assert _movement_direction_allowed(transaction_type, "inflow")
+    assert _movement_direction_allowed(transaction_type, "outflow")
 
 
 @pytest.mark.parametrize(
