@@ -347,7 +347,6 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, allo
             raise HTTPException(409,"لا يمكن تحديث المسودة المالية من هذه الحالة الفنية")
     else:
         if x.status!="TechnicalReviewed": raise HTTPException(409,"يجب إتمام مراجعة البنود الفنية أولاً")
-        if x.technical_reviewed_by == user.user_id or x.created_by == user.user_id: raise HTTPException(403,"لا يجوز لمُعدّ المستخلص أو مراجع البنود اعتماده فنياً")
     c=db.get(Contract,x.contract_id)
     if not c or (c.status or "").lower()!="active": raise HTTPException(409,"العقد لم يعد نشطاً")
     lines=db.scalars(select(TechnicalSettlementEstimateItem).where(TechnicalSettlementEstimateItem.estimate_id==x.estimate_id)).all()
