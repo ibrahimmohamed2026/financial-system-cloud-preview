@@ -796,7 +796,7 @@ def _create_egp_transfer_mirror(db: Session, source: TreasuryAccount, original: 
         recipient_name=body.recipient_name,
         project_id=body.project_id,
         counterpart_account_id=source.gl_account_id,
-        transaction_type="cash_transfer",
+        transaction_type=body.transaction_type,
         journal_entry_id=original.journal_entry_id,
     )
     db.add(mirror)
