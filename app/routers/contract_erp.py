@@ -17,6 +17,7 @@ from ..models import (Contract, ContractAddendum, ContractChangeOrder, ContractI
                       FiscalYear, JournalEntry, JournalEntryDetail, User, TechnicalSettlementEstimate, TechnicalSettlementEstimateItem,
                       ItemCatalog, InventoryItem, TreasuryTransaction, Check, Project)
 from ..contract_deletion import delete_settlement_tree, require_admin
+from ..counterparties import validate_customer_party
 
 router = APIRouter(prefix="/api/contracts-erp", tags=["Contracts ERP: Technical Office & Settlements"])
 ZERO = Decimal("0.00")
@@ -415,7 +416,7 @@ def settlement_out(x, db: Session | None = None):
                 d.setdefault("calculation_type",rule.calculation_type)
                 d.setdefault("rate",str(rule.rate))
                 d.setdefault("base_type",rule.base_type)
-    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"contract_no":contract.contract_no if contract else None,"contract_title":contract.title if contract else None,"contract_title_en":contract.title_en if contract else None,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"is_final":bool(getattr(x,"is_final",False)),"settlement_date":x.settlement_date,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":deductions,"vat_amount":str(x.vat_amount),"vat_rate":str(x.vat_rate) if getattr(x,"vat_rate",None) is not None else None,"vat_tax_status":getattr(x,"vat_tax_status",None),"vat_base_type":getattr(x,"vat_base_type",None),"vat_base_amount":str(x.vat_base_amount) if getattr(x,"vat_base_amount",None) is not None else None,"vat_account_id":getattr(x,"vat_account_id",None),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"reserved_amount":str(money(reserved)),"remaining_amount":str(money(remaining)),"available_amount":str(money(available)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
+    return {"settlement_id":x.settlement_id,"contract_id":x.contract_id,"contract_no":contract.contract_no if contract else None,"contract_title":contract.title if contract else None,"contract_title_en":contract.title_en if contract else None,"settlement_side":x.settlement_side,"sequence_no":x.sequence_no,"settlement_no":x.settlement_no,"is_final":bool(getattr(x,"is_final",False)),"settlement_date":x.settlement_date,"counterparty_id":x.counterparty_id,"counterparty_name":x.counterparty_name,"counterparty_name_en":x.counterparty_name_en,"work_value":str(x.work_value),"cumulative_work_value":str(x.cumulative_work_value),"deductions":deductions,"vat_amount":str(x.vat_amount),"vat_rate":str(x.vat_rate) if getattr(x,"vat_rate",None) is not None else None,"vat_tax_status":getattr(x,"vat_tax_status",None),"vat_base_type":getattr(x,"vat_base_type",None),"vat_base_amount":str(x.vat_base_amount) if getattr(x,"vat_base_amount",None) is not None else None,"vat_account_id":getattr(x,"vat_account_id",None),"net_amount":str(x.net_amount),"paid_amount":str(money(paid)),"reserved_amount":str(money(reserved)),"remaining_amount":str(money(remaining)),"available_amount":str(money(available)),"status":x.status,"financial_approved_by":x.financial_approved_by,"financial_approved_at":x.financial_approved_at,"manager_approved_by":x.manager_approved_by,"manager_approved_at":x.manager_approved_at,"journal_entry_id":x.journal_entry_id,"notes":x.notes}
 def settlement_line_out(line, item=None):
     item = item
     return {"settlement_item_id":line.settlement_item_id,"contract_item_id":line.contract_item_id,"item_no":item.item_no if item else "","description":item.description if item else "","unit":item.unit if item else "","contract_quantity":str(item.quantity) if item else "0","quantity":str(line.quantity),"unit_price":str(line.unit_price),"amount":str(line.amount),"explanatory_statement":getattr(line,"explanatory_statement",None),"account_id":getattr(line,"account_id",None) or (getattr(item,"account_id",None) if item else None)}
@@ -470,7 +471,7 @@ class SettlementLineIn(BaseModel):
 class SettlementIn(BaseModel):
     settlement_side: Literal["Customer","Subcontractor"]; settlement_no: str | None = Field(default=None,max_length=50)
     is_final: bool = False
-    settlement_date: date; counterparty_name: str = Field(min_length=1,max_length=200); counterparty_name_en: str | None = Field(default=None,max_length=200)
+    settlement_date: date; counterparty_name: str | None = Field(default=None,max_length=200); counterparty_name_en: str | None = Field(default=None,max_length=200)
     work_value: Optional[Decimal] = Field(default=None,gt=0)
     items: list[SettlementLineIn] = Field(default_factory=list)
     vat_rate: Optional[Decimal] = Field(default=None,ge=0,le=100)
@@ -713,25 +714,32 @@ def auto_link_rules(contract_id:int,body:AutoLinkIn,user:User=Depends(require_pe
 
 @router.put("/{contract_id}/accounting-config")
 def save_config(contract_id:int,body:ConfigIn,user:User=Depends(require_permission("Contracts","Edit")),db:Session=Depends(get_db)):
-    if not db.get(Contract,contract_id): raise HTTPException(404,"العقد غير موجود")
+    contract = db.get(Contract,contract_id)
+    if not contract: raise HTTPException(404,"العقد غير موجود")
+    config_values = body.model_dump()
+    if body.settlement_side == "Customer":
+        customer_party = validate_customer_party(db, contract.counterparty_id, require_account=True)
+        config_values["control_account_id"] = customer_party.linked_account_id
     company=db.get(Company,body.company_id); fy=db.get(FiscalYear,body.fiscal_year_id)
     if not company or not fy or fy.company_id!=body.company_id: raise HTTPException(422,"الشركة أو السنة المالية غير صحيحة")
     if fy.is_closed: raise HTTPException(422,"السنة المالية مغلقة")
     if body.vat_enabled and body.vat_tax_status == "Taxable" and body.default_vat_rate > 0 and not body.vat_account_id:
         raise HTTPException(422, "عند تفعيل VAT بنسبة موجبة يجب ربط حساب ضريبة القيمة المضافة")
-    ids=[body.control_account_id,body.work_account_id]+[v for v in [body.retention_account_id,body.advance_account_id,body.tax_account_id,body.vat_account_id] if v]
+    ids=[config_values["control_account_id"],body.work_account_id]+[v for v in [body.retention_account_id,body.advance_account_id,body.tax_account_id,body.vat_account_id] if v]
     for aid in ids:
         leaf_account_or_422(db,aid,"إعدادات المحاسبة: ")
     x=db.scalar(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==contract_id,ContractAccountingConfig.settlement_side==body.settlement_side))
     if not x: x=ContractAccountingConfig(contract_id=contract_id,settlement_side=body.settlement_side);db.add(x)
-    for k,v in body.model_dump().items(): setattr(x,k,v)
-    db.flush();write_audit(db,user.user_id,"Save","ContractAccountingConfig",x.config_id,new=body.model_dump());db.commit()
+    for k,v in config_values.items(): setattr(x,k,v)
+    db.flush();write_audit(db,user.user_id,"Save","ContractAccountingConfig",x.config_id,new=config_values);db.commit()
     return {"message":"تم حفظ إعدادات المحاسبة","contract_id":contract_id,"settlement_side":body.settlement_side}
 
 @router.get("/{contract_id}/accounting-config")
 def get_config(contract_id:int, _:User=Depends(require_permission("Contracts","View")),db:Session=Depends(get_db)):
     rows=db.scalars(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==contract_id)).all()
-    return {"items":[{"settlement_side":x.settlement_side,"company_id":x.company_id,"fiscal_year_id":x.fiscal_year_id,"control_account_id":x.control_account_id,"work_account_id":x.work_account_id,"retention_account_id":x.retention_account_id,"advance_account_id":x.advance_account_id,"tax_account_id":x.tax_account_id,"vat_account_id":x.vat_account_id,"default_vat_rate":str(x.default_vat_rate),"vat_enabled":(bool(x.vat_enabled) if getattr(x,"vat_enabled",None) is not None else Decimal(str(x.default_vat_rate or 0))>ZERO),"vat_tax_status":getattr(x,"vat_tax_status",None) or ("Taxable" if (bool(x.vat_enabled) if getattr(x,"vat_enabled",None) is not None else Decimal(str(x.default_vat_rate or 0))>ZERO) else "NotSubject"),"vat_base_type":getattr(x,"vat_base_type",None) or "CurrentWork"} for x in rows]}
+    contract = db.get(Contract, contract_id)
+    customer_party = validate_customer_party(db, contract.counterparty_id) if contract and contract.counterparty_id else None
+    return {"items":[{"settlement_side":x.settlement_side,"company_id":x.company_id,"fiscal_year_id":x.fiscal_year_id,"control_account_id":(customer_party.linked_account_id if x.settlement_side == "Customer" and customer_party else x.control_account_id),"work_account_id":x.work_account_id,"retention_account_id":x.retention_account_id,"advance_account_id":x.advance_account_id,"tax_account_id":x.tax_account_id,"vat_account_id":x.vat_account_id,"default_vat_rate":str(x.default_vat_rate),"vat_enabled":(bool(x.vat_enabled) if getattr(x,"vat_enabled",None) is not None else Decimal(str(x.default_vat_rate or 0))>ZERO),"vat_tax_status":getattr(x,"vat_tax_status",None) or ("Taxable" if (bool(x.vat_enabled) if getattr(x,"vat_enabled",None) is not None else Decimal(str(x.default_vat_rate or 0))>ZERO) else "NotSubject"),"vat_base_type":getattr(x,"vat_base_type",None) or "CurrentWork"} for x in rows]}
 
 def contract_financial_summary(db: Session, contract_id: int, side: str):
     c = db.get(Contract, contract_id)
@@ -804,6 +812,9 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     if db.scalar(select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==contract_id,ContractSettlement.settlement_side==body.settlement_side,ContractSettlement.is_final.is_(True)).limit(1)):
         raise HTTPException(409,"تم تحديد مستخلص ختامي لهذا العقد ونوع المستخلص؛ لا يمكن إنشاء مستخلصات إضافية بعده")
     side=body.settlement_side
+    customer_party = validate_customer_party(db, c.counterparty_id) if side == "Customer" else None
+    if side == "Subcontractor" and not (body.counterparty_name or "").strip():
+        raise HTTPException(422, "يجب اختيار اسم مقاول الباطن")
     previous, contract_value = contract_financial_summary(db, contract_id, side)[1:]
     # Settlement numbers are generated internally; sequence is scoped by contract and settlement side.
     contract_items=db.scalars(select(ContractItem).where(ContractItem.contract_id==contract_id).order_by(ContractItem.item_no)).all()
@@ -886,7 +897,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     vat=vat_data["amount"]; net=money(work+vat-total)
     if net<0: raise HTTPException(422,"الخصومات والضريبة تجعل صافي المستخلص سالبًا")
     validate_deduction_account_links(db, side, deductions, {r.code:r for r in rules})
-    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,is_final=body.is_final,settlement_no=f"ST-PENDING-{uuid4().hex}",settlement_date=body.settlement_date,counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,vat_rate=vat_data["rate"],vat_base_amount=vat_data["base_amount"],vat_base_type=vat_data["base_type"],vat_tax_status=vat_data["tax_status"],vat_account_id=vat_data["account_id"],net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
+    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,is_final=body.is_final,settlement_no=f"ST-PENDING-{uuid4().hex}",settlement_date=body.settlement_date,counterparty_name=(customer_party.legal_name or customer_party.name) if customer_party else (body.counterparty_name or "").strip(),counterparty_name_en=customer_party.name_en if customer_party else body.counterparty_name_en,counterparty_id=customer_party.counterparty_id if customer_party else None,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,vat_rate=vat_data["rate"],vat_base_amount=vat_data["base_amount"],vat_base_type=vat_data["base_type"],vat_tax_status=vat_data["tax_status"],vat_account_id=vat_data["account_id"],net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
     side_code = "CUS" if side == "Customer" else "SUB"
     x.settlement_no = f"ST-{side_code}-{body.settlement_date.year}-{x.settlement_id:06d}"
@@ -1313,6 +1324,9 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
     if x.status!="Approved": raise HTTPException(409,"يجب اعتماد المستخلص قبل الترحيل")
     contract = db.scalar(select(Contract).where(Contract.contract_id==x.contract_id).with_for_update())
     if not contract or contract.status.lower() != "active": raise HTTPException(409,"لا يمكن ترحيل مستخلص لعقد غير فعّال")
+    customer_party = validate_customer_party(db, contract.counterparty_id, require_account=True) if x.settlement_side == "Customer" else None
+    if customer_party and x.counterparty_id != customer_party.counterparty_id:
+        raise HTTPException(409, "هوية العميل في المستخلص المالي لا تطابق العميل المسجل بالعقد؛ راجع المستند قبل الترحيل")
     if x.is_final:
         gaps = final_settlement_quantity_gaps(db, x.contract_id, x.settlement_side)
         if gaps:
@@ -1370,7 +1384,7 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
             item_desc=contract_item.description if contract_item else "بند عقد"
             line(aid,debit=si.amount if debit else ZERO,credit=ZERO if debit else si.amount,desc=item_desc,project_id=contract_item.project_id if contract_item else None)
     if side=="Customer":
-        line(cfg.control_account_id,debit=x.net_amount,desc="صافي مستخلص عميل")
+        line(customer_party.linked_account_id,debit=x.net_amount,desc="صافي مستخلص عميل")
         for code,d in deductions.items():
             amt=money(d["amount"]); aid=d.get("account_id")
             if amt and d.get("posting_side")!="Debit": raise HTTPException(422,f"قاعدة الخصم {code}: جهة القيد يجب أن تكون Debit في مستخلص العميل")
