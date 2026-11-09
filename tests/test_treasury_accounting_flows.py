@@ -190,6 +190,9 @@ def test_party_reference_is_optional_and_counterpart_options_come_from_chart(mon
         def scalar(self, statement):
             return None
 
+        def scalars(self, statement):
+            return []
+
         def execute(self, statement):
             return SimpleNamespace(all=lambda: [(linked, classification)])
 
