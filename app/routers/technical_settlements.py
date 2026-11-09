@@ -18,6 +18,7 @@ from ..models import (User, Contract, ContractItem, ContractSettlement, Contract
 
 from .contract_erp import resolve_rule_account, is_retention_rule, cumulative_retention_amount, calculate_vat
 from ..contract_deletion import delete_settlement_tree, require_admin
+from ..counterparties import validate_customer_party
 router = APIRouter(prefix="/api/technical-settlements", tags=["Technical Office Settlements"])
 CENT = Decimal("0.01")
 def money(v): return Decimal(str(v or 0)).quantize(CENT, rounding=ROUND_HALF_UP)
@@ -139,6 +140,7 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     c=db.scalar(select(Contract).where(Contract.contract_id==body.contract_id).with_for_update())
     if not c: raise HTTPException(404,"العقد غير موجود")
     if (c.status or "").lower()!="active": raise HTTPException(409,"لا يمكن إعداد مستخلص فني إلا لعقد نشط ومعتمد نهائياً")
+    customer_party = validate_customer_party(db, c.counterparty_id) if body.settlement_side == "Customer" else None
     if db.scalar(select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==c.contract_id,ContractSettlement.settlement_side==body.settlement_side,ContractSettlement.is_final.is_(True)).limit(1)):
         raise HTTPException(409,"تم تحديد مستخلص ختامي لهذا العقد ونوع المستخلص؛ لا يمكن إنشاء مستخلصات إضافية بعده")
     estimate_no = next_estimate_no(db, c.contract_id)
@@ -188,8 +190,11 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
     # Saving the technical estimate is the technical approval step in the current workflow.
     # Submitted quantities are approved at save; Finance can review the linked draft immediately.
     now = datetime.utcnow()
+    estimate_party_name = (customer_party.legal_name or customer_party.name) if customer_party else body.counterparty_name
+    estimate_party_name_en = customer_party.name_en if customer_party else body.counterparty_name_en
     x=TechnicalSettlementEstimate(contract_id=c.contract_id,settlement_side=body.settlement_side,estimate_no=estimate_no,
-       estimate_date=(body.estimate_date if body.estimate_date else datetime.utcnow().date()),counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,
+       estimate_date=(body.estimate_date if body.estimate_date else datetime.utcnow().date()),counterparty_name=estimate_party_name,counterparty_name_en=estimate_party_name_en,
+       counterparty_id=customer_party.counterparty_id if customer_party else None,
        work_value=total,status="ForwardedToFinance",is_final=body.is_final,notes=body.notes,created_by=user.user_id,
        technical_reviewed_by=user.user_id,technical_reviewed_at=now)
     db.add(x);db.flush()
@@ -352,6 +357,13 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, allo
         if x.status!="TechnicalReviewed": raise HTTPException(409,"يجب إتمام مراجعة البنود الفنية أولاً")
     c=db.get(Contract,x.contract_id)
     if not c or (c.status or "").lower()!="active": raise HTTPException(409,"العقد لم يعد نشطاً")
+    customer_party = validate_customer_party(db, c.counterparty_id) if x.settlement_side == "Customer" else None
+    if customer_party:
+        if x.counterparty_id is not None and x.counterparty_id != customer_party.counterparty_id:
+            raise HTTPException(409, "هوية العميل في المستخلص الفني لا تطابق العميل المسجل بالعقد")
+        x.counterparty_id = customer_party.counterparty_id
+        x.counterparty_name = customer_party.legal_name or customer_party.name
+        x.counterparty_name_en = customer_party.name_en
     lines=db.scalars(select(TechnicalSettlementEstimateItem).where(TechnicalSettlementEstimateItem.estimate_id==x.estimate_id)).all()
     if x.is_final and not allow_unreviewed:
         candidate = {}
@@ -425,7 +437,9 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, allo
         seq=(db.scalar(select(func.max(ContractSettlement.sequence_no)).where(ContractSettlement.contract_id==x.contract_id,ContractSettlement.settlement_side==x.settlement_side)) or 0)+1
         fin=ContractSettlement(contract_id=x.contract_id,settlement_side=x.settlement_side,sequence_no=seq,
             settlement_no=f"FIN-{x.estimate_id:06d}",settlement_date=x.estimate_date,
-            counterparty_name=x.counterparty_name,work_value=work,cumulative_work_value=cumulative,
+            counterparty_name=x.counterparty_name,counterparty_name_en=x.counterparty_name_en,
+            counterparty_id=customer_party.counterparty_id if customer_party else x.counterparty_id,
+            work_value=work,cumulative_work_value=cumulative,
             deductions_json=deductions,vat_amount=vat,vat_rate=vat_data["rate"],vat_base_amount=vat_data["base_amount"],vat_base_type=vat_data["base_type"],vat_tax_status=vat_data["tax_status"],vat_account_id=vat_data["account_id"],net_amount=net,
             status="Draft",
             is_final=bool(getattr(x,"is_final",False)),
@@ -436,6 +450,8 @@ def _create_financial_from_estimate(estimate_id:int, user:User, db:Session, allo
     else:
         fin.settlement_date=x.estimate_date
         fin.counterparty_name=x.counterparty_name
+        fin.counterparty_name_en=x.counterparty_name_en
+        fin.counterparty_id=customer_party.counterparty_id if customer_party else x.counterparty_id
         fin.work_value=work
         fin.cumulative_work_value=cumulative
         fin.deductions_json=deductions
