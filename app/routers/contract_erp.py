@@ -935,8 +935,8 @@ def get_settlement_items(settlement_id:int, _:User=Depends(require_permission("C
     return {"items":[settlement_line_out(line,db.get(ContractItem,line.contract_item_id)) for line in lines]}
 
 @router.get("/deduction-accounts")
-def list_deduction_accounts(_:User=Depends(require_permission("ContractSettlements","Edit")),db:Session=Depends(get_db)):
-    """Return active posting leaf accounts for settlement-specific deductions."""
+def list_deduction_accounts(_:User=Depends(require_permission("ContractSettlements","View")),db:Session=Depends(get_db)):
+    """Return active posting leaf accounts; viewing options must not require settlement edit rights."""
     parent_ids=set(db.scalars(select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))).all())
     rows=db.scalars(select(Account).where(Account.is_active.is_(True)).order_by(Account.account_code)).all()
     return {"items":[{"account_id":a.account_id,"account_code":a.account_code,"account_name_ar":a.account_name_ar}
