@@ -257,7 +257,7 @@ def resubmit_corrected_estimate(estimate_id: int, body: TechnicalCorrectionIn,
             raise HTTPException(422, f"الكمية المعدلة للبند {item.item_no} تتجاوز المتبقي في العقد")
         old_quantity = line.current_quantity
         line.current_quantity = quantity
-        line.approved_quantity = None
+        line.approved_quantity = quantity
         line.review_note = None
         line.reviewed_by = None
         line.reviewed_at = None
