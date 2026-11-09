@@ -58,6 +58,47 @@ class TechnicalCorrectionIn(BaseModel):
 class TechnicalReturnIn(BaseModel):
     notes: str = Field(min_length=1, max_length=2000)
 
+def final_quantity_gaps(db, contract_id, side, candidate=None, exclude_estimate_id=None):
+    """Return every contract item whose settled quantity would not equal its contractual quantity."""
+    linked_financial_ids = select(TechnicalSettlementEstimate.financial_settlement_id).where(
+        TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
+    estimate_ids = select(TechnicalSettlementEstimate.estimate_id).where(
+        TechnicalSettlementEstimate.contract_id == contract_id,
+        TechnicalSettlementEstimate.settlement_side == side,
+        TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved", "ForwardedToFinance")))
+    if exclude_estimate_id is not None:
+        estimate_ids = estimate_ids.where(TechnicalSettlementEstimate.estimate_id != exclude_estimate_id)
+    financial_ids = select(ContractSettlement.settlement_id).where(
+        ContractSettlement.contract_id == contract_id,
+        ContractSettlement.settlement_side == side,
+        ContractSettlement.status.in_(("Approved", "Posted", "PendingFinalApproval")),
+        ContractSettlement.settlement_id.not_in(linked_financial_ids))
+    gaps = []
+    items = db.scalars(select(ContractItem).where(ContractItem.contract_id == contract_id).order_by(ContractItem.item_no)).all()
+    candidate = candidate or {}
+    for item in items:
+        technical_qty = db.scalar(select(func.coalesce(func.sum(func.coalesce(
+            TechnicalSettlementEstimateItem.approved_quantity,
+            TechnicalSettlementEstimateItem.current_quantity)), 0)).where(
+                TechnicalSettlementEstimateItem.contract_item_id == item.item_id,
+                TechnicalSettlementEstimateItem.estimate_id.in_(estimate_ids))) or 0
+        financial_qty = db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity), 0)).where(
+            ContractSettlementItem.contract_item_id == item.item_id,
+            ContractSettlementItem.settlement_id.in_(financial_ids))) or 0
+        settled = Decimal(str(technical_qty)) + Decimal(str(financial_qty)) + Decimal(str(candidate.get(item.item_id, 0)))
+        remaining = Decimal(str(item.quantity)) - settled
+        if remaining != 0:
+            gaps.append({"item_no": item.item_no, "description": item.description,
+                         "contract_quantity": str(item.quantity), "settled_quantity": str(settled),
+                         "remaining_quantity": str(remaining), "unit": item.unit})
+    return gaps
+
+def final_quantity_error(gaps, stage):
+    details = "؛ ".join(
+        f"البند {g['item_no']} ({g['description']}): المتبقي {g['remaining_quantity']} {g['unit']} "
+        f"(التعاقدي {g['contract_quantity']}، المسوّى {g['settled_quantity']})" for g in gaps)
+    raise HTTPException(409, f"لا يمكن {stage} المستخلص الختامي قبل تسوية كامل كميات العقد. {details}")
+
 def estimate_out(x, db):
     c = db.get(Contract, x.contract_id)
     lines = db.scalars(select(TechnicalSettlementEstimateItem).where(TechnicalSettlementEstimateItem.estimate_id == x.estimate_id)).all()
@@ -128,6 +169,11 @@ def create_estimate(body: EstimateIn, user: User=Depends(require_permission("Con
         amount=money(req.current_quantity*item.unit_price); total+=amount; prepared.append((item,previous,req.current_quantity,amount))
     total=money(total)
     if total<=0: raise HTTPException(422,"قيمة الأعمال يجب أن تكون أكبر من صفر")
+    if body.is_final:
+        candidate = {item.item_id: qty for item, _prev, qty, _amount in prepared}
+        gaps = final_quantity_gaps(db, c.contract_id, body.settlement_side, candidate=candidate)
+        if gaps:
+            final_quantity_error(gaps, "إنشاء")
     # New estimates must enter the independent engineering queue. Submitted quantities
     # are not approved quantities and must never create a financial settlement here.
     x=TechnicalSettlementEstimate(contract_id=c.contract_id,settlement_side=body.settlement_side,estimate_no=estimate_no,
@@ -265,6 +311,14 @@ def review_estimate(estimate_id: int, body: TechnicalReviewIn,
     approved_total = money(approved_total)
     if approved_total <= 0:
         raise HTTPException(422, "لا يمكن إحالة مستخلص دون أي كميات معتمدة")
+    if x.is_final:
+        candidate = {}
+        for line in lines:
+            candidate[line.contract_item_id] = candidate.get(line.contract_item_id, Decimal("0")) + Decimal(str(line.approved_quantity or 0))
+        gaps = final_quantity_gaps(db, x.contract_id, x.settlement_side,
+                                   candidate=candidate, exclude_estimate_id=x.estimate_id)
+        if gaps:
+            final_quantity_error(gaps, "مراجعة واعتماد كميات")
     x.work_value = approved_total
     x.technical_reviewed_by = user.user_id
     x.technical_reviewed_at = datetime.utcnow()
