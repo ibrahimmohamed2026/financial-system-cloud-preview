@@ -942,6 +942,35 @@ def list_settlements(contract_id:int,settlement_side:Literal["Customer","Subcont
     rows=db.scalars(q.order_by(ContractSettlement.settlement_side,ContractSettlement.sequence_no.desc())).all()
     return {"items":[{**settlement_out(x, db), "items":[settlement_line_out(line, db.get(ContractItem,line.contract_item_id)) for line in db.scalars(select(ContractSettlementItem).where(ContractSettlementItem.settlement_id==x.settlement_id)).all()]} for x in rows]}
 
+@router.get("/settlements/treasury-link-options")
+def treasury_link_options(side: str | None = None,
+        _: User = Depends(require_permission("ContractSettlements", "View")),
+        db: Session = Depends(get_db)):
+    if side not in (None, "Customer", "Subcontractor"):
+        raise HTTPException(422, "نوع المستخلص غير صحيح")
+    stmt = select(ContractSettlement).where(ContractSettlement.status == "Posted")
+    if side:
+        stmt = stmt.where(ContractSettlement.settlement_side == side)
+    rows = db.scalars(stmt.order_by(ContractSettlement.settlement_date, ContractSettlement.settlement_id)).all()
+    result = []
+    for settlement in rows:
+        data = settlement_out(settlement, db)
+        if money(data["available_amount"]) > ZERO:
+            result.append({
+                "settlement_id": settlement.settlement_id,
+                "settlement_no": settlement.settlement_no,
+                "settlement_side": settlement.settlement_side,
+                "contract_no": data["contract_no"],
+                "counterparty_name": settlement.counterparty_name,
+                "net_amount": data["net_amount"],
+                "paid_amount": data["paid_amount"],
+                "reserved_amount": data["reserved_amount"],
+                "available_amount": data["available_amount"],
+                "counterparty_id": settlement.counterparty_id,
+            })
+    return {"items": result}
+
+
 @router.get("/settlements/{settlement_id}/items")
 def get_settlement_items(settlement_id:int, _:User=Depends(require_permission("ContractSettlements","View")),db:Session=Depends(get_db)):
     x=db.get(ContractSettlement,settlement_id)
