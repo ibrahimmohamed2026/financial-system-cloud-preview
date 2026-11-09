@@ -15,7 +15,7 @@ from ..deps import require_permission, write_audit, get_current_user, has_permis
 from ..models import (Contract, ContractAddendum, ContractChangeOrder, ContractItem, ContractDeductionRule,
                       ContractAccountingConfig, ContractSettlement, ContractSettlementItem, ContractSettlementSchedule, ProgressBilling, Account, Company,
                       FiscalYear, JournalEntry, JournalEntryDetail, User, TechnicalSettlementEstimate, TechnicalSettlementEstimateItem,
-                      ItemCatalog, InventoryItem, TreasuryTransaction, Check)
+                      ItemCatalog, InventoryItem, TreasuryTransaction, Check, Project)
 from ..contract_deletion import delete_settlement_tree, require_admin
 
 router = APIRouter(prefix="/api/contracts-erp", tags=["Contracts ERP: Technical Office & Settlements"])
@@ -62,6 +62,44 @@ def resolve_rule_account(rule_code, name_ar, gl_account_id, cfg):
     if "retention" in code or "محتجز" in (name_ar or "") or "ضمان" in (name_ar or ""): return cfg.retention_account_id
     if "advance" in code or "مقدم" in (name_ar or ""): return cfg.advance_account_id
     return None
+
+def final_settlement_quantity_gaps(db, contract_id, side, candidate=None):
+    """Calculate final quantities once: linked technical/financial certificates are never double-counted."""
+    linked_financial_ids = select(TechnicalSettlementEstimate.financial_settlement_id).where(
+        TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
+    estimate_ids = select(TechnicalSettlementEstimate.estimate_id).where(
+        TechnicalSettlementEstimate.contract_id == contract_id,
+        TechnicalSettlementEstimate.settlement_side == side,
+        TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")))
+    financial_ids = select(ContractSettlement.settlement_id).where(
+        ContractSettlement.contract_id == contract_id,
+        ContractSettlement.settlement_side == side,
+        ContractSettlement.status.in_(("Approved", "Posted", "PendingFinalApproval")),
+        ContractSettlement.settlement_id.not_in(linked_financial_ids))
+    candidate = candidate or {}
+    gaps = []
+    for item in db.scalars(select(ContractItem).where(ContractItem.contract_id == contract_id).order_by(ContractItem.item_no)).all():
+        technical_qty = db.scalar(select(func.coalesce(func.sum(func.coalesce(
+            TechnicalSettlementEstimateItem.approved_quantity,
+            TechnicalSettlementEstimateItem.current_quantity)), 0)).where(
+                TechnicalSettlementEstimateItem.contract_item_id == item.item_id,
+                TechnicalSettlementEstimateItem.estimate_id.in_(estimate_ids))) or 0
+        financial_qty = db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity), 0)).where(
+            ContractSettlementItem.contract_item_id == item.item_id,
+            ContractSettlementItem.settlement_id.in_(financial_ids))) or 0
+        settled = Decimal(str(technical_qty)) + Decimal(str(financial_qty)) + Decimal(str(candidate.get(item.item_id, 0)))
+        remaining = Decimal(str(item.quantity)) - settled
+        if remaining != 0:
+            gaps.append({"item_no": item.item_no, "description": item.description,
+                         "contract_quantity": str(item.quantity), "settled_quantity": str(settled),
+                         "remaining_quantity": str(remaining), "unit": item.unit})
+    return gaps
+
+def reject_incomplete_final_settlement(gaps, stage):
+    details = "؛ ".join(
+        f"البند {g['item_no']} ({g['description']}): المتبقي {g['remaining_quantity']} {g['unit']} "
+        f"(التعاقدي {g['contract_quantity']}، المسوّى {g['settled_quantity']})" for g in gaps)
+    raise HTTPException(409, f"لا يمكن {stage} المستخلص الختامي قبل تسوية كامل كميات العقد. {details}")
 
 def item_out(x):
     # Keep old contract lines readable; new lines expose the linked central item/account.
@@ -253,6 +291,10 @@ def create_catalog_item(body:CatalogItemIn,user:User=Depends(require_permission(
 def add_item(contract_id:int, body:ItemIn, user:User=Depends(require_permission("Contracts","Add")), db:Session=Depends(get_db)):
     contract = db.scalar(select(Contract).where(Contract.contract_id == contract_id).with_for_update())
     if not contract: raise HTTPException(404,"العقد غير موجود")
+    if body.project_id is not None:
+        project = db.get(Project, body.project_id)
+        if project is None or not project.is_active:
+            raise HTTPException(422, "مركز تكلفة البند غير موجود أو غير نشط")
     # The server is authoritative: never accept a browser-supplied line number.
     # This also makes stale cached forms and manually edited requests harmless.
     requested_no = next_contract_item_no(db, contract_id)
@@ -277,6 +319,10 @@ def add_item(contract_id:int, body:ItemIn, user:User=Depends(require_permission(
 def update_item(contract_id:int,item_id:int,body:ItemIn,user:User=Depends(require_permission("Contracts","Edit")),db:Session=Depends(get_db)):
     x=db.get(ContractItem,item_id)
     if not x or x.contract_id!=contract_id: raise HTTPException(404,"بند العقد غير موجود")
+    if body.project_id is not None:
+        project = db.get(Project, body.project_id)
+        if project is None or not project.is_active:
+            raise HTTPException(422, "مركز تكلفة البند غير موجود أو غير نشط")
     # Item numbers are assigned at creation and remain stable on edits.
     requested_no = x.item_no
     if db.scalar(select(ContractSettlementItem.settlement_item_id).where(ContractSettlementItem.contract_item_id==item_id).limit(1)) or db.scalar(select(TechnicalSettlementEstimateItem.estimate_item_id).where(TechnicalSettlementEstimateItem.contract_item_id==item_id).limit(1)):
@@ -418,7 +464,7 @@ def settlement_summary(contract_id: int, settlement_side: Literal["Customer","Su
     valid_estimate_ids = select(TechnicalSettlementEstimate.estimate_id).where(
         TechnicalSettlementEstimate.contract_id == contract_id,
         TechnicalSettlementEstimate.settlement_side == settlement_side,
-        TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")))
+        TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved", "ForwardedToFinance")))
     technical_rows = db.execute(select(TechnicalSettlementEstimateItem.contract_item_id,
         func.sum(func.coalesce(TechnicalSettlementEstimateItem.approved_quantity, TechnicalSettlementEstimateItem.current_quantity)))
         .where(TechnicalSettlementEstimateItem.estimate_id.in_(valid_estimate_ids))
@@ -482,6 +528,21 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
         work=money(body.work_value)
     cumulative=money(previous+work)
     if cumulative>contract_value: raise HTTPException(409,f"إجمالي الأعمال المعتمدة {cumulative} يتجاوز قيمة العقد المعدلة {contract_value}")
+    if body.is_final:
+        unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
+            ContractSettlement.contract_id == contract_id,
+            ContractSettlement.settlement_side == side,
+            ContractSettlement.status != "Posted")) or 0
+        pending_technical = db.scalar(select(func.count()).select_from(TechnicalSettlementEstimate).where(
+            TechnicalSettlementEstimate.contract_id == contract_id,
+            TechnicalSettlementEstimate.settlement_side == side,
+            TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved")))) or 0
+        if unfinished or pending_technical:
+            raise HTTPException(409, "لا يمكن إنشاء المستخلص الختامي قبل استكمال المستخلصات السابقة قيد المراجعة أو الاعتماد أو الترحيل")
+        candidate = {item.item_id: quantity for item, quantity, _amount in lines}
+        gaps = final_settlement_quantity_gaps(db, contract_id, side, candidate=candidate)
+        if gaps:
+            reject_incomplete_final_settlement(gaps, "إنشاء")
     cfg=db.scalar(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==contract_id,ContractAccountingConfig.settlement_side==side))
     rules=db.scalars(select(ContractDeductionRule).where(ContractDeductionRule.contract_id==contract_id,ContractDeductionRule.settlement_side==side,ContractDeductionRule.is_active.is_(True)).order_by(ContractDeductionRule.sort_order,ContractDeductionRule.rule_id)).all()
     deductions={}; total=ZERO
@@ -816,6 +877,27 @@ def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permi
     _,reserved_value,contract_value=contract_financial_summary(db,x.contract_id,x.settlement_side)
     if reserved_value>contract_value:
         raise HTTPException(409,"لا يمكن اعتماد المدير: إجمالي المستخلصات المعتمدة والمعلقة يتجاوز قيمة العقد المعدلة")
+    if x.is_final:
+        unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
+            ContractSettlement.contract_id == x.contract_id,
+            ContractSettlement.settlement_side == x.settlement_side,
+            ContractSettlement.settlement_id != x.settlement_id,
+            ContractSettlement.status != "Posted")) or 0
+        pending_technical = db.scalar(select(func.count()).select_from(TechnicalSettlementEstimate).where(
+            TechnicalSettlementEstimate.contract_id == x.contract_id,
+            TechnicalSettlementEstimate.settlement_side == x.settlement_side,
+            TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved")))) or 0
+        if unfinished or pending_technical:
+            raise HTTPException(409, "لا يمكن اعتماد المستخلص الختامي قبل استكمال وترحيل المستخلصات السابقة قيد المراجعة أو الاعتماد")
+        gaps = final_settlement_quantity_gaps(db, x.contract_id, x.settlement_side)
+        if gaps:
+            reject_incomplete_final_settlement(gaps, "اعتماد المدير")
+    elif db.scalar(select(ContractSettlement.settlement_id).where(
+        ContractSettlement.contract_id == x.contract_id,
+        ContractSettlement.settlement_side == x.settlement_side,
+        ContractSettlement.is_final.is_(True),
+        ContractSettlement.settlement_id != x.settlement_id).limit(1)):
+        raise HTTPException(409, "لا يمكن اعتماد مستخلص عادي بعد تحديد المستخلص الختامي")
     x.manager_approved_by=user.user_id
     x.manager_approved_at=datetime.utcnow()
     x.status="Approved"
@@ -837,6 +919,10 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
     if x.status!="Approved": raise HTTPException(409,"يجب اعتماد المستخلص قبل الترحيل")
     contract = db.scalar(select(Contract).where(Contract.contract_id==x.contract_id).with_for_update())
     if not contract or contract.status.lower() != "active": raise HTTPException(409,"لا يمكن ترحيل مستخلص لعقد غير فعّال")
+    if x.is_final:
+        gaps = final_settlement_quantity_gaps(db, x.contract_id, x.settlement_side)
+        if gaps:
+            reject_incomplete_final_settlement(gaps, "ترحيل")
     cfg=db.scalar(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==x.contract_id,ContractAccountingConfig.settlement_side==x.settlement_side))
     if not cfg: raise HTTPException(422,"لم يتم ضبط حسابات المحاسبة لهذا العقد ونوع المستخلص")
     fy=db.get(FiscalYear,cfg.fiscal_year_id)
@@ -911,6 +997,13 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
     for idx,(aid,dr,cr,desc,project_id) in enumerate(lines,1): db.add(JournalEntryDetail(journal_entry_id=entry.journal_entry_id,line_no=idx,account_id=aid,project_id=project_id or contract.project_id,debit_amount=dr,credit_amount=cr,description=desc))
     write_audit(db,user.user_id,"Create","JournalEntries",entry.journal_entry_id,new={"entry_no":entry.entry_no,"source":"ContractSettlement","settlement_id":x.settlement_id,"settlement_no":x.settlement_no,"contract_id":x.contract_id,"debit_total":str(debit),"credit_total":str(credit)})
     x.journal_entry_id=entry.journal_entry_id;x.status="Posted"
+    linked_estimate = db.scalar(select(TechnicalSettlementEstimate).where(
+        TechnicalSettlementEstimate.financial_settlement_id == x.settlement_id))
+    if linked_estimate is not None:
+        linked_schedule = db.scalar(select(ContractSettlementSchedule).where(
+            ContractSettlementSchedule.technical_estimate_id == linked_estimate.estimate_id).with_for_update())
+        if linked_schedule is not None:
+            linked_schedule.status = "Completed"
     # Close when the explicitly marked final settlement has been posted and
     # every other settlement for this contract is posted as well.
     posted_final = db.scalar(select(ContractSettlement.settlement_id).where(
