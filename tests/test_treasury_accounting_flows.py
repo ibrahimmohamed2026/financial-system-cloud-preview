@@ -237,7 +237,7 @@ def test_optional_party_reference_does_not_supply_the_account():
 
 def test_optional_party_reference_only_checks_consistency_with_selected_chart_account():
     party = SimpleNamespace(
-        is_active=True, party_type="Customer", linked_account_id=20,
+        is_active=True, party_type="Customer", account_id=20, linked_account_id=None,
     )
 
     class DB:
