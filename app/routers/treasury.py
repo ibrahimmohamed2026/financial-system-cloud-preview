@@ -243,7 +243,7 @@ def treasury_counterparties(screen_code: str, transaction_type: str = Query(...,
     # unsuitable. The selection endpoint below remains the strict accounting guard.
     rows = db.execute(
         select(Counterparty, Account, AccountClassification)
-        .outerjoin(Account, Account.account_id == Counterparty.linked_account_id)
+        .outerjoin(Account, Account.account_id == Counterparty.account_id)
         .outerjoin(AccountClassification, AccountClassification.classification_id == Account.classification_id)
         .where(Counterparty.is_active == True, Counterparty.party_type.in_(allowed_types))
         .order_by(Counterparty.legal_name, Counterparty.counterparty_id).limit(500)
@@ -464,8 +464,8 @@ def _validate_optional_counterparty_reference(db: Session, body: TxIn) -> None:
         raise HTTPException(422, "البطاقة المرجعية غير نشطة أو لا تتوافق مع نوع الحركة")
     # A linked account, when present, is a consistency check only. It never
     # supplies or replaces the GL account selected on the transaction.
-    if (party.linked_account_id is not None
-            and party.linked_account_id != body.counterpart_account_id):
+    if (party.account_id is not None
+            and party.account_id != body.counterpart_account_id):
         raise HTTPException(422, "الحساب المختار لا يطابق الحساب المرتبط بالبطاقة المرجعية")
 
 
