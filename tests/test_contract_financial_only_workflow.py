@@ -58,3 +58,5 @@ def test_final_financial_settlement_is_rechecked_at_api_creation_manager_approva
     assert "reject_incomplete_final_settlement(gaps, \"ترحيل\")" in post_settlement
     assert "settlement_id.not_in(linked_financial_ids)" in source
     assert "technical_qty" in source and "financial_qty" in source
+    assert 'TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance"))' in source
+    assert "لا يمكن اعتماد المستخلص الختامي قبل اكتمال وترحيل المستخلصات السابقة" in source
