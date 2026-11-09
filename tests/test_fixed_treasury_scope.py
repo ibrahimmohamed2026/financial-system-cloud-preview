@@ -1,5 +1,5 @@
 from app.bootstrap import SCREENS
-from app.routers.checks import CHECK_CURRENCY, CHECK_SCREENS
+from app.routers.checks import CHECK_BANK_SCREEN, CHECK_CURRENCY, CHECK_SCREENS
 from app.routers.treasury import BANK_SCREENS
 
 
@@ -15,6 +15,7 @@ def test_only_two_cashboxes_and_two_cib_bank_accounts_are_configured():
 def test_cheque_books_are_cib_egp_and_cib_usd_only():
     assert CHECK_SCREENS == {"ChecksCib", "ChecksCibUsd"}
     assert CHECK_CURRENCY == {"ChecksCib": "EGP", "ChecksCibUsd": "USD"}
+    assert CHECK_BANK_SCREEN == {"ChecksCib": "BankCibEgp", "ChecksCibUsd": "BankCibUsd"}
 
 
 def test_seeded_treasury_and_cheque_routes_match_the_fixed_scope():
