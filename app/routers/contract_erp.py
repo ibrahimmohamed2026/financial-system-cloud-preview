@@ -200,11 +200,59 @@ def rule_metrics(db: Session, rule: ContractDeductionRule) -> dict:
             "cap_amount_effective": str(cap) if cap is not None else None,
             "remaining_cap": str(max(ZERO, cap-reserved)) if cap is not None else None}
 
+
+def is_retention_rule(rule: ContractDeductionRule | None) -> bool:
+    """Identify the contract-managed retention deduction."""
+    if rule is None:
+        return False
+    code = str(getattr(rule, "code", "") or "").strip().casefold().replace("-", "_")
+    if code in {"retention", "retention_insurance", "retentioninsurance", "withheld_retention"}:
+        return True
+    name = str(getattr(rule, "name_ar", "") or "").casefold()
+    name = name.translate(str.maketrans({"أ":"ا", "إ":"ا", "آ":"ا", "ى":"ي"}))
+    return any(term in name for term in ("تامين محجوز", "تامين محتجز"))
+
+def is_manual_retention_name(name: str | None) -> bool:
+    """Catch attempts to recreate retention as an ordinary/manual deduction."""
+    value = str(name or "").strip().casefold()
+    value = value.translate(str.maketrans({"أ":"ا", "إ":"ا", "آ":"ا", "ى":"ي"}))
+    return any(term in value for term in ("تامين محجوز", "تامين محتجز", "retention"))
+
+def cumulative_retention_due(cumulative_work: Decimal, rate: Decimal, previously_reserved: Decimal,
+                             cap_remaining: Decimal | None = None,
+                             per_settlement_cap: Decimal | None = None,
+                             calculation_type: str = "Percent") -> Decimal:
+    """Return only the incremental amount needed to reach the cumulative retention target."""
+    target = (money(Decimal(str(cumulative_work)) * Decimal(str(rate)) / Decimal("100"))
+              if calculation_type == "Percent" else money(rate))
+    due = max(ZERO, target - money(previously_reserved))
+    if cap_remaining is not None:
+        due = min(due, max(ZERO, money(cap_remaining)))
+    if per_settlement_cap is not None:
+        due = min(due, money(per_settlement_cap))
+    return money(due)
+
+def cumulative_retention_amount(db: Session, rule: ContractDeductionRule, cumulative_work: Decimal,
+                                contract_value: Decimal, exclude_settlement_id: int | None = None) -> Decimal:
+    cap = rule_cap_value(rule, contract_value)
+    reserved = retention_amount_used(db, rule, exclude_settlement_id=exclude_settlement_id)
+    remaining_cap = max(ZERO, cap - reserved) if cap is not None else None
+    return cumulative_retention_due(cumulative_work, Decimal(str(rule.rate)), reserved,
+        cap_remaining=remaining_cap,
+        per_settlement_cap=Decimal(str(rule.cap_amount)) if rule.cap_amount is not None else None,
+        calculation_type=rule.calculation_type)
+
 def validate_rule_settlement_amount(db: Session, settlement: ContractSettlement, rule: ContractDeductionRule, amount: Decimal) -> None:
     amount = money(amount)
+    _contract, _previous, contract_value = contract_financial_summary(db, rule.contract_id, rule.settlement_side)
+    if is_retention_rule(rule):
+        expected = cumulative_retention_amount(db, rule, Decimal(str(settlement.cumulative_work_value)),
+            contract_value, exclude_settlement_id=settlement.settlement_id)
+        if amount != expected:
+            raise HTTPException(422, f"لا يمكن تعديل التأمين المحجوز يدويًا؛ القيمة الآلية الصحيحة لهذا المستخلص هي {expected}")
+        return
     if amount <= ZERO:
         return
-    _contract, _previous, contract_value = contract_financial_summary(db, rule.contract_id, rule.settlement_side)
     mode = getattr(rule, "application_mode", None) or "PerSettlement"
     if mode != "SingleSettlement" and getattr(rule, "cap_percent", None) is None:
         # Preserve legacy manual override behavior for all pre-existing deduction rules.
@@ -696,7 +744,8 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     for r in rules:
         mode=getattr(r,"application_mode",None) or "PerSettlement"
         base=contract_value if mode=="SingleSettlement" else (work if r.base_type=="CurrentWork" else cumulative if r.base_type=="CumulativeWork" else max(ZERO,contract_value-cumulative))
-        amount=money(base*r.rate/Decimal("100")) if r.calculation_type=="Percent" else money(r.rate)
+        amount=(cumulative_retention_amount(db,r,cumulative,contract_value) if is_retention_rule(r)
+                else money(base*r.rate/Decimal("100")) if r.calculation_type=="Percent" else money(r.rate))
         if mode=="SingleSettlement":
             if r.code not in body.single_deduction_codes:
                 amount=ZERO
@@ -711,6 +760,8 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
         if r.cap_amount is not None: amount=min(amount,money(r.cap_amount))
         if r.code in body.deduction_overrides:
             requested=money(body.deduction_overrides[r.code])
+            if is_retention_rule(r) and requested != amount:
+                raise HTTPException(422,f"لا يمكن تعديل التأمين المحجوز يدويًا؛ القيمة الآلية لهذا المستخلص هي {amount}")
             if mode=="SingleSettlement" or getattr(r,"cap_percent",None) is not None:
                 if requested > amount:
                     raise HTTPException(422,f"قيمة الخصم {r.name_ar} تتجاوز المبلغ المسموح في هذا المستخلص {amount}")
@@ -814,7 +865,10 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
         if not d.get("account_id") and code in live and live[code].gl_account_id: d["account_id"]=live[code].gl_account_id
     total=ZERO
     for code,d in deductions.items():
-        amount=money(body.amounts.get(code, Decimal(str(d.get("amount",0)))))
+        requested_amount=money(body.amounts.get(code, Decimal(str(d.get("amount",0)))))
+        if (is_manual_retention_name(d.get("name")) or str(code).casefold() in {"retention", "retention_insurance", "retentioninsurance", "withheld_retention"}) and requested_amount > ZERO and not is_retention_rule(live.get(code)):
+            raise HTTPException(422,"لا يمكن إضافة التأمين المحجوز كبند استقطاع يدوي؛ يجب تعريفه كقاعدة تأمين بالعقد ليُحتسب تلقائيًا")
+        amount=requested_amount
         if amount<0: raise HTTPException(422,f"قيمة الخصم {code} لا يمكن أن تكون سالبة")
         rule=live.get(code)
         if rule and rule.cap_amount is not None and amount > money(rule.cap_amount):
@@ -831,6 +885,8 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
     added_codes=[]
     previous,contract_value=contract_financial_summary(db,x.contract_id,x.settlement_side)[1:]
     for addition in body.additions:
+        if is_manual_retention_name(addition.name):
+            raise HTTPException(422,"لا يمكن إضافة التأمين المحجوز يدويًا؛ يتم احتسابه تلقائيًا من شروط العقد لمنع تكرار الخصم")
         account=leaf_account_or_422(db, addition.account_id, "حساب الخصم الإضافي: ")
         base=ZERO
         if addition.calculation_type=="Percent":
