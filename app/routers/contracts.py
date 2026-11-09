@@ -365,6 +365,13 @@ def approve_contract(contract_id: int, body: ContractActivationIn | None = None,
                                              if current_by_key.get((rule.settlement_side, rule.code.strip().casefold())) else None)
             data = rule.model_dump()
             data["code"] = rule.code.strip(); data["name_ar"] = rule.name_ar.strip()
+            if data["gl_account_id"] and any(
+                existing["settlement_side"] == data["settlement_side"]
+                and existing["gl_account_id"] == data["gl_account_id"]
+                and existing["code"].casefold() != data["code"].casefold()
+                for existing in incoming.values()
+            ):
+                raise HTTPException(422, "لا يجوز ربط حساب الأستاذ نفسه بأكثر من بند استقطاع لنفس نوع المستخلص")
             incoming[key] = data
         for key, existing in current_by_key.items():
             if key not in incoming:
