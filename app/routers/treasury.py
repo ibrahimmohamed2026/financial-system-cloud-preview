@@ -331,7 +331,8 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
             select(Account, AccountClassification)
             .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
             .join(TreasuryAccount, TreasuryAccount.gl_account_id == Account.account_id)
-            .where(TreasuryAccount.is_active == True, TreasuryAccount.currency_code == treasury.currency_code,
+            .where(TreasuryAccount.is_active == True, TreasuryAccount.screen_code.in_(BANK_SCREENS),
+                   TreasuryAccount.currency_code == treasury.currency_code,
                    TreasuryAccount.treasury_account_id != treasury.treasury_account_id,
                    Account.is_active == True, Account.account_id.not_in(parents))
             .order_by(Account.account_code).limit(500)
