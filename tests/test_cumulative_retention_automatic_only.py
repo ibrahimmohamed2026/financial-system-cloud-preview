@@ -103,3 +103,12 @@ def test_technical_financial_draft_uses_same_cumulative_retention_engine():
     source = open("app/routers/technical_settlements.py", encoding="utf-8").read()
     assert "cumulative_retention_amount(db,r,cumulative,contract_value" in source
     assert "is_retention_rule(r)" in source
+    assert "before_sequence_no=current_sequence_no" in source
+
+
+def test_prior_retention_offset_is_limited_to_earlier_settlements():
+    source = open("app/routers/contract_erp.py", encoding="utf-8").read()
+    helper = source.split("def retention_amount_used", 1)[1].split("FINANCIAL_RULE_FIELDS", 1)[0]
+    assert "before_sequence_no: int | None = None" in helper
+    assert "ContractSettlement.sequence_no < before_sequence_no" in helper
+    assert "before_sequence_no=settlement.sequence_no" in source
