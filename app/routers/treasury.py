@@ -10,6 +10,7 @@ from ..common import money, require_dynamic
 from ..database import get_db
 from ..deps import has_permission, require_permission, write_audit
 from ..models import (Account, AccountClassification, Counterparty, JournalEntry, JournalEntryDetail, Project, TreasuryAccount, TreasuryTransaction, User)
+from .reconciliation import posted_book_balance
 
 # شاشة → (نوع الحساب الافتراضي، العملة الافتراضية)
 BANK_SCREENS = {
@@ -102,12 +103,29 @@ class TxIn(BaseModel):
         return self
 
 
-def balance_of(db: Session, tid: int, upto: date | None = None) -> Decimal:
-    stmt = select(func.coalesce(func.sum(TreasuryTransaction.inflow - TreasuryTransaction.outflow), 0)).where(
-        TreasuryTransaction.treasury_account_id == tid)
-    if upto:
+def _posted_treasury_movement_balance(db: Session, treasury: TreasuryAccount,
+                                       upto: date | None = None,
+                                       before: date | None = None) -> Decimal:
+    stmt = (select(func.coalesce(func.sum(TreasuryTransaction.inflow - TreasuryTransaction.outflow), 0))
+            .select_from(TreasuryTransaction)
+            .join(JournalEntry, JournalEntry.journal_entry_id == TreasuryTransaction.journal_entry_id)
+            .where(TreasuryTransaction.treasury_account_id == treasury.treasury_account_id,
+                   JournalEntry.status == "Posted"))
+    if upto is not None:
         stmt = stmt.where(TreasuryTransaction.transaction_date <= upto)
-    return Decimal(db.scalar(stmt) or 0)
+    if before is not None:
+        stmt = stmt.where(TreasuryTransaction.transaction_date < before)
+    balance = Decimal(db.scalar(stmt) or 0)
+    if treasury.currency_code == "EGP":
+        gl = db.get(Account, treasury.gl_account_id)
+        if gl is not None:
+            balance += Decimal(gl.opening_debit or 0) - Decimal(gl.opening_credit or 0)
+    return balance
+
+
+def balance_of(db: Session, tid: int, upto: date | None = None) -> Decimal:
+    treasury = db.get(TreasuryAccount, tid)
+    return posted_book_balance(db, treasury, upto) if treasury is not None else D0
 
 
 def acc_out(db: Session, a: TreasuryAccount) -> dict:
