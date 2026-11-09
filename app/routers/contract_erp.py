@@ -122,6 +122,65 @@ def retention_amount_used(db: Session, rule: ContractDeductionRule, *, posted_on
             total += Decimal(str(value.get("amount", 0) or 0))
     return money(total)
 
+FINANCIAL_RULE_FIELDS = {
+    "settlement_side", "calculation_type", "rate", "base_type", "application_mode",
+    "cap_percent", "cap_amount", "posting_side", "gl_account_id",
+}
+
+def validate_rule_change(rule, proposed: dict, linked_settlements, reserved_amount: Decimal,
+                         contract_value: Decimal, controlled_reason: str | None = None) -> None:
+    """Guard changes to financial rule terms after settlements have captured the rule."""
+    changed = {field for field in FINANCIAL_RULE_FIELDS
+               if field in proposed and getattr(rule, field, None) != proposed[field]}
+    reserved_amount = money(reserved_amount)
+    old_cap_percent = getattr(rule, "cap_percent", None)
+    new_cap_percent = proposed.get("cap_percent", old_cap_percent)
+
+    if "cap_percent" in changed:
+        if new_cap_percent is None:
+            if reserved_amount > ZERO:
+                raise HTTPException(409, "لا يمكن إلغاء سقف التأمين بعد حجز مبالغ؛ ارفع السقف أو سوِّ الحجوزات أولًا")
+        else:
+            new_cap_value = money(Decimal(str(contract_value)) * Decimal(str(new_cap_percent)) / Decimal("100"))
+            if new_cap_value < reserved_amount:
+                raise HTTPException(409, f"لا يمكن تخفيض سقف التأمين إلى {new_cap_value}؛ إجمالي المبالغ المحجوزة بالفعل {reserved_amount}")
+
+    if changed and linked_settlements:
+        if not (controlled_reason or "").strip():
+            raise HTTPException(409, "توجد مستخلصات مرتبطة بقاعدة الخصم؛ لا يمكن تغيير شروطها المالية من التعديل العادي. استخدم مسار التعديل المنضبط مع ذكر السبب.")
+        unsafe = []
+        for settlement in linked_settlements:
+            deduction = (settlement.deductions_json or {}).get(rule.code)
+            amount = Decimal(str(deduction.get("amount", 0) or 0)) if isinstance(deduction, dict) else ZERO
+            if settlement.status != "Draft" or amount > ZERO:
+                unsafe.append(settlement.settlement_no or settlement.settlement_id)
+        if unsafe:
+            raise HTTPException(409, "لا يمكن تعديل شروط القاعدة المنضبط بعد اعتماد/ترحيل المستخلص أو وجود مبلغ حجز في مستخلص قائم: " + ", ".join(map(str, unsafe)))
+
+def _linked_rule_settlements(db: Session, rule: ContractDeductionRule):
+    rows = db.scalars(select(ContractSettlement).where(
+        ContractSettlement.contract_id == rule.contract_id,
+        ContractSettlement.settlement_side == rule.settlement_side)).all()
+    return [row for row in rows if rule.code in (row.deductions_json or {})]
+
+def validate_contract_rule_update(db: Session, rule: ContractDeductionRule, proposed: dict,
+                                  controlled_reason: str | None = None) -> None:
+    linked = _linked_rule_settlements(db, rule)
+    active_statuses = {"Draft", "PendingApproval", "PendingFinalApproval", "Approved", "Posted"}
+    reserved = ZERO
+    for settlement in linked:
+        if settlement.status not in active_statuses:
+            continue
+        deduction = (settlement.deductions_json or {}).get(rule.code)
+        if isinstance(deduction, dict):
+            reserved += Decimal(str(deduction.get("amount", 0) or 0))
+    _contract, _previous, contract_value = contract_financial_summary(db, rule.contract_id, rule.settlement_side)
+    validate_rule_change(rule, proposed, linked, money(reserved), contract_value, controlled_reason)
+
+def ensure_rule_not_linked(db: Session, rule: ContractDeductionRule) -> None:
+    if _linked_rule_settlements(db, rule):
+        raise HTTPException(409, f"لا يمكن حذف قاعدة الخصم «{rule.name_ar}» لارتباطها بمستخلصات محفوظة؛ احتفظ بالسجل التاريخي وعطّل القاعدة بدلًا من حذفها")
+
 def rule_cap_value(rule: ContractDeductionRule, contract_value: Decimal) -> Decimal | None:
     # CapPercent is the cumulative contract-level retention ceiling.
     # The legacy CapAmount remains a per-settlement limit for backward compatibility.
@@ -236,6 +295,9 @@ class RuleIn(BaseModel):
     cap_percent: Optional[Decimal] = Field(default=None,ge=0,le=100)
     posting_side: Literal["Debit","Credit"]; cap_amount: Optional[Decimal] = Field(default=None,ge=0)
     gl_account_id: Optional[int] = None; is_active: bool = True; sort_order: int = 0
+class ControlledRuleUpdateIn(RuleIn):
+    reason: str = Field(min_length=10, max_length=1000)
+
 class ConfigIn(BaseModel):
     settlement_side: Literal["Customer","Subcontractor"]; company_id: int; fiscal_year_id: int
     control_account_id: int; work_account_id: int; retention_account_id: Optional[int] = None
@@ -433,8 +495,24 @@ def update_rule(rule_id:int,body:RuleIn,user:User=Depends(require_permission("Co
     if body.gl_account_id: leaf_account_or_422(db,body.gl_account_id,"حساب الخصم: ")
     old=rule_out(x)
     if body.cap_percent is not None and body.calculation_type != "Percent": raise HTTPException(422,"الحد الأقصى كنسبة من العقد يتطلب أن تكون طريقة الحساب نسبة مئوية")
+    validate_contract_rule_update(db, x, body.model_dump())
     for k,v in body.model_dump().items(): setattr(x,k,v)
     write_audit(db,user.user_id,"Update","ContractDeductionRules",x.rule_id,old=old,new=rule_out(x));db.commit();db.refresh(x);return rule_out(x)
+
+@router.put("/deduction-rules/{rule_id}/controlled")
+def controlled_update_rule(rule_id:int,body:ControlledRuleUpdateIn,user:User=Depends(require_permission("Contracts","Edit")),db:Session=Depends(get_db)):
+    x=db.get(ContractDeductionRule,rule_id)
+    if not x: raise HTTPException(404,"قاعدة الخصم غير موجودة")
+    if body.gl_account_id: leaf_account_or_422(db,body.gl_account_id,"حساب الخصم: ")
+    old=rule_out(x)
+    data=body.model_dump(exclude={"reason"})
+    if data["cap_percent"] is not None and data["calculation_type"] != "Percent":
+        raise HTTPException(422,"الحد الأقصى كنسبة من العقد يتطلب أن تكون طريقة الحساب نسبة مئوية")
+    validate_contract_rule_update(db, x, data, controlled_reason=body.reason)
+    for k,v in data.items(): setattr(x,k,v)
+    write_audit(db,user.user_id,"ControlledUpdate","ContractDeductionRules",x.rule_id,
+        old=old,new={**rule_out(x),"controlled_change_reason":body.reason.strip()})
+    db.commit();db.refresh(x);return rule_out(x)
 
 class AutoLinkIn(BaseModel):
     settlement_side: Optional[Literal["Customer","Subcontractor"]] = None
