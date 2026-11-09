@@ -92,6 +92,25 @@ def leaf_account_or_422(db, aid, label=""):
     if db.scalar(select(Account.account_id).where(Account.parent_account_id == aid).limit(1)):
         raise HTTPException(422, f"{label}الحساب {a.account_code} — {a.account_name_ar} حساب رئيسي؛ اختر حسابًا فرعيًا يقبل الترحيل")
     return a
+
+
+def validate_unique_rule_account(db: Session, contract_id: int, settlement_side: str,
+                                  account_id: int | None, code: str,
+                                  exclude_rule_id: int | None = None) -> None:
+    if not account_id:
+        return
+    duplicate = db.scalar(select(ContractDeductionRule).where(
+        ContractDeductionRule.contract_id == contract_id,
+        ContractDeductionRule.settlement_side == settlement_side,
+        ContractDeductionRule.code != code,
+        ContractDeductionRule.gl_account_id == account_id,
+        ContractDeductionRule.is_active.is_(True),
+        ContractDeductionRule.rule_id != (exclude_rule_id or 0)).limit(1))
+    if duplicate:
+        account = db.get(Account, account_id)
+        raise HTTPException(409, f"الحساب {account.account_code if account else account_id} مربوط بالفعل ببند الاستقطاع «{duplicate.name_ar}»؛ لا يجوز تكرار الحساب لبند آخر")
+
+
 def resolve_rule_account(rule_code, name_ar, gl_account_id, cfg):
     """حساب القاعدة: المربوط صراحة أولًا، ثم الافتراضي من إعدادات العقد (بدون تخمين خاطئ)."""
     if gl_account_id: return gl_account_id
@@ -595,6 +614,7 @@ def list_rules(contract_id:int, settlement_side:Literal["Customer","Subcontracto
 def save_rule(contract_id:int,body:RuleIn,user:User=Depends(require_permission("Contracts","Edit")),db:Session=Depends(get_db)):
     if not db.get(Contract,contract_id): raise HTTPException(404,"العقد غير موجود")
     if body.gl_account_id: leaf_account_or_422(db,body.gl_account_id,"حساب الخصم: ")
+    validate_unique_rule_account(db, contract_id, body.settlement_side, body.gl_account_id, body.code)
     if body.cap_percent is not None and body.calculation_type != "Percent": raise HTTPException(422,"الحد الأقصى كنسبة من العقد يتطلب أن تكون طريقة الحساب نسبة مئوية")
     duplicate=db.scalar(select(ContractDeductionRule).where(ContractDeductionRule.contract_id==contract_id,ContractDeductionRule.settlement_side==body.settlement_side,ContractDeductionRule.code==body.code))
     if duplicate: raise HTTPException(409,"كود الخصم موجود بالفعل لهذا العقد والجهة")
@@ -605,6 +625,7 @@ def update_rule(rule_id:int,body:RuleIn,user:User=Depends(require_permission("Co
     x=db.get(ContractDeductionRule,rule_id)
     if not x: raise HTTPException(404,"قاعدة الخصم غير موجودة")
     if body.gl_account_id: leaf_account_or_422(db,body.gl_account_id,"حساب الخصم: ")
+    validate_unique_rule_account(db, x.contract_id, body.settlement_side, body.gl_account_id, body.code, x.rule_id)
     old=rule_out(x)
     if body.cap_percent is not None and body.calculation_type != "Percent": raise HTTPException(422,"الحد الأقصى كنسبة من العقد يتطلب أن تكون طريقة الحساب نسبة مئوية")
     validate_contract_rule_update(db, x, body.model_dump())
