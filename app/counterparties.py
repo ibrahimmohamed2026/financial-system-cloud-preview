@@ -59,3 +59,44 @@ def resolve_counterparty(db: Session, name: str | None, party_type: str = "Other
 
 def roles_for(party_type: str) -> list[str]:
     return [party_type] if party_type not in ("Other", "Mixed") else []
+
+
+def validate_customer_party(db: Session, counterparty_id: int | None, *, require_account: bool = False) -> Counterparty:
+    """Resolve the contract's customer identity and validate its single GL link."""
+    from .models import Account, AccountClassification
+
+    if counterparty_id is None:
+        raise HTTPException(422, "يجب اختيار بطاقة العميل من سجل الأطراف")
+    party = db.get(Counterparty, counterparty_id)
+    if party is None:
+        raise HTTPException(422, "بطاقة العميل المحددة غير موجودة")
+    if not party.is_active:
+        raise HTTPException(409, "بطاقة العميل موقوفة؛ أعد تنشيطها قبل إنشاء معاملات جديدة")
+    roles = set(party.roles or [])
+    if party.party_type not in ("Customer", "Mixed") and "Customer" not in roles:
+        raise HTTPException(422, "الطرف المحدد ليس مصنفًا كعميل")
+    if not party.linked_account_id:
+        if require_account:
+            raise HTTPException(422, "بطاقة العميل غير مرتبطة بحساب في شجرة الحسابات؛ اربط الحساب قبل الترحيل")
+        return party
+    account = db.get(Account, party.linked_account_id)
+    if account is None or not account.is_active:
+        raise HTTPException(422, "حساب العميل المرتبط غير موجود أو غير نشط")
+    if db.scalar(select(Account.account_id).where(Account.parent_account_id == account.account_id).limit(1)):
+        raise HTTPException(422, "حساب العميل المرتبط حساب رئيسي؛ اختر حسابًا فرعيًا قابلًا للترحيل")
+    classification = db.get(AccountClassification, account.classification_id)
+    class_name = (classification.name_ar if classification else "").casefold()
+    if "عملاء" not in class_name:
+        raise HTTPException(422, "حساب العميل يجب أن يكون من تصنيف العملاء في شجرة الحسابات")
+    if (account.normal_balance or "").upper() != "DR":
+        raise HTTPException(422, "طبيعة حساب العميل يجب أن تكون مدينة (DR)")
+    if (account.statement_type or "").casefold() != "balancesheet":
+        raise HTTPException(422, "حساب العميل يجب أن يكون مصنفًا ضمن الميزانية (BalanceSheet)")
+    duplicate = db.scalar(select(Counterparty.counterparty_id).where(
+        Counterparty.linked_account_id == account.account_id,
+        Counterparty.counterparty_id != party.counterparty_id,
+        Counterparty.is_active.is_(True),
+    ).limit(1))
+    if duplicate is not None:
+        raise HTTPException(409, "حساب الأستاذ مرتبط ببطاقة طرف أخرى؛ لا يجوز تكرار حساب مراقبة العملاء")
+    return party
