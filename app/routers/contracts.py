@@ -48,6 +48,8 @@ class ContractCreateDeductionRule(BaseModel):
     base_type: Literal["CurrentWork", "CumulativeWork", "RemainingContract"] = "CurrentWork"
     posting_side: Literal["Debit", "Credit"]
     cap_amount: Optional[Decimal] = Field(default=None, ge=0)
+    application_mode: Literal["PerSettlement", "SingleSettlement"] = "PerSettlement"
+    cap_percent: Optional[Decimal] = Field(default=None, ge=0, le=100)
     gl_account_id: Optional[int] = None
     is_active: bool = True
     sort_order: int = 0
