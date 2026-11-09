@@ -152,10 +152,12 @@ def validate_rule_change(rule, proposed: dict, linked_settlements, reserved_amou
         for settlement in linked_settlements:
             deduction = (settlement.deductions_json or {}).get(rule.code)
             amount = Decimal(str(deduction.get("amount", 0) or 0)) if isinstance(deduction, dict) else ZERO
-            if settlement.status != "Draft" or amount > ZERO:
+            # Posted/cancelled settlements keep their immutable historical snapshot.
+            # Open workflow rows or drafts with a non-zero deduction must be resolved first.
+            if settlement.status not in ("Draft", "Posted", "Cancelled") or (settlement.status == "Draft" and amount > ZERO):
                 unsafe.append(settlement.settlement_no or settlement.settlement_id)
         if unsafe:
-            raise HTTPException(409, "لا يمكن تعديل شروط القاعدة المنضبط بعد اعتماد/ترحيل المستخلص أو وجود مبلغ حجز في مستخلص قائم: " + ", ".join(map(str, unsafe)))
+            raise HTTPException(409, "لا يمكن تعديل شروط القاعدة المنضبط مع وجود مستخلصات قيد المراجعة أو مسودات بها حجز؛ عالجها أولًا: " + ", ".join(map(str, unsafe)))
 
 def _linked_rule_settlements(db: Session, rule: ContractDeductionRule):
     rows = db.scalars(select(ContractSettlement).where(
