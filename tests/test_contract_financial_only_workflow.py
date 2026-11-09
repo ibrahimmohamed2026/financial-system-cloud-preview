@@ -97,3 +97,12 @@ def test_audit_log_action_type_length_and_existing_postgres_schema_upgrade():
     assert 'if engine.dialect.name == "postgresql" and "AuditLog" in inspect(engine).get_table_names():' in setup
     assert 'ALTER TABLE "AuditLog" ALTER COLUMN "ActionType" TYPE VARCHAR(100)' in setup
     assert 'action_type_length < 100' in setup
+
+
+def test_existing_awaiting_technical_approval_drafts_are_migrated_to_finance_review():
+    setup = Path("app/db_setup.py").read_text(encoding="utf-8")
+    assert "financial.\"Status\" = 'AwaitingTechnicalApproval'" in setup
+    assert "SET \"ApprovedQuantity\" = line.\"CurrentQuantity\"" in setup
+    assert "SET \"Status\" = 'ForwardedToFinance'" in setup
+    assert "SET \"Status\" = 'Draft'" in setup
+    assert "No journal" not in setup
