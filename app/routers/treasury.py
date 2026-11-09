@@ -404,6 +404,15 @@ def balance_reconciliation(screen_code: str, treasury_account_id: int | None = Q
     as_of = as_of_date or date.today()
     ledger_balance = posted_book_balance(db, a, as_of)
     movement_balance = _posted_treasury_movement_balance(db, a, upto=as_of)
+    gl_account = db.get(Account, a.gl_account_id)
+    opening_balance_warning = None
+    if a.currency_code != "EGP" and gl_account and (
+        Decimal(gl_account.opening_debit or 0) != 0 or Decimal(gl_account.opening_credit or 0) != 0
+    ):
+        opening_balance_warning = (
+            "يوجد رصيد افتتاحي بالجنيه في شجرة الحسابات، ولم يتم خلطه برصيد الدولار. "
+            "يلزم إدخال أو تسوية الرصيد الافتتاحي بعملة الحساب."
+        )
     T = TreasuryTransaction
     rows = db.execute(
         select(T, JournalEntry.status, JournalEntry.entry_no)
@@ -487,6 +496,7 @@ def balance_reconciliation(screen_code: str, treasury_account_id: int | None = Q
             "بالحركات والحركات التي لا تحتوي قيودها على سطر لحساب البنك."
         ),
         "opening_balance_basis": "GL opening debit-credit" if a.currency_code == "EGP" else "FCY journal amounts; EGP opening balances excluded",
+        "opening_balance_warning": opening_balance_warning,
         "excluded_movements": {
             key: {"label": value["label"], "count": len(value["items"]), "items": value["items"]}
             for key, value in categories.items()
