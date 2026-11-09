@@ -192,3 +192,31 @@ def test_usd_treasury_movement_balance_uses_posted_native_currency_rows_only(db)
 
     assert _posted_treasury_movement_balance(db, treasury) == Decimal("80.00")
     assert balance_of(db, treasury.treasury_account_id) == Decimal("80.00")
+
+
+def test_usd_balance_reconciliation_uses_fcy_and_warns_about_egp_opening(db, monkeypatch):
+    treasury = _account(db, currency="USD", opening_debit="25000", opening_credit="5000")
+    posted_in = _entry(db, 51, status="Posted")
+    _line(db, posted_in, debit="5200", fcy="100")
+    _movement(db, 51, entry_id=51, inflow="100")
+    posted_out = _entry(db, 52, status="Posted")
+    _line(db, posted_out, credit="1040", fcy="20")
+    _movement(db, 52, entry_id=52, outflow="20")
+    draft = _entry(db, 53, status="Draft")
+    _line(db, draft, debit="2600", fcy="50")
+    _movement(db, 53, entry_id=53, inflow="50")
+    db.flush()
+
+    from app.routers import treasury as treasury_router
+    monkeypatch.setattr(treasury_router, "_bound", lambda _db, _screen: treasury)
+    monkeypatch.setattr(treasury_router, "has_permission", lambda *_args: True)
+    result = balance_reconciliation(
+        "BankCibUsd", None, date(2026, 11, 8),
+        type("UserStub", (), {"user_id": 1})(), db,
+    )
+
+    assert result["ledger_balance"] == "80.00"
+    assert result["posted_treasury_movement_balance"] == "80.00"
+    assert result["difference"] == "0.00"
+    assert result["opening_balance_warning"]
+    assert result["excluded_movements"]["Draft"]["count"] == 1
