@@ -456,7 +456,7 @@ class SettlementLineIn(BaseModel):
 class SettlementIn(BaseModel):
     settlement_side: Literal["Customer","Subcontractor"]; settlement_no: str | None = Field(default=None,max_length=50)
     is_final: bool = False
-    settlement_date: date; counterparty_name: str = Field(min_length=1,max_length=200); counterparty_name_en: str | None = Field(default=None,max_length=200)
+    settlement_date: date; counterparty_name: str | None = Field(default=None,max_length=200); counterparty_name_en: str | None = Field(default=None,max_length=200)
     work_value: Optional[Decimal] = Field(default=None,gt=0)
     items: list[SettlementLineIn] = Field(default_factory=list)
     vat_rate: Optional[Decimal] = Field(default=None,ge=0,le=100)
@@ -798,6 +798,8 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
         raise HTTPException(409,"تم تحديد مستخلص ختامي لهذا العقد ونوع المستخلص؛ لا يمكن إنشاء مستخلصات إضافية بعده")
     side=body.settlement_side
     customer_party = validate_customer_party(db, c.counterparty_id) if side == "Customer" else None
+    if side == "Subcontractor" and not (body.counterparty_name or "").strip():
+        raise HTTPException(422, "يجب اختيار اسم مقاول الباطن")
     previous, contract_value = contract_financial_summary(db, contract_id, side)[1:]
     # Settlement numbers are generated internally; sequence is scoped by contract and settlement side.
     contract_items=db.scalars(select(ContractItem).where(ContractItem.contract_id==contract_id).order_by(ContractItem.item_no)).all()
@@ -880,7 +882,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     vat=vat_data["amount"]; net=money(work+vat-total)
     if net<0: raise HTTPException(422,"الخصومات والضريبة تجعل صافي المستخلص سالبًا")
     validate_deduction_account_links(db, side, deductions, {r.code:r for r in rules})
-    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,is_final=body.is_final,settlement_no=f"ST-PENDING-{uuid4().hex}",settlement_date=body.settlement_date,counterparty_name=(customer_party.legal_name or customer_party.name) if customer_party else body.counterparty_name,counterparty_name_en=customer_party.name_en if customer_party else body.counterparty_name_en,counterparty_id=customer_party.counterparty_id if customer_party else None,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,vat_rate=vat_data["rate"],vat_base_amount=vat_data["base_amount"],vat_base_type=vat_data["base_type"],vat_tax_status=vat_data["tax_status"],vat_account_id=vat_data["account_id"],net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
+    x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,is_final=body.is_final,settlement_no=f"ST-PENDING-{uuid4().hex}",settlement_date=body.settlement_date,counterparty_name=(customer_party.legal_name or customer_party.name) if customer_party else (body.counterparty_name or "").strip(),counterparty_name_en=customer_party.name_en if customer_party else body.counterparty_name_en,counterparty_id=customer_party.counterparty_id if customer_party else None,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,vat_rate=vat_data["rate"],vat_base_amount=vat_data["base_amount"],vat_base_type=vat_data["base_type"],vat_tax_status=vat_data["tax_status"],vat_account_id=vat_data["account_id"],net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
     side_code = "CUS" if side == "Customer" else "SUB"
     x.settlement_no = f"ST-{side_code}-{body.settlement_date.year}-{x.settlement_id:06d}"
