@@ -325,6 +325,6 @@ def test_treasury_api_accepts_settlement_link_and_validates_before_journal_creat
     txin = source.split("class TxIn", 1)[1].split("def _posted_treasury_movement_balance", 1)[0]
     add = source.split('def add_tx', 1)[1].split('def _tx', 1)[0]
     assert "settlement_id: int | None" in txin
-    assert "_validate_settlement_payment(db, body)" in add
+    assert "_validate_settlement_payment(db, body, a)" in add
     assert "JournalEntry.status == \"Posted\"" in source
     assert "JournalEntry.status == \"Draft\"" in source
