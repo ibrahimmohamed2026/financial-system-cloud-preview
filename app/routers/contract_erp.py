@@ -92,16 +92,57 @@ def leaf_account_or_422(db, aid, label=""):
     if db.scalar(select(Account.account_id).where(Account.parent_account_id == aid).limit(1)):
         raise HTTPException(422, f"{label}الحساب {a.account_code} — {a.account_name_ar} حساب رئيسي؛ اختر حسابًا فرعيًا يقبل الترحيل")
     return a
+
+
+def validate_unique_rule_account(db: Session, contract_id: int, settlement_side: str,
+                                  account_id: int | None, code: str,
+                                  exclude_rule_id: int | None = None) -> None:
+    if not account_id:
+        return
+    duplicate = db.scalar(select(ContractDeductionRule).where(
+        ContractDeductionRule.contract_id == contract_id,
+        ContractDeductionRule.settlement_side == settlement_side,
+        ContractDeductionRule.code != code,
+        ContractDeductionRule.gl_account_id == account_id,
+        ContractDeductionRule.is_active.is_(True),
+        ContractDeductionRule.rule_id != (exclude_rule_id or 0)).limit(1))
+    if duplicate:
+        account = db.get(Account, account_id)
+        raise HTTPException(409, f"الحساب {account.account_code if account else account_id} مربوط بالفعل ببند الاستقطاع «{duplicate.name_ar}»؛ لا يجوز تكرار الحساب لبند آخر")
+
+
 def resolve_rule_account(rule_code, name_ar, gl_account_id, cfg):
-    """حساب القاعدة: المربوط صراحة أولًا، ثم الافتراضي من إعدادات العقد (بدون تخمين خاطئ)."""
-    if gl_account_id: return gl_account_id
-    if not cfg: return None
-    field = LEGACY_CFG_FIELD.get((rule_code or "").lower())
-    if field: return getattr(cfg, field)
-    code = (rule_code or "").lower()
-    if "retention" in code or "محتجز" in (name_ar or "") or "ضمان" in (name_ar or ""): return cfg.retention_account_id
-    if "advance" in code or "مقدم" in (name_ar or ""): return cfg.advance_account_id
-    return None
+    """Only an explicit rule-to-account link is authoritative; never reuse shared legacy defaults."""
+    return gl_account_id
+
+
+def validate_deduction_account_links(db: Session, settlement_side: str,
+                                     deductions: dict, live_rules: dict | None = None) -> None:
+    """Validate positive deduction accounts, posting direction, normal balance and uniqueness."""
+    live_rules = live_rules or {}
+    used_accounts: dict[int, str] = {}
+    expected_side = "Debit" if settlement_side == "Customer" else "Credit"
+    for code, deduction in deductions.items():
+        amount = money(deduction.get("amount", 0))
+        if amount <= ZERO:
+            continue
+        rule = live_rules.get(code)
+        account_id = deduction.get("account_id") or (rule.gl_account_id if rule else None)
+        if not account_id:
+            raise HTTPException(422, f"الاستقطاع «{deduction.get('name', code)}» موجب ولا يرتبط بحساب أستاذ مستقل")
+        account = leaf_account_or_422(db, account_id, f"حساب الاستقطاع {deduction.get('name', code)}: ")
+        previous_code = used_accounts.get(account.account_id)
+        if previous_code and previous_code != code:
+            raise HTTPException(422, f"الحساب {account.account_code} مربوط بأكثر من بند استقطاع ({previous_code} و{code})؛ خصص حسابًا مستقلًا لكل بند")
+        used_accounts[account.account_id] = code
+        posting_side = deduction.get("posting_side") or (rule.posting_side if rule else None)
+        if posting_side != expected_side:
+            raise HTTPException(422, f"جهة القيد للاستقطاع «{deduction.get('name', code)}» يجب أن تكون {expected_side} في هذا النوع من المستخلص")
+        expected_balance = "DR" if posting_side == "Debit" else "CR"
+        if account.normal_balance != expected_balance:
+            raise HTTPException(422, f"طبيعة الحساب {account.account_code} ({account.normal_balance}) لا تتوافق مع جهة قيد الاستقطاع {posting_side}")
+        deduction["account_id"] = account.account_id
+        deduction["posting_side"] = posting_side
 
 def final_settlement_quantity_gaps(db, contract_id, side, candidate=None):
     """Calculate final quantities once: linked technical/financial certificates are never double-counted."""
@@ -595,6 +636,7 @@ def list_rules(contract_id:int, settlement_side:Literal["Customer","Subcontracto
 def save_rule(contract_id:int,body:RuleIn,user:User=Depends(require_permission("Contracts","Edit")),db:Session=Depends(get_db)):
     if not db.get(Contract,contract_id): raise HTTPException(404,"العقد غير موجود")
     if body.gl_account_id: leaf_account_or_422(db,body.gl_account_id,"حساب الخصم: ")
+    validate_unique_rule_account(db, contract_id, body.settlement_side, body.gl_account_id, body.code)
     if body.cap_percent is not None and body.calculation_type != "Percent": raise HTTPException(422,"الحد الأقصى كنسبة من العقد يتطلب أن تكون طريقة الحساب نسبة مئوية")
     duplicate=db.scalar(select(ContractDeductionRule).where(ContractDeductionRule.contract_id==contract_id,ContractDeductionRule.settlement_side==body.settlement_side,ContractDeductionRule.code==body.code))
     if duplicate: raise HTTPException(409,"كود الخصم موجود بالفعل لهذا العقد والجهة")
@@ -605,6 +647,7 @@ def update_rule(rule_id:int,body:RuleIn,user:User=Depends(require_permission("Co
     x=db.get(ContractDeductionRule,rule_id)
     if not x: raise HTTPException(404,"قاعدة الخصم غير موجودة")
     if body.gl_account_id: leaf_account_or_422(db,body.gl_account_id,"حساب الخصم: ")
+    validate_unique_rule_account(db, x.contract_id, body.settlement_side, body.gl_account_id, body.code, x.rule_id)
     old=rule_out(x)
     if body.cap_percent is not None and body.calculation_type != "Percent": raise HTTPException(422,"الحد الأقصى كنسبة من العقد يتطلب أن تكون طريقة الحساب نسبة مئوية")
     validate_contract_rule_update(db, x, body.model_dump())
@@ -639,27 +682,19 @@ def auto_link_rules(contract_id:int,body:AutoLinkIn,user:User=Depends(require_pe
     q=select(ContractDeductionRule).where(ContractDeductionRule.contract_id==contract_id)
     if body.settlement_side: q=q.where(ContractDeductionRule.settlement_side==body.settlement_side)
     rules=db.scalars(q).all()
-    accounts=db.scalars(select(Account).where(Account.is_active.is_(True)).order_by(Account.account_code)).all()
-    parents={a.parent_account_id for a in accounts if a.parent_account_id}
-    leaves=[a for a in accounts if a.account_id not in parents]
-    def find(words):
-        for w in words:
-            for a in leaves:
-                if w in (a.account_name_ar or ""): return a
-        return None
+    # Never guess an accounting destination from broad Arabic keywords or shared
+    # contract defaults. Those matches can silently route different deductions
+    # to one account. Explicit GLAccountId links are preserved and validated.
     linked=[];missing=[]
     for r in rules:
-        if r.gl_account_id and not body.overwrite: continue
-        cfg=db.scalar(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==contract_id,ContractAccountingConfig.settlement_side==r.settlement_side))
-        words=RULE_KEYWORDS.get(r.code.lower(),[])+[r.name_ar]
-        acc=find(words)
-        aid=acc.account_id if acc else resolve_rule_account(r.code,r.name_ar,None,cfg)
-        if aid:
-            r.gl_account_id=aid; a=db.get(Account,aid)
-            linked.append({"code":r.code,"name":r.name_ar,"side":r.settlement_side,"account":f"{a.account_code} — {a.account_name_ar}"})
-        else: missing.append({"code":r.code,"name":r.name_ar,"side":r.settlement_side})
-    write_audit(db,user.user_id,"AutoLinkRules","Contracts",contract_id,new={"linked":linked,"missing":missing});db.commit()
-    return {"linked":linked,"missing":missing}
+        if r.gl_account_id:
+            account=leaf_account_or_422(db,r.gl_account_id,f"حساب الاستقطاع {r.name_ar}: ")
+            linked.append({"code":r.code,"name":r.name_ar,"side":r.settlement_side,
+                           "account":f"{account.account_code} — {account.account_name_ar}"})
+        else:
+            missing.append({"code":r.code,"name":r.name_ar,"side":r.settlement_side})
+    return {"linked":linked,"missing":missing,
+            "message":"لم يتم التخمين أو الربط التلقائي؛ اختر حسابًا مستقلًا صحيحًا لكل بند من شجرة الحسابات."}
 
 @router.put("/{contract_id}/accounting-config")
 def save_config(contract_id:int,body:ConfigIn,user:User=Depends(require_permission("Contracts","Edit")),db:Session=Depends(get_db)):
@@ -835,6 +870,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
         tax_status=body.vat_tax_status,base_type=body.vat_base_type,base_amount=body.vat_base_amount)
     vat=vat_data["amount"]; net=money(work+vat-total)
     if net<0: raise HTTPException(422,"الخصومات والضريبة تجعل صافي المستخلص سالبًا")
+    validate_deduction_account_links(db, side, deductions, {r.code:r for r in rules})
     x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,is_final=body.is_final,settlement_no=f"ST-PENDING-{uuid4().hex}",settlement_date=body.settlement_date,counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,vat_rate=vat_data["rate"],vat_base_amount=vat_data["base_amount"],vat_base_type=vat_data["base_type"],vat_tax_status=vat_data["tax_status"],vat_account_id=vat_data["account_id"],net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
     side_code = "CUS" if side == "Customer" else "SUB"
@@ -982,6 +1018,7 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
             raise HTTPException(422,"لا يمكن حفظ ضريبة موجبة دون ربط حساب ضريبة القيمة المضافة بالعقد")
     net=money(Decimal(str(x.work_value))+vat-total)
     if net<0: raise HTTPException(422,"إجمالي الخصومات أكبر من قيمة الأعمال والضريبة")
+    validate_deduction_account_links(db, x.settlement_side, deductions, live)
     x.deductions_json=deductions; x.vat_amount=vat; x.net_amount=net
     write_audit(db,user.user_id,"UpdateDeductions","ContractSettlements",x.settlement_id,old=old,new={"deductions":deductions,"added_manual_codes":added_codes,"vat_amount":str(vat),"net_amount":str(net)})
     db.commit();db.refresh(x)
@@ -1064,6 +1101,7 @@ def approve_settlement(settlement_id:int, body:FinancialSettlementReview, user:U
             if not account_id:
                 raise HTTPException(422, f"الخصم {d.get('name',code)} موجب ولا يرتبط بحساب أستاذ")
             leaf_account_or_422(db, account_id, f"حساب الخصم {d.get('name',code)}: ")
+    validate_deduction_account_links(db, x.settlement_side, deductions, live_rules)
     expected_net=money(Decimal(str(x.work_value))+Decimal(str(x.vat_amount))-deduction_total)
     if expected_net<ZERO or money(x.net_amount)!=expected_net:
         raise HTTPException(409, "صافي المستخلص لا يساوي الأعمال + الضريبة − إجمالي الخصومات")
@@ -1188,6 +1226,7 @@ def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permi
             raise HTTPException(422, f"قيمة الخصم {deduction.get('name',code)} تتجاوز الحد الأقصى المتفق عليه")
         if rule:
             validate_rule_settlement_amount(db, x, rule, amount)
+    validate_deduction_account_links(db, x.settlement_side, dict(x.deductions_json or {}), manager_rules)
     if x.is_final:
         unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
             ContractSettlement.contract_id == x.contract_id,
@@ -1250,6 +1289,7 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
         if money(d.get("amount",0))>0 and not d.get("account_id"):
             r=live.get(code); d["account_id"]=resolve_rule_account(code,d.get("name"),r.gl_account_id if r else None,cfg)
             if not d["account_id"]: raise HTTPException(422,f"قاعدة الخصم «{d.get('name',code)}» غير مربوطة بحساب في شجرة الحسابات؛ اربطها من تفاصيل العقد ثم أعد المحاولة")
+    validate_deduction_account_links(db, side, deductions, live)
     # Revalidate the persisted settlement arithmetic before creating any journal rows.
     # This protects against stale/inconsistent records and manual database edits; the
     # journal must agree with the settlement header, not merely balance by coincidence.
