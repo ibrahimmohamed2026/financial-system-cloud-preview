@@ -19,6 +19,7 @@ from ..models import (Account, Beneficiary, Check, CheckPrintTemplate, CheckStat
 
 CHECK_SCREENS = {"ChecksCib", "ChecksCibUsd"}
 CHECK_CURRENCY = {"ChecksCib": "EGP", "ChecksCibUsd": "USD"}
+CHECK_BANK_SCREEN = {"ChecksCib": "BankCibEgp", "ChecksCibUsd": "BankCibUsd"}
 STATUSES = ["جديد", "مطبوع", "تم التسليم", "تم الصرف", "ملغي", "مرتد"]
 # الانتقالات المسموحة
 NEXT = {"جديد": {"مطبوع", "تم التسليم", "ملغي"}, "مطبوع": {"تم التسليم", "ملغي"},
@@ -139,7 +140,7 @@ def get_account(screen_code: str, _: User = Depends(require_dynamic("View", CHEC
         AccountClassification.name_ar == "نقدية بالصندوق و البنوك")
     bank_gl_accounts = select(Account.account_id).where(Account.is_active == True,
                                                          Account.classification_id.in_(cash_bank_classes))
-    expected_bank_screen = {"ChecksCib": "BankCibEgp", "ChecksCibUsd": "BankCibUsd"}[screen_code]
+    expected_bank_screen = CHECK_BANK_SCREEN[screen_code]
     banks = [{"treasury_account_id": b.treasury_account_id, "name_ar": b.name_ar, "currency_code": b.currency_code}
              for b in db.scalars(select(TreasuryAccount).where(TreasuryAccount.account_type == "Bank",
                                                                TreasuryAccount.screen_code == expected_bank_screen,
