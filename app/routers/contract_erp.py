@@ -639,27 +639,19 @@ def auto_link_rules(contract_id:int,body:AutoLinkIn,user:User=Depends(require_pe
     q=select(ContractDeductionRule).where(ContractDeductionRule.contract_id==contract_id)
     if body.settlement_side: q=q.where(ContractDeductionRule.settlement_side==body.settlement_side)
     rules=db.scalars(q).all()
-    accounts=db.scalars(select(Account).where(Account.is_active.is_(True)).order_by(Account.account_code)).all()
-    parents={a.parent_account_id for a in accounts if a.parent_account_id}
-    leaves=[a for a in accounts if a.account_id not in parents]
-    def find(words):
-        for w in words:
-            for a in leaves:
-                if w in (a.account_name_ar or ""): return a
-        return None
+    # Never guess an accounting destination from broad Arabic keywords or shared
+    # contract defaults. Those matches can silently route different deductions
+    # to one account. Explicit GLAccountId links are preserved and validated.
     linked=[];missing=[]
     for r in rules:
-        if r.gl_account_id and not body.overwrite: continue
-        cfg=db.scalar(select(ContractAccountingConfig).where(ContractAccountingConfig.contract_id==contract_id,ContractAccountingConfig.settlement_side==r.settlement_side))
-        words=RULE_KEYWORDS.get(r.code.lower(),[])+[r.name_ar]
-        acc=find(words)
-        aid=acc.account_id if acc else resolve_rule_account(r.code,r.name_ar,None,cfg)
-        if aid:
-            r.gl_account_id=aid; a=db.get(Account,aid)
-            linked.append({"code":r.code,"name":r.name_ar,"side":r.settlement_side,"account":f"{a.account_code} — {a.account_name_ar}"})
-        else: missing.append({"code":r.code,"name":r.name_ar,"side":r.settlement_side})
-    write_audit(db,user.user_id,"AutoLinkRules","Contracts",contract_id,new={"linked":linked,"missing":missing});db.commit()
-    return {"linked":linked,"missing":missing}
+        if r.gl_account_id:
+            account=leaf_account_or_422(db,r.gl_account_id,f"حساب الاستقطاع {r.name_ar}: ")
+            linked.append({"code":r.code,"name":r.name_ar,"side":r.settlement_side,
+                           "account":f"{account.account_code} — {account.account_name_ar}"})
+        else:
+            missing.append({"code":r.code,"name":r.name_ar,"side":r.settlement_side})
+    return {"linked":linked,"missing":missing,
+            "message":"لم يتم التخمين أو الربط التلقائي؛ اختر حسابًا مستقلًا صحيحًا لكل بند من شجرة الحسابات."}
 
 @router.put("/{contract_id}/accounting-config")
 def save_config(contract_id:int,body:ConfigIn,user:User=Depends(require_permission("Contracts","Edit")),db:Session=Depends(get_db)):
@@ -835,6 +827,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
         tax_status=body.vat_tax_status,base_type=body.vat_base_type,base_amount=body.vat_base_amount)
     vat=vat_data["amount"]; net=money(work+vat-total)
     if net<0: raise HTTPException(422,"الخصومات والضريبة تجعل صافي المستخلص سالبًا")
+    validate_deduction_account_links(db, side, deductions, {r.code:r for r in rules})
     x=ContractSettlement(contract_id=contract_id,settlement_side=side,sequence_no=seq,is_final=body.is_final,settlement_no=f"ST-PENDING-{uuid4().hex}",settlement_date=body.settlement_date,counterparty_name=body.counterparty_name,counterparty_name_en=body.counterparty_name_en,work_value=work,cumulative_work_value=cumulative,deductions_json=deductions,vat_amount=vat,vat_rate=vat_data["rate"],vat_base_amount=vat_data["base_amount"],vat_base_type=vat_data["base_type"],vat_tax_status=vat_data["tax_status"],vat_account_id=vat_data["account_id"],net_amount=net,status="PendingApproval",notes=body.notes,created_by=user.user_id)
     db.add(x);db.flush()
     side_code = "CUS" if side == "Customer" else "SUB"
@@ -982,6 +975,7 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
             raise HTTPException(422,"لا يمكن حفظ ضريبة موجبة دون ربط حساب ضريبة القيمة المضافة بالعقد")
     net=money(Decimal(str(x.work_value))+vat-total)
     if net<0: raise HTTPException(422,"إجمالي الخصومات أكبر من قيمة الأعمال والضريبة")
+    validate_deduction_account_links(db, x.settlement_side, deductions, live)
     x.deductions_json=deductions; x.vat_amount=vat; x.net_amount=net
     write_audit(db,user.user_id,"UpdateDeductions","ContractSettlements",x.settlement_id,old=old,new={"deductions":deductions,"added_manual_codes":added_codes,"vat_amount":str(vat),"net_amount":str(net)})
     db.commit();db.refresh(x)
@@ -1064,6 +1058,7 @@ def approve_settlement(settlement_id:int, body:FinancialSettlementReview, user:U
             if not account_id:
                 raise HTTPException(422, f"الخصم {d.get('name',code)} موجب ولا يرتبط بحساب أستاذ")
             leaf_account_or_422(db, account_id, f"حساب الخصم {d.get('name',code)}: ")
+    validate_deduction_account_links(db, x.settlement_side, deductions, live_rules)
     expected_net=money(Decimal(str(x.work_value))+Decimal(str(x.vat_amount))-deduction_total)
     if expected_net<ZERO or money(x.net_amount)!=expected_net:
         raise HTTPException(409, "صافي المستخلص لا يساوي الأعمال + الضريبة − إجمالي الخصومات")
@@ -1188,6 +1183,7 @@ def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permi
             raise HTTPException(422, f"قيمة الخصم {deduction.get('name',code)} تتجاوز الحد الأقصى المتفق عليه")
         if rule:
             validate_rule_settlement_amount(db, x, rule, amount)
+    validate_deduction_account_links(db, x.settlement_side, dict(x.deductions_json or {}), manager_rules)
     if x.is_final:
         unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
             ContractSettlement.contract_id == x.contract_id,
@@ -1250,6 +1246,7 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
         if money(d.get("amount",0))>0 and not d.get("account_id"):
             r=live.get(code); d["account_id"]=resolve_rule_account(code,d.get("name"),r.gl_account_id if r else None,cfg)
             if not d["account_id"]: raise HTTPException(422,f"قاعدة الخصم «{d.get('name',code)}» غير مربوطة بحساب في شجرة الحسابات؛ اربطها من تفاصيل العقد ثم أعد المحاولة")
+    validate_deduction_account_links(db, side, deductions, live)
     # Revalidate the persisted settlement arithmetic before creating any journal rows.
     # This protects against stale/inconsistent records and manual database edits; the
     # journal must agree with the settlement header, not merely balance by coincidence.
