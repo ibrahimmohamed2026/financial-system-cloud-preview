@@ -404,7 +404,7 @@ class ConfigIn(BaseModel):
     default_vat_rate: Decimal = Field(default=Decimal("0"),ge=0,le=100)
     vat_enabled: bool = False
     vat_tax_status: Literal["Taxable","Exempt","ZeroRated","NotSubject"] = "NotSubject"
-    vat_base_type: Literal["CurrentWork","CumulativeWork","RemainingContract","Manual"] = "CurrentWork"
+    vat_base_type: Literal["CurrentWork","CumulativeWork","RemainingContract"] = "CurrentWork"
 class SettlementLineIn(BaseModel):
     contract_item_id: int = Field(gt=0)
     quantity: Decimal = Field(gt=0)
@@ -1291,11 +1291,17 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
             if amt: line(aid,debit=amt,desc=d.get("name",code))
         work_account_lines()
         vat_account_id=getattr(x,"vat_account_id",None) or cfg.vat_account_id
-        if x.vat_amount: line(vat_account_id,credit=x.vat_amount,desc="ضريبة قيمة مضافة مخرجات")
+        if x.vat_amount:
+            if getattr(x,"vat_tax_status",None) not in (None,"Taxable"): raise HTTPException(422,"لا يمكن ترحيل ضريبة موجبة لحالة غير خاضعة")
+            leaf_account_or_422(db,vat_account_id,"حساب ضريبة القيمة المضافة: ")
+            line(vat_account_id,credit=x.vat_amount,desc="ضريبة قيمة مضافة مخرجات")
     else:
         work_account_lines(debit=True)
         vat_account_id=getattr(x,"vat_account_id",None) or cfg.vat_account_id
-        if x.vat_amount: line(vat_account_id,debit=x.vat_amount,desc="ضريبة قيمة مضافة مدخلات")
+        if x.vat_amount:
+            if getattr(x,"vat_tax_status",None) not in (None,"Taxable"): raise HTTPException(422,"لا يمكن ترحيل ضريبة موجبة لحالة غير خاضعة")
+            leaf_account_or_422(db,vat_account_id,"حساب ضريبة القيمة المضافة: ")
+            line(vat_account_id,debit=x.vat_amount,desc="ضريبة قيمة مضافة مدخلات")
         for code,d in deductions.items():
             amt=money(d["amount"]); aid=d.get("account_id")
             if amt and d.get("posting_side")!="Credit": raise HTTPException(422,f"قاعدة الخصم {code}: جهة القيد يجب أن تكون Credit في مستخلص مقاول الباطن")
