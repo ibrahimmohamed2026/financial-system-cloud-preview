@@ -109,6 +109,13 @@ export async function render(main, { api, auth, route }) {
       const partySelect = formEl.elements.namedItem("counterparty_id");
       const accountSelect = formEl.elements.namedItem("treasury_account_id");
       const typeSelect = formEl.elements.namedItem("transaction_type");
+      const settlementSelect = formEl.elements.namedItem("settlement_id");
+      const voucherInput = formEl.elements.namedItem("voucher_no");
+      const updateSettlementRequirement = () => {
+        if (voucherInput) voucherInput.required = !!settlementSelect?.value;
+      };
+      settlementSelect?.addEventListener("change", updateSettlementRequirement);
+      updateSettlementRequirement();
       let counterpartIsTreasury = initialCounterparts.some(a =>
         String(a.account_id) === String(t?.counterpart_account_id) && a.is_treasury_account);
       const amount = formEl.elements.namedItem("amount");
