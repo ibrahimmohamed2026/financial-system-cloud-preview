@@ -299,16 +299,6 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
         TreasuryAccount.currency_code != treasury.currency_code,
         TreasuryAccount.screen_code.in_(BANK_SCREENS),
     )
-    rows = db.execute(
-        select(Account, AccountClassification)
-        .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
-        .where(Account.is_active == True, Account.account_id != treasury.gl_account_id,
-               Account.account_id.not_in(parents),
-               Account.account_id.not_in(other_currency_treasury_gl_ids),
-               Account.account_id.not_in(inaccessible_treasury_gl_ids),
-               Account.account_code.not_in(("32102001", "47101001")))
-        .order_by(Account.account_code).limit(500)
-    ).all()
     accessible_treasuries = [ta for ta in db.scalars(select(TreasuryAccount).where(
         TreasuryAccount.is_active == True,
         TreasuryAccount.currency_code == treasury.currency_code,
@@ -321,6 +311,16 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
         TreasuryAccount.currency_code == treasury.currency_code,
         TreasuryAccount.screen_code.in_(BANK_SCREENS),
     ).where(TreasuryAccount.gl_account_id.not_in(treasury_gl_ids))
+    rows = db.execute(
+        select(Account, AccountClassification)
+        .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
+        .where(Account.is_active == True, Account.account_id != treasury.gl_account_id,
+               Account.account_id.not_in(parents),
+               Account.account_id.not_in(other_currency_treasury_gl_ids),
+               Account.account_id.not_in(inaccessible_treasury_gl_ids),
+               Account.account_code.not_in(("32102001", "47101001")))
+        .order_by(Account.account_code).limit(500)
+    ).all()
     posting_side = "credit" if direction == "inflow" else "debit"
     side_ar = "دائن بالقيد" if direction == "inflow" else "مدين بالقيد"
     return [{"account_id": a.account_id, "label": f"{a.account_code} — {a.account_name_ar} ({side_ar})",
