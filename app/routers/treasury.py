@@ -416,6 +416,10 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
         counterpart = db.get(Account, t.counterpart_account_id) if t.counterpart_account_id else None
         counterpart_label = (f"{counterpart.account_code} — {counterpart.account_name_ar}"
                              if counterpart else "حساب غير محدد")
+        party = db.get(Counterparty, t.counterparty_id) if t.counterparty_id else None
+        counterparty_reference = (
+            f"{party.code} — {party.legal_name or party.name}" if party else None
+        )
         treasury_gl = db.get(Account, a.gl_account_id)
         treasury_label = (f"{treasury_gl.account_code} — {treasury_gl.account_name_ar}"
                           if treasury_gl else a.name_ar)
@@ -432,6 +436,7 @@ def transactions(screen_code: str, date_from: date | None = None, date_to: date 
                     "counterpart_account_label": counterpart_label,
                     "from_account_label": from_label, "to_account_label": to_label,
                     "counterparty_id": t.counterparty_id,
+                    "counterparty_label": counterparty_reference,
                     "journal_entry_id": t.journal_entry_id,
                     "locked": t.journal_entry_id is not None})
     return {"total": len(out), "opening_balance": money(opening), "total_inflow": money(tin),
