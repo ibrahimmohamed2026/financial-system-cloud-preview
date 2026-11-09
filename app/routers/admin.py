@@ -480,6 +480,80 @@ def list_permissions(_: User = Depends(admin_user), db: Session = Depends(get_db
     return [{"permission_id":p.permission_id,"screen_code":p.screen_code,"action_code":p.action_code,
              "screen_ar":s.title_ar if s else p.screen_code,"section_ar":sec.name_ar if sec else "أخرى"} for p,s,sec in rows]
 
+class UserPermissionOverride(BaseModel):
+    permission_id: int
+    is_allowed: bool | None
+
+
+class UserPermissionOverridesUpdate(BaseModel):
+    overrides: list[UserPermissionOverride] = Field(default_factory=list)
+
+
+@router.get("/users/{user_id}/permissions")
+def get_user_permission_overrides(user_id: int, _: User = Depends(admin_user), db: Session = Depends(get_db)):
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(404, "المستخدم غير موجود")
+    if target.is_deleted:
+        raise HTTPException(409, "هذا المستخدم مؤرشف")
+    rows = db.execute(select(Permission, Screen, Section)
+        .join(Screen, Screen.screen_code == Permission.screen_code, isouter=True)
+        .join(Section, Section.section_id == Screen.section_id, isouter=True)
+        .order_by(Section.sort_order, Screen.sort_order, Permission.screen_code, Permission.action_code)).all()
+    override_rows = db.scalars(select(UserPermission).where(UserPermission.user_id == user_id)).all()
+    overrides = {row.permission_id: row.is_allowed for row in override_rows}
+    inherited = set()
+    if target.job_profile_id is not None:
+        profile = db.get(JobProfile, target.job_profile_id)
+        if profile is not None and profile.is_active:
+            inherited = set(db.scalars(select(JobProfilePermission.permission_id).where(
+                JobProfilePermission.job_profile_id == target.job_profile_id)).all())
+    else:
+        inherited = set(db.scalars(select(RolePermission.permission_id)
+            .join(UserRole, UserRole.role_id == RolePermission.role_id)
+            .where(UserRole.user_id == user_id)).all())
+    return [{
+        "permission_id": permission.permission_id,
+        "screen_code": permission.screen_code,
+        "action_code": permission.action_code,
+        "screen_ar": screen.title_ar if screen else permission.screen_code,
+        "section_ar": section.name_ar if section else "أخرى",
+        "inherited_allowed": permission.permission_id in inherited,
+        "override": overrides.get(permission.permission_id),
+        "effective_allowed": overrides.get(permission.permission_id, permission.permission_id in inherited),
+    } for permission, screen, section in rows]
+
+
+@router.put("/users/{user_id}/permissions")
+def update_user_permission_overrides(user_id: int, body: UserPermissionOverridesUpdate,
+                                     actor: User = Depends(admin_user), db: Session = Depends(get_db)):
+    target = db.scalar(select(User).where(User.user_id == user_id).with_for_update())
+    if target is None:
+        raise HTTPException(404, "المستخدم غير موجود")
+    if target.is_deleted:
+        raise HTTPException(409, "هذا المستخدم مؤرشف ولا يمكن تعديل صلاحياته")
+    permission_ids = [item.permission_id for item in body.overrides]
+    if len(permission_ids) != len(set(permission_ids)):
+        raise HTTPException(422, "لا يمكن تكرار الصلاحية في الاستثناءات الفردية")
+    valid_ids = set(db.scalars(select(Permission.permission_id).where(
+        Permission.permission_id.in_(permission_ids))).all()) if permission_ids else set()
+    if valid_ids != set(permission_ids):
+        raise HTTPException(422, "توجد صلاحية غير صحيحة")
+    old_rows = db.scalars(select(UserPermission).where(UserPermission.user_id == user_id)).all()
+    old = [{"permission_id": row.permission_id, "is_allowed": row.is_allowed} for row in old_rows]
+    db.execute(delete(UserPermission).where(UserPermission.user_id == user_id))
+    new = []
+    for item in body.overrides:
+        if item.is_allowed is None:
+            continue
+        db.add(UserPermission(user_id=user_id, permission_id=item.permission_id, is_allowed=item.is_allowed))
+        new.append({"permission_id": item.permission_id, "is_allowed": item.is_allowed})
+    write_audit(db, actor.user_id, "UpdatePermissions", "Users", user_id,
+                old={"overrides": old}, new={"overrides": new})
+    db.commit()
+    return {"ok": True, "override_count": len(new)}
+
+
 @router.post("/roles", status_code=201)
 def create_role(body: RoleCreate, actor: User = Depends(admin_user), db: Session = Depends(get_db)):
     name=body.role_name.strip()
