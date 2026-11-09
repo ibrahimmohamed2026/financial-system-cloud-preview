@@ -136,6 +136,27 @@ def rule_metrics(db: Session, rule: ContractDeductionRule) -> dict:
     cap = rule_cap_value(rule, contract_value)
     return {"posted_amount": str(used), "cap_amount_effective": str(cap) if cap is not None else None,
             "remaining_cap": str(max(ZERO, cap-used)) if cap is not None else None}
+
+def validate_rule_settlement_amount(db: Session, settlement: ContractSettlement, rule: ContractDeductionRule, amount: Decimal) -> None:
+    amount = money(amount)
+    if amount <= ZERO:
+        return
+    _contract, _previous, contract_value = contract_financial_summary(db, rule.contract_id, rule.settlement_side)
+    mode = getattr(rule, "application_mode", None) or "PerSettlement"
+    base = contract_value if mode == "SingleSettlement" else (
+        Decimal(str(settlement.work_value)) if rule.base_type == "CurrentWork" else
+        Decimal(str(settlement.cumulative_work_value)) if rule.base_type == "CumulativeWork" else
+        max(ZERO, contract_value-Decimal(str(settlement.cumulative_work_value))))
+    expected = money(base*Decimal(str(rule.rate))/Decimal("100")) if rule.calculation_type == "Percent" else money(rule.rate)
+    cap = rule_cap_value(rule, contract_value)
+    if cap is not None:
+        expected = min(expected, max(ZERO, cap-retention_amount_used(db, rule, exclude_settlement_id=settlement.settlement_id)))
+    if rule.cap_amount is not None:
+        expected = min(expected, money(rule.cap_amount))
+    if amount > expected:
+        raise HTTPException(422, f"قيمة الاستقطاع «{rule.name_ar}» تتجاوز المبلغ المسموح لهذا المستخلص {expected}")
+    if mode == "SingleSettlement" and retention_amount_used(db, rule, exclude_settlement_id=settlement.settlement_id) > ZERO:
+        raise HTTPException(409, f"تم تطبيق الاستقطاع «{rule.name_ar}» بالفعل على مستخلص آخر")
 STANDARD_SETTLEMENT_DEDUCTIONS = [
     ("ADVANCE_PAYMENT", "دفعة مقدمة"), ("RETENTION", "تأمين محجوز"),
     ("FINAL_INSURANCE", "تأمين نهائي"), ("PROFIT_TAX", "ضرائب أرباح"),
@@ -585,9 +606,9 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     if set(body.single_deduction_codes) - {r.code for r in rules}:
         raise HTTPException(422,"تم اختيار استقطاع غير معرف في قواعد العقد")
     for r in rules:
-        base=work if r.base_type=="CurrentWork" else cumulative if r.base_type=="CumulativeWork" else max(ZERO,contract_value-cumulative)
-        amount=money(base*r.rate/Decimal("100")) if r.calculation_type=="Percent" else money(r.rate)
         mode=getattr(r,"application_mode",None) or "PerSettlement"
+        base=contract_value if mode=="SingleSettlement" else (work if r.base_type=="CurrentWork" else cumulative if r.base_type=="CumulativeWork" else max(ZERO,contract_value-cumulative))
+        amount=money(base*r.rate/Decimal("100")) if r.calculation_type=="Percent" else money(r.rate)
         if mode=="SingleSettlement":
             if r.code not in body.single_deduction_codes:
                 amount=ZERO
@@ -708,8 +729,11 @@ def update_settlement_deductions(settlement_id:int, body:SettlementDeductionsUpd
             raise HTTPException(422,f"قيمة الخصم {d.get('name',code)} تتجاوز الحد الأقصى المسموح {money(rule.cap_amount)}")
         # Contract calculation type and rate are immutable from the settlement screen.
         if rule:
+            validate_rule_settlement_amount(db, x, rule, amount)
             d["source"]="contract"; d["calculation_type"]=rule.calculation_type
             d["rate"]=str(rule.rate); d["base_type"]=rule.base_type
+            d["application_mode"]=getattr(rule,"application_mode",None) or "PerSettlement"
+            d["cap_percent"]=str(rule.cap_percent) if getattr(rule,"cap_percent",None) is not None else None
         d["amount"]=str(amount)
         total+=amount
     added_codes=[]
@@ -807,8 +831,8 @@ def approve_settlement(settlement_id:int, body:FinancialSettlementReview, user:U
             raise HTTPException(422, f"قيمة الخصم {code} لا يمكن أن تكون سالبة")
         deduction_total+=amount
         rule=live_rules.get(code)
-        if rule and rule.cap_amount is not None and amount>money(rule.cap_amount):
-            raise HTTPException(422, f"قيمة الخصم {d.get('name',code)} تتجاوز الحد الأقصى المتفق عليه")
+        if rule:
+            validate_rule_settlement_amount(db, x, rule, amount)
         if amount>ZERO:
             account_id=d.get("account_id") or (rule.gl_account_id if rule else None)
             if not account_id:
@@ -999,6 +1023,9 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
         amount = money(deduction.get("amount", 0))
         if amount < ZERO:
             raise HTTPException(422, f"قيمة الخصم {code} سالبة؛ راجع المستخلص قبل الترحيل")
+        rule=live.get(code)
+        if rule:
+            validate_rule_settlement_amount(db, x, rule, amount)
         deduction["amount"] = str(amount)
     total_d = money(sum((Decimal(str(d["amount"])) for d in deductions.values()), ZERO))
     expected_net = money(Decimal(str(x.work_value)) + Decimal(str(x.vat_amount)) - total_d)
