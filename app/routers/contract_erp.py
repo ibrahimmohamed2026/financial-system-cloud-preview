@@ -30,7 +30,7 @@ def calculate_vat(cfg, work, cumulative, contract_value, *, db=None, rate=None,
                   tax_status=None, base_type=None, base_amount=None):
     """Calculate VAT from contract defaults or an explicit invoice-level override."""
     enabled = bool(getattr(cfg, "vat_enabled", False)) if cfg is not None else False
-    status = tax_status or (getattr(cfg, "vat_tax_status", None) if cfg is not None else None) or ("Taxable" if enabled else "NotSubject")
+    status = tax_status or ((getattr(cfg, "vat_tax_status", None) or "Taxable") if enabled else "NotSubject")
     if status not in VAT_STATUSES:
         raise HTTPException(422, "حالة ضريبة القيمة المضافة غير صحيحة")
     selected_rate = Decimal(str(rate if rate is not None else (getattr(cfg, "default_vat_rate", 0) if cfg is not None else 0)))
