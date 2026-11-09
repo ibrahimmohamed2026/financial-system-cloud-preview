@@ -77,7 +77,8 @@ def test_retention_amount_cannot_be_manually_changed_during_financial_review(mon
         contract_erp, "cumulative_retention_amount",
         lambda *_args, **_kwargs: Decimal("50000.00")
     )
-    settlement = SimpleNamespace(cumulative_work_value=Decimal("1000000"), settlement_id=7)
+    settlement = SimpleNamespace(cumulative_work_value=Decimal("1000000"), settlement_id=7,
+                                   sequence_no=2)
     rule = SimpleNamespace(code="RETENTION", name_ar="تأمين محجوز", contract_id=1,
                            settlement_side="Subcontractor")
 
