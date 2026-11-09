@@ -294,11 +294,17 @@ def counterpart_accounts(screen_code: str, direction: str = Query(..., pattern="
     parents = select(Account.parent_account_id).where(Account.parent_account_id.is_not(None))
     # Select directly from active leaf accounts in the COA. A counterpart that is
     # linked to another treasury account is recognized as a transfer by that link.
+    other_currency_treasury_gl_ids = select(TreasuryAccount.gl_account_id).where(
+        TreasuryAccount.is_active == True,
+        TreasuryAccount.currency_code != treasury.currency_code,
+        TreasuryAccount.screen_code.in_(BANK_SCREENS),
+    )
     rows = db.execute(
         select(Account, AccountClassification)
         .join(AccountClassification, AccountClassification.classification_id == Account.classification_id)
         .where(Account.is_active == True, Account.account_id != treasury.gl_account_id,
                Account.account_id.not_in(parents),
+               Account.account_id.not_in(other_currency_treasury_gl_ids),
                Account.account_code.not_in(("32102001", "47101001")))
         .order_by(Account.account_code).limit(500)
     ).all()
