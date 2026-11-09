@@ -123,11 +123,11 @@ def retention_amount_used(db: Session, rule: ContractDeductionRule, *, posted_on
     return money(total)
 
 def rule_cap_value(rule: ContractDeductionRule, contract_value: Decimal) -> Decimal | None:
+    # CapPercent is the cumulative contract-level retention ceiling.
+    # The legacy CapAmount remains a per-settlement limit for backward compatibility.
     percent = getattr(rule, "cap_percent", None)
     if percent is not None:
         return money(Decimal(str(contract_value)) * Decimal(str(percent)) / Decimal("100"))
-    if rule.cap_amount is not None:
-        return money(rule.cap_amount)
     return None
 
 def rule_metrics(db: Session, rule: ContractDeductionRule) -> dict:
