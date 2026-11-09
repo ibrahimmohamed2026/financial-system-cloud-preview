@@ -21,6 +21,7 @@ SECTIONS = {
     "TREASURY": ("Treasury & Banks", "الخزائن والبنوك", 2),
     "CHECKS": ("Checks", "الشيكات", 3),
     "REPORTS": ("Financial Statements", "القوائم المالية", 4),
+    "ADMIN": ("Administration", "الإدارة", 5),
 }
 _S = [  # (section, code, title_en, title_ar, route)
     ("ACCOUNTING", "JournalBook", "General Journal", "دفتر اليومية", "/journal"),                       # 1
@@ -47,6 +48,7 @@ _S = [  # (section, code, title_en, title_ar, route)
     ("ACCOUNTING", "InventoryManagement", "Inventory Management", "إدارة المخزون", "/inventory"),
     ("ACCOUNTING", "PurchaseCycle", "Purchase Cycle", "دورة المشتريات", "/purchases"),
     ("ACCOUNTING", "Counterparties", "Counterparties", "المقاولون والموردون والعملاء", "/counterparties"),
+    ("ADMIN", "UserPermissionManagement", "User Permission Management", "إدارة صلاحيات المستخدمين", "/admin"),
 ]
 SCREENS = [
     {"section": dict(zip(("code", "name_en", "name_ar", "sort_order"), (sec, *SECTIONS[sec]))),
@@ -68,7 +70,7 @@ def seed_screens(db: Session) -> None:
         if existing_screen is None:
             db.add(Screen(section_id=section.section_id, screen_code=item["code"], title_en=item["title_en"],
                           title_ar=item["title_ar"], route=item["route"], sort_order=item["sort_order"]))
-        elif item["code"] in ("CashUsd", "ChecksCib", "ChecksCibUsd", "ContractRequests", "ContractSettlements", "PurchaseCycle", "FinancialChecks", "AnalyticsReports", "Counterparties"):
+        elif item["code"] in ("CashUsd", "ChecksCib", "ChecksCibUsd", "ContractRequests", "ContractSettlements", "PurchaseCycle", "FinancialChecks", "AnalyticsReports", "Counterparties", "UserPermissionManagement"):
             # Keep legacy database screen routes synchronized with the implemented frontend routes.
             existing_screen.route = item["route"]
             existing_screen.title_ar = item["title_ar"]
@@ -89,7 +91,8 @@ def sync_permissions(db: Session) -> None:
     codes = db.scalars(select(Screen.screen_code)).all()
     existing = {(p.screen_code, p.action_code) for p in db.scalars(select(Permission))}
     for code in codes:
-        for action in ACTIONS:
+        actions = ("View", "Edit", "ManageJobProfilePermissions") if code == "UserPermissionManagement" else ACTIONS
+        for action in actions:
             if (code, action) not in existing:
                 db.add(Permission(screen_code=code, action_code=action))
     db.flush()
