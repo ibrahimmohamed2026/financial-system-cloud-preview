@@ -352,6 +352,8 @@ def cancel_entry(eid: int, user: User = Depends(require_permission(SCREEN, "Appr
     e = _get(db, eid)
     if e.status != "Posted":
         raise HTTPException(409, "الإلغاء للقيود المرحّلة بس")
+    if e.source_settlement_id is not None:
+        raise HTTPException(409, "لا يمكن إلغاء قيد مستخلص مرحّل من دفتر اليومية مباشرة؛ استخدم إجراء تسوية عكسية معتمد حتى لا تنفصل حالة المستخلص عن حسابات العقد")
     _fy_for(db, e.entry_date)
     e.status = "Reversed"
     write_audit(db, user.user_id, "Cancel", "JournalEntries", eid, {"status": "Posted"}, {"status": "Reversed"})
