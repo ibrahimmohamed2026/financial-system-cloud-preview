@@ -48,3 +48,111 @@ def test_contract_ui_exposes_both_retention_modes_and_manual_single_settlement_c
     assert "single_deduction_codes" in ui
     assert "المحجوز مرحّلًا" in ui
     assert "الحد الأقصى من إجمالي العقد (%)" in ui
+
+
+from decimal import Decimal
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
+
+from app.routers.contract_erp import validate_rule_change
+
+
+def _rule(**overrides):
+    values = {
+        "settlement_side": "Subcontractor",
+        "calculation_type": "Percent",
+        "rate": Decimal("10"),
+        "base_type": "CurrentWork",
+        "application_mode": "PerSettlement",
+        "cap_percent": Decimal("10"),
+        "cap_amount": None,
+        "posting_side": "Credit",
+        "gl_account_id": 501,
+        "code": "RETENTION",
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _settlement(status="Draft", amount="0.00", number="ST-001"):
+    return SimpleNamespace(
+        status=status,
+        settlement_no=number,
+        settlement_id=1,
+        deductions_json={"RETENTION": {"amount": amount}},
+    )
+
+
+def test_financial_rule_terms_cannot_change_after_a_settlement_is_linked_without_controlled_path():
+    rule = _rule()
+    linked = [_settlement()]
+    proposed = {"application_mode": "SingleSettlement", "rate": Decimal("12"),
+                "cap_percent": Decimal("12")}
+
+    with pytest.raises(HTTPException) as error:
+        validate_rule_change(rule, proposed, linked, Decimal("0"), Decimal("10000000"))
+
+    assert error.value.status_code == 409
+    assert "مسار التعديل المنضبط" in str(error.value.detail)
+
+
+def test_controlled_rule_change_requires_draft_only_and_zero_reserved_amounts():
+    rule = _rule()
+    safe_draft = [_settlement(status="Draft", amount="0.00")]
+    proposed = {"application_mode": "SingleSettlement", "rate": Decimal("12"),
+                "cap_percent": Decimal("12")}
+
+    validate_rule_change(rule, proposed, safe_draft, Decimal("0"),
+                         Decimal("10000000"), controlled_reason="تصحيح شروط العقد بناءً على ملحق معتمد")
+
+    approved = [_settlement(status="Approved", amount="0.00", number="ST-002")]
+    with pytest.raises(HTTPException) as error:
+        validate_rule_change(rule, proposed, approved, Decimal("0"),
+                             Decimal("10000000"), controlled_reason="تعديل موثق بعد المراجعة")
+
+    assert error.value.status_code == 409
+    assert "ST-002" in str(error.value.detail)
+
+
+def test_cap_cannot_be_reduced_below_amounts_already_reserved_or_posted():
+    rule = _rule(cap_percent=Decimal("10"))
+    # Contract value = EGP 10,000,000; new 5% cap = EGP 500,000.
+    # EGP 700,000 is already reserved/posted.
+    with pytest.raises(HTTPException) as error:
+        validate_rule_change(
+            rule,
+            {"cap_percent": Decimal("5")},
+            [_settlement(status="Posted", amount="700000.00", number="ST-003")],
+            Decimal("700000.00"),
+            Decimal("10000000"),
+            controlled_reason="مراجعة شروط التأمين بناءً على اعتماد الإدارة",
+        )
+
+    assert error.value.status_code == 409
+    assert "500000.00" in str(error.value.detail)
+    assert "700000.00" in str(error.value.detail)
+
+
+def test_cap_can_be_increased_when_it_covers_existing_reservations():
+    rule = _rule(cap_percent=Decimal("10"))
+    validate_rule_change(
+        rule,
+        {"cap_percent": Decimal("12")},
+        [_settlement(status="Posted", amount="700000.00")],
+        Decimal("700000.00"),
+        Decimal("10000000"),
+        controlled_reason="زيادة سقف التأمين وفق ملحق العقد المعتمد",
+    )
+
+
+def test_nonfinancial_rule_edits_remain_available_with_linked_settlements():
+    rule = _rule()
+    validate_rule_change(
+        rule,
+        {"name_ar": "تأمين ضمان الأعمال", "sort_order": 3},
+        [_settlement(status="Posted", amount="700000.00")],
+        Decimal("700000.00"),
+        Decimal("10000000"),
+    )
