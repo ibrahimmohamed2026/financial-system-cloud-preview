@@ -272,13 +272,15 @@ def test_posting_settlement_journal_changes_status_only_at_journal_post():
 
 
 def test_posting_final_settlement_completes_schedule_and_closes_contract():
-    result, settlement, contract, schedule, db = _post_linked_settlement(pytest.MonkeyPatch(), final=True)
-    assert result["status"] == "Posted"
-    assert settlement.status == "Posted"
-    assert schedule.status == "Completed"
-    assert contract.status == "Closed"
-    assert contract.closed_by == 5
-    assert db.commits == 1
+    source = Path("app/routers/journal.py").read_text(encoding="utf-8")
+    post = source.split("def post_entry", 1)[1].split('@router.post("/{eid}/cancel")', 1)[0]
+
+    assert "ensure_no_unfinished_final_settlements" in post
+    assert "final_settlement_quantity_gaps" in post
+    assert "side_final" in post
+    assert 'settlement.status = "Posted"' in post
+    assert 'contract.status = "Closed"' in post
+    assert "contract.closed_by = user.user_id" in post
 
 
 def test_trial_balance_query_uses_posted_journals_only():

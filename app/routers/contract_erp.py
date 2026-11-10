@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -144,43 +144,131 @@ def validate_deduction_account_links(db: Session, settlement_side: str,
         deduction["account_id"] = account.account_id
         deduction["posting_side"] = posting_side
 
-def final_settlement_quantity_gaps(db, contract_id, side, candidate=None):
-    """Calculate final quantities once: linked technical/financial certificates are never double-counted."""
+TECHNICAL_QUANTITY_STATUSES = (
+    "Draft", "UnderReview", "ReturnedForCorrection", "TechnicalReviewed",
+    "TechnicallyApproved", "ForwardedToFinance",
+)
+FINANCIAL_QUANTITY_STATUSES = (
+    "Draft", "AwaitingTechnicalApproval", "PendingApproval", "PendingFinalApproval",
+    "Approved", "JournalDraft", "Posted",
+)
+PENDING_TECHNICAL_STATUSES = (
+    "Draft", "UnderReview", "ReturnedForCorrection", "TechnicalReviewed",
+)
+
+
+def settled_contract_item_quantities(db, contract_id, side, *,
+                                     exclude_settlement_id=None,
+                                     exclude_estimate_id=None):
+    """Return reserved quantities once, preferring the technical source for linked pairs."""
     linked_financial_ids = select(TechnicalSettlementEstimate.financial_settlement_id).where(
+        TechnicalSettlementEstimate.contract_id == contract_id,
+        TechnicalSettlementEstimate.settlement_side == side,
+        TechnicalSettlementEstimate.status.in_(TECHNICAL_QUANTITY_STATUSES),
         TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
     estimate_ids = select(TechnicalSettlementEstimate.estimate_id).where(
         TechnicalSettlementEstimate.contract_id == contract_id,
         TechnicalSettlementEstimate.settlement_side == side,
-        TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")))
+        TechnicalSettlementEstimate.status.in_(TECHNICAL_QUANTITY_STATUSES))
+    if exclude_estimate_id is not None:
+        estimate_ids = estimate_ids.where(TechnicalSettlementEstimate.estimate_id != exclude_estimate_id)
     financial_ids = select(ContractSettlement.settlement_id).where(
         ContractSettlement.contract_id == contract_id,
         ContractSettlement.settlement_side == side,
-        ContractSettlement.status.in_(("Approved", "Posted", "PendingFinalApproval")),
+        ContractSettlement.status.in_(FINANCIAL_QUANTITY_STATUSES),
         ContractSettlement.settlement_id.not_in(linked_financial_ids))
+    if exclude_settlement_id is not None:
+        financial_ids = financial_ids.where(ContractSettlement.settlement_id != exclude_settlement_id)
+
+    technical_rows = db.execute(select(
+        TechnicalSettlementEstimateItem.contract_item_id,
+        func.sum(func.coalesce(TechnicalSettlementEstimateItem.approved_quantity,
+                               TechnicalSettlementEstimateItem.current_quantity)))
+        .where(TechnicalSettlementEstimateItem.estimate_id.in_(estimate_ids))
+        .group_by(TechnicalSettlementEstimateItem.contract_item_id)).all()
+    financial_rows = db.execute(select(
+        ContractSettlementItem.contract_item_id,
+        func.sum(ContractSettlementItem.quantity))
+        .where(ContractSettlementItem.settlement_id.in_(financial_ids))
+        .group_by(ContractSettlementItem.contract_item_id)).all()
+
+    totals = {}
+    for item_id, quantity in technical_rows:
+        key = int(item_id)
+        totals[key] = totals.get(key, ZERO) + Decimal(str(quantity or 0))
+    for item_id, quantity in financial_rows:
+        key = int(item_id)
+        totals[key] = totals.get(key, ZERO) + Decimal(str(quantity or 0))
+    return totals
+
+
+def final_settlement_quantity_gaps(db, contract_id, side, candidate=None, *,
+                                   exclude_estimate_id=None,
+                                   exclude_settlement_id=None):
+    """Return every contract item whose total quantity would not equal its BOQ quantity."""
+    settled_by_item = settled_contract_item_quantities(
+        db, contract_id, side,
+        exclude_settlement_id=exclude_settlement_id,
+        exclude_estimate_id=exclude_estimate_id)
     candidate = candidate or {}
     gaps = []
-    for item in db.scalars(select(ContractItem).where(ContractItem.contract_id == contract_id).order_by(ContractItem.item_no)).all():
-        technical_qty = db.scalar(select(func.coalesce(func.sum(func.coalesce(
-            TechnicalSettlementEstimateItem.approved_quantity,
-            TechnicalSettlementEstimateItem.current_quantity)), 0)).where(
-                TechnicalSettlementEstimateItem.contract_item_id == item.item_id,
-                TechnicalSettlementEstimateItem.estimate_id.in_(estimate_ids))) or 0
-        financial_qty = db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity), 0)).where(
-            ContractSettlementItem.contract_item_id == item.item_id,
-            ContractSettlementItem.settlement_id.in_(financial_ids))) or 0
-        settled = Decimal(str(technical_qty)) + Decimal(str(financial_qty)) + Decimal(str(candidate.get(item.item_id, 0)))
+    items = db.scalars(select(ContractItem).where(
+        ContractItem.contract_id == contract_id).order_by(ContractItem.item_no)).all()
+    for item in items:
+        settled = settled_by_item.get(item.item_id, ZERO) + Decimal(str(candidate.get(item.item_id, 0)))
         remaining = Decimal(str(item.quantity)) - settled
-        if remaining != 0:
+        if remaining != ZERO:
             gaps.append({"item_no": item.item_no, "description": item.description,
                          "contract_quantity": str(item.quantity), "settled_quantity": str(settled),
                          "remaining_quantity": str(remaining), "unit": item.unit})
     return gaps
+
 
 def reject_incomplete_final_settlement(gaps, stage):
     details = "؛ ".join(
         f"البند {g['item_no']} ({g['description']}): المتبقي {g['remaining_quantity']} {g['unit']} "
         f"(التعاقدي {g['contract_quantity']}، المسوّى {g['settled_quantity']})" for g in gaps)
     raise HTTPException(409, f"لا يمكن {stage} المستخلص الختامي قبل تسوية كامل كميات العقد. {details}")
+
+
+def ensure_no_unfinished_final_settlements(db, contract_id, side, *,
+                                           exclude_settlement_id=None,
+                                           exclude_estimate_id=None,
+                                           stage="اعتماد"):
+    unfinished = select(func.count()).select_from(ContractSettlement).where(
+        ContractSettlement.contract_id == contract_id,
+        ContractSettlement.settlement_side == side,
+        ContractSettlement.status != "Posted")
+    if exclude_settlement_id is not None:
+        unfinished = unfinished.where(ContractSettlement.settlement_id != exclude_settlement_id)
+    unfinished_count = db.scalar(unfinished) or 0
+
+    unposted_financial_ids = select(ContractSettlement.settlement_id).where(
+        ContractSettlement.status != "Posted")
+    pending_technical = select(func.count()).select_from(TechnicalSettlementEstimate).where(
+        TechnicalSettlementEstimate.contract_id == contract_id,
+        TechnicalSettlementEstimate.settlement_side == side,
+        or_(
+            TechnicalSettlementEstimate.status.in_(PENDING_TECHNICAL_STATUSES),
+            and_(
+                TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")),
+                or_(
+                    TechnicalSettlementEstimate.financial_settlement_id.is_(None),
+                    TechnicalSettlementEstimate.financial_settlement_id.in_(unposted_financial_ids),
+                ),
+            ),
+        ),
+    )
+    if exclude_estimate_id is not None:
+        pending_technical = pending_technical.where(
+            TechnicalSettlementEstimate.estimate_id != exclude_estimate_id)
+    pending_technical_count = db.scalar(pending_technical) or 0
+    if unfinished_count or pending_technical_count:
+        raise HTTPException(
+            409,
+            f"لا يمكن {stage} المستخلص الختامي قبل اكتمال وترحيل المستخلصات السابقة قيد المراجعة أو الاعتماد",
+        )
+
 
 def item_out(x):
     # Keep old contract lines readable; new lines expose the linked central item/account.
@@ -815,14 +903,14 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
             raise HTTPException(409,"يوجد مستخلص معتمد قديم غير موزع على بنود العقد. راجع/حوّل كمياته التاريخية إلى تفاصيل بنود قبل إنشاء مستخلصات فنية جديدة، لمنع تكرار الأعمال.")
         if not body.items: raise HTTPException(422,"هذا العقد له بنود فنية؛ يجب تحديد كميات البنود في المستخلص بدل إدخال إجمالي يدوي")
         seen=set()
+        settled_by_item = settled_contract_item_quantities(db, contract_id, side)
         for requested in body.items:
             if requested.contract_item_id in seen: raise HTTPException(422,"لا يمكن تكرار نفس البند مرتين داخل المستخلص")
             seen.add(requested.contract_item_id)
             item=db.scalar(select(ContractItem).where(ContractItem.item_id==requested.contract_item_id,ContractItem.contract_id==contract_id))
-            if not item: raise HTTPException(422,f"البند {requested.contract_item_id} لا يتبع هذا العقد")
-            valid_ids=select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==contract_id,ContractSettlement.settlement_side==side,ContractSettlement.status.in_(("Approved","Posted","PendingFinalApproval")))
-            done=db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity),0)).where(ContractSettlementItem.contract_item_id==item.item_id,ContractSettlementItem.settlement_id.in_(valid_ids))) or ZERO
-            remaining=Decimal(item.quantity)-Decimal(str(done))
+            if not item: raise HTTPException(422,f"البند {requested.contract_item_id} لا يتبع العقد")
+            done = settled_by_item.get(item.item_id, ZERO)
+            remaining=Decimal(str(item.quantity))-done
             if requested.quantity>remaining: raise HTTPException(409,f"كمية البند {item.item_no} المطلوبة {requested.quantity} تتجاوز المتبقي {max(ZERO,remaining)} {item.unit}")
             amount=money(requested.quantity*item.unit_price);work+=amount
             lines.append((item,requested.quantity,amount))
@@ -835,16 +923,7 @@ def create_settlement(contract_id:int,body:SettlementIn,user:User=Depends(requir
     cumulative=money(previous+work)
     if cumulative>contract_value: raise HTTPException(409,f"إجمالي الأعمال المعتمدة {cumulative} يتجاوز قيمة العقد المعدلة {contract_value}")
     if body.is_final:
-        unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
-            ContractSettlement.contract_id == contract_id,
-            ContractSettlement.settlement_side == side,
-            ContractSettlement.status != "Posted")) or 0
-        pending_technical = db.scalar(select(func.count()).select_from(TechnicalSettlementEstimate).where(
-            TechnicalSettlementEstimate.contract_id == contract_id,
-            TechnicalSettlementEstimate.settlement_side == side,
-            TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved")))) or 0
-        if unfinished or pending_technical:
-            raise HTTPException(409, "لا يمكن إنشاء المستخلص الختامي قبل استكمال المستخلصات السابقة قيد المراجعة أو الاعتماد أو الترحيل")
+        ensure_no_unfinished_final_settlements(db, contract_id, side, stage="إنشاء")
         candidate = {item.item_id: quantity for item, quantity, _amount in lines}
         gaps = final_settlement_quantity_gaps(db, contract_id, side, candidate=candidate)
         if gaps:
@@ -1157,12 +1236,17 @@ def approve_settlement(settlement_id:int, body:FinancialSettlementReview, user:U
             ProgressBilling.contract_id == x.contract_id, func.lower(ProgressBilling.status).in_(("approved", "paid", "posted")))) or ZERO
         if Decimal(str(legacy_approved)) > ZERO:
             raise HTTPException(409,"لا يمكن اعتماد المستخلص الفني قبل توزيع المستخلصات القديمة المعتمدة على بنود العقد")
+        previously_settled = settled_contract_item_quantities(
+            db, x.contract_id, x.settlement_side,
+            exclude_settlement_id=x.settlement_id,
+            exclude_estimate_id=linked_estimate.estimate_id if linked_estimate else None)
         for line in lines:
             item=db.get(ContractItem,line.contract_item_id)
-            prior_ids=select(ContractSettlement.settlement_id).where(ContractSettlement.contract_id==x.contract_id,ContractSettlement.settlement_side==x.settlement_side,ContractSettlement.status.in_(("Approved","Posted","PendingFinalApproval")),ContractSettlement.settlement_id!=x.settlement_id)
-            done=db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity),0)).where(ContractSettlementItem.contract_item_id==line.contract_item_id,ContractSettlementItem.settlement_id.in_(prior_ids))) or ZERO
-            if Decimal(str(done))+Decimal(line.quantity)>Decimal(item.quantity):
-                raise HTTPException(409,f"لا يمكن اعتماد المستخلص: كمية البند {item.item_no} ستتجاوز الكمية التعاقدية بعد احتساب المستخلصات المعتمدة الأخرى")
+            if item is None:
+                raise HTTPException(409,"بند المستخلص لم يعد موجودًا في العقد")
+            done = previously_settled.get(line.contract_item_id, ZERO)
+            if done + Decimal(str(line.quantity)) > Decimal(str(item.quantity)):
+                raise HTTPException(409,f"لا يمكن اعتماد المستخلص: كمية البند {item.item_no} ستتجاوز الكمية التعاقدية بعد احتساب المستخلصات الفنية والمالية المحجوزة الأخرى")
     _,previous,contract_value=contract_financial_summary(db,x.contract_id,x.settlement_side)
     if money(previous+x.work_value)>contract_value:
         raise HTTPException(409,"لا يمكن اعتماد المستخلص لأن إجمالي الأعمال المعتمدة سيتجاوز قيمة العقد المعدلة")
@@ -1237,26 +1321,23 @@ def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permi
     contract=db.scalar(select(Contract).where(Contract.contract_id==x.contract_id).with_for_update())
     if not contract or contract.status.lower()!="active":
         raise HTTPException(409,"لا يمكن اعتماد مستخلص لعقد غير فعّال")
-    # Recheck reserved quantities and contract value at the final approval gate.
-    # This also protects against overlapping pending approvals created before
-    # pending-final approvals began reserving quantities/value.
+    # Recheck quantities against both technical reservations and unlinked financial settlements.
     lines=db.scalars(select(ContractSettlementItem).where(
         ContractSettlementItem.settlement_id==x.settlement_id)).all()
+    linked_estimate = db.scalar(select(TechnicalSettlementEstimate).where(
+        TechnicalSettlementEstimate.financial_settlement_id == x.settlement_id))
     if lines:
-        prior_ids=select(ContractSettlement.settlement_id).where(
-            ContractSettlement.contract_id==x.contract_id,
-            ContractSettlement.settlement_side==x.settlement_side,
-            ContractSettlement.status.in_(("Approved","Posted","PendingFinalApproval")),
-            ContractSettlement.settlement_id!=x.settlement_id)
+        previously_settled = settled_contract_item_quantities(
+            db, x.contract_id, x.settlement_side,
+            exclude_settlement_id=x.settlement_id,
+            exclude_estimate_id=linked_estimate.estimate_id if linked_estimate else None)
         for line in lines:
             item=db.get(ContractItem,line.contract_item_id)
             if item is None:
                 raise HTTPException(409,"بند المستخلص لم يعد موجودًا في العقد")
-            done=db.scalar(select(func.coalesce(func.sum(ContractSettlementItem.quantity),0)).where(
-                ContractSettlementItem.contract_item_id==line.contract_item_id,
-                ContractSettlementItem.settlement_id.in_(prior_ids))) or ZERO
-            if Decimal(str(done))+Decimal(line.quantity)>Decimal(item.quantity):
-                raise HTTPException(409,f"لا يمكن اعتماد المدير: كمية البند {item.item_no} تتجاوز الكمية التعاقدية بعد احتساب المستخلصات المحجوزة الأخرى")
+            done = previously_settled.get(line.contract_item_id, ZERO)
+            if done + Decimal(str(line.quantity)) > Decimal(str(item.quantity)):
+                raise HTTPException(409,f"لا يمكن اعتماد المدير: كمية البند {item.item_no} تتجاوز الكمية التعاقدية بعد احتساب المستخلصات الفنية والمالية المحجوزة الأخرى")
     _,reserved_value,contract_value=contract_financial_summary(db,x.contract_id,x.settlement_side)
     if reserved_value>contract_value:
         raise HTTPException(409,"لا يمكن اعتماد المدير: إجمالي المستخلصات المعتمدة والمعلقة يتجاوز قيمة العقد المعدلة")
@@ -1272,17 +1353,11 @@ def manager_approve_settlement(settlement_id:int,user:User=Depends(require_permi
             validate_rule_settlement_amount(db, x, rule, amount)
     validate_deduction_account_links(db, x.settlement_side, dict(x.deductions_json or {}), manager_rules)
     if x.is_final:
-        unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
-            ContractSettlement.contract_id == x.contract_id,
-            ContractSettlement.settlement_side == x.settlement_side,
-            ContractSettlement.settlement_id != x.settlement_id,
-            ContractSettlement.status != "Posted")) or 0
-        pending_technical = db.scalar(select(func.count()).select_from(TechnicalSettlementEstimate).where(
-            TechnicalSettlementEstimate.contract_id == x.contract_id,
-            TechnicalSettlementEstimate.settlement_side == x.settlement_side,
-            TechnicalSettlementEstimate.status.in_(("UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved")))) or 0
-        if unfinished or pending_technical:
-            raise HTTPException(409, "لا يمكن اعتماد المستخلص الختامي قبل اكتمال وترحيل المستخلصات السابقة قيد المراجعة أو الاعتماد")
+        ensure_no_unfinished_final_settlements(
+            db, x.contract_id, x.settlement_side,
+            exclude_settlement_id=x.settlement_id,
+            exclude_estimate_id=linked_estimate.estimate_id if linked_estimate else None,
+            stage="اعتماد")
         gaps = final_settlement_quantity_gaps(db, x.contract_id, x.settlement_side)
         if gaps:
             reject_incomplete_final_settlement(gaps, "اعتماد المدير")
@@ -1314,6 +1389,13 @@ def post_settlement(settlement_id:int,user:User=Depends(require_permission("Cont
     contract = db.scalar(select(Contract).where(Contract.contract_id==x.contract_id).with_for_update())
     if not contract or contract.status.lower() != "active": raise HTTPException(409,"لا يمكن ترحيل مستخلص لعقد غير فعّال")
     if x.is_final:
+        linked_estimate = db.scalar(select(TechnicalSettlementEstimate).where(
+            TechnicalSettlementEstimate.financial_settlement_id == x.settlement_id))
+        ensure_no_unfinished_final_settlements(
+            db, x.contract_id, x.settlement_side,
+            exclude_settlement_id=x.settlement_id,
+            exclude_estimate_id=linked_estimate.estimate_id if linked_estimate else None,
+            stage="ترحيل")
         gaps = final_settlement_quantity_gaps(db, x.contract_id, x.settlement_side)
         if gaps:
             reject_incomplete_final_settlement(gaps, "ترحيل")

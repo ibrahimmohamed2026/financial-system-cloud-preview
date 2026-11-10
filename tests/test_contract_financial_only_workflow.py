@@ -54,8 +54,10 @@ def test_final_technical_estimate_must_settle_every_contract_item_after_engineer
     assert "if x.is_final:" in review_estimate
     assert "exclude_estimate_id=x.estimate_id" in review_estimate
     assert "final_quantity_error(gaps" in review_estimate
-    assert "remaining_quantity" in technical
-    assert "linked_financial_ids" in technical
+    contract_erp = Path("app/routers/contract_erp.py").read_text(encoding="utf-8")
+    assert "remaining_quantity" in contract_erp
+    assert "linked_financial_ids" in contract_erp
+    assert "shared_final_quantity_gaps" in technical
 
 
 def test_final_financial_settlement_is_rechecked_at_api_creation_manager_approval_and_posting():
@@ -70,9 +72,13 @@ def test_final_financial_settlement_is_rechecked_at_api_creation_manager_approva
     assert "if x.is_final:" in post_settlement
     assert "reject_incomplete_final_settlement(gaps, \"ترحيل\")" in post_settlement
     assert "settlement_id.not_in(linked_financial_ids)" in source
-    assert "technical_qty" in source and "financial_qty" in source
-    assert 'TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance"))' in source
-    assert "لا يمكن اعتماد المستخلص الختامي قبل اكتمال وترحيل المستخلصات السابقة" in source
+    assert "technical_rows" in source and "financial_rows" in source
+    assert "TechnicalSettlementEstimate.status.in_(TECHNICAL_QUANTITY_STATUSES)" in source
+    assert '"UnderReview"' in source and '"TechnicalReviewed"' in source
+    assert '"JournalDraft"' in source
+    assert "settled_contract_item_quantities" in source
+    assert "ensure_no_unfinished_final_settlements" in source
+    assert "قبل اكتمال وترحيل المستخلصات السابقة" in source
 
 def test_contract_settlement_status_length_and_existing_postgres_schema_upgrade():
     models = Path("app/models.py").read_text(encoding="utf-8")
