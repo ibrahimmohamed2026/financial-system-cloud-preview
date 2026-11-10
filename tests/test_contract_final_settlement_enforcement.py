@@ -186,6 +186,20 @@ def test_linked_technical_and_financial_settlement_are_counted_once(settlement_d
     assert gaps == []
 
 
+def test_inactive_technical_source_does_not_hide_posted_financial_quantity(settlement_db):
+    db, contract, item = settlement_db
+    financial = _financial_settlement(
+        db, contract, item, quantity="6", status="Posted", is_final=False,
+        sequence=1, work_value="60",
+    )
+    _technical_estimate(db, contract, item, quantity="6", financial=financial, status="Rejected")
+    db.commit()
+
+    used = contract_erp.settled_contract_item_quantities(db, contract.contract_id, "Customer")
+
+    assert used[item.item_id] == Decimal("6.0000")
+
+
 def test_technical_final_creation_api_accepts_exact_quantities_and_keeps_contract_active(
     settlement_db, monkeypatch
 ):
