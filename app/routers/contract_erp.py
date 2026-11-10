@@ -153,7 +153,7 @@ FINANCIAL_QUANTITY_STATUSES = (
     "Approved", "JournalDraft", "Posted",
 )
 PENDING_TECHNICAL_STATUSES = (
-    "Draft", "UnderReview", "ReturnedForCorrection", "TechnicalReviewed", "TechnicallyApproved",
+    "Draft", "UnderReview", "ReturnedForCorrection", "TechnicalReviewed",
 )
 
 
@@ -251,7 +251,7 @@ def ensure_no_unfinished_final_settlements(db, contract_id, side, *,
         or_(
             TechnicalSettlementEstimate.status.in_(PENDING_TECHNICAL_STATUSES),
             and_(
-                TechnicalSettlementEstimate.status == "ForwardedToFinance",
+                TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance")),
                 or_(
                     TechnicalSettlementEstimate.financial_settlement_id.is_(None),
                     TechnicalSettlementEstimate.financial_settlement_id.in_(unposted_financial_ids),
