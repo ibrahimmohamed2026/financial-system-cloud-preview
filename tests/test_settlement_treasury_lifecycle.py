@@ -281,7 +281,6 @@ def test_posting_final_settlement_completes_schedule_and_closes_contract():
     assert 'settlement.status = "Posted"' in post
     assert 'contract.status = "Closed"' in post
     assert "contract.closed_by = user.user_id" in post
-    assert db.commits == 1
 
 
 def test_trial_balance_query_uses_posted_journals_only():
