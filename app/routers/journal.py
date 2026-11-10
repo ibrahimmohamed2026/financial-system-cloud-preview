@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from ..common import money
 from ..database import get_db
 from ..deps import require_permission, write_audit
+from .contract_erp import (ensure_no_unfinished_final_settlements,
+                            final_settlement_quantity_gaps, reject_incomplete_final_settlement)
 from ..models import (Account, Company, Contract, ContractSettlement, ContractSettlementSchedule, TechnicalSettlementEstimate, FiscalYear, JournalEntry, JournalEntryDetail, Project, User, utcnow)
 
 SCREEN = "JournalBook"
@@ -303,7 +305,10 @@ def post_entry(eid: int, user: User = Depends(require_permission(SCREEN, "Post")
     if len(lines) < 2:
         raise HTTPException(422, "القيد لازم فيه سطرين على الأقل")
     _validate_lines(db, lines)
-    e.status, e.posted_by, e.posted_at = "Posted", user.user_id, utcnow()
+
+    settlement = None
+    contract = None
+    linked_estimate = None
     if e.source_settlement_id is not None:
         settlement = db.scalar(select(ContractSettlement).where(
             ContractSettlement.settlement_id == e.source_settlement_id).with_for_update())
@@ -313,30 +318,71 @@ def post_entry(eid: int, user: User = Depends(require_permission(SCREEN, "Post")
             Contract.contract_id == settlement.contract_id).with_for_update())
         if contract is None or contract.status.lower() != "active":
             raise HTTPException(409, "لا يمكن ترحيل مستخلص لعقد غير فعّال")
-        settlement.status = "Posted"
         linked_estimate = db.scalar(select(TechnicalSettlementEstimate).where(
             TechnicalSettlementEstimate.financial_settlement_id == settlement.settlement_id))
+        if settlement.is_final:
+            ensure_no_unfinished_final_settlements(
+                db, contract.contract_id, settlement.settlement_side,
+                exclude_settlement_id=settlement.settlement_id,
+                exclude_estimate_id=linked_estimate.estimate_id if linked_estimate else None,
+                stage="ترحيل")
+            gaps = final_settlement_quantity_gaps(
+                db, contract.contract_id, settlement.settlement_side)
+            if gaps:
+                reject_incomplete_final_settlement(gaps, "ترحيل")
+
+    # Only mark the journal and settlement posted after all final-quantity guards pass.
+    e.status, e.posted_by, e.posted_at = "Posted", user.user_id, utcnow()
+    if settlement is not None:
+        settlement.status = "Posted"
         if linked_estimate is not None:
             linked_schedule = db.scalar(select(ContractSettlementSchedule).where(
                 ContractSettlementSchedule.technical_estimate_id == linked_estimate.estimate_id).with_for_update())
             if linked_schedule is not None:
                 linked_schedule.status = "Completed"
+
         posted_final = db.scalar(select(ContractSettlement.settlement_id).where(
             ContractSettlement.contract_id == contract.contract_id,
             ContractSettlement.is_final.is_(True),
             ContractSettlement.status == "Posted").limit(1))
         if posted_final:
-            unfinished = db.scalar(select(func.count()).select_from(ContractSettlement).where(
-                ContractSettlement.contract_id == contract.contract_id,
-                ContractSettlement.status != "Posted")) or 0
-            if unfinished == 0:
+            sides = set(db.scalars(select(ContractSettlement.settlement_side).where(
+                ContractSettlement.contract_id == contract.contract_id)).all())
+            sides.update(db.scalars(select(TechnicalSettlementEstimate.settlement_side).where(
+                TechnicalSettlementEstimate.contract_id == contract.contract_id)).all())
+            all_sides_finalized = bool(sides)
+            for side in sides:
+                side_final = db.scalar(select(ContractSettlement.settlement_id).where(
+                    ContractSettlement.contract_id == contract.contract_id,
+                    ContractSettlement.settlement_side == side,
+                    ContractSettlement.is_final.is_(True),
+                    ContractSettlement.status == "Posted").limit(1))
+                if not side_final:
+                    all_sides_finalized = False
+                    break
+                side_gaps = final_settlement_quantity_gaps(db, contract.contract_id, side)
+                if side_gaps:
+                    all_sides_finalized = False
+                    break
+                try:
+                    ensure_no_unfinished_final_settlements(
+                        db, contract.contract_id, side,
+                        exclude_settlement_id=(settlement.settlement_id if side == settlement.settlement_side else None),
+                        exclude_estimate_id=(linked_estimate.estimate_id
+                                             if linked_estimate is not None and side == settlement.settlement_side else None),
+                        stage="إغلاق العقد")
+                except HTTPException:
+                    all_sides_finalized = False
+                    break
+            if all_sides_finalized:
                 contract.status = "Closed"
                 contract.closed_at = utcnow()
                 contract.closed_by = user.user_id
                 write_audit(db, user.user_id, "AutoClose", "Contracts", contract.contract_id,
                             old={"status": "Active"}, new={"status": "Closed",
                             "closed_at": contract.closed_at.isoformat(),
-                            "reason": "Final settlement journal posted and all contract settlements completed"})
+                            "reason": "Final settlement quantities are complete and all related journals are posted"})
+
         write_audit(db, user.user_id, "Post", "ContractSettlements", settlement.settlement_id,
                     {"status": "JournalDraft", "journal_entry_id": eid},
                     {"status": "Posted", "journal_entry_id": eid})
