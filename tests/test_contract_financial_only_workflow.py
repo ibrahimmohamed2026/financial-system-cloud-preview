@@ -71,8 +71,12 @@ def test_final_financial_settlement_is_rechecked_at_api_creation_manager_approva
     assert "reject_incomplete_final_settlement(gaps, \"ترحيل\")" in post_settlement
     assert "settlement_id.not_in(linked_financial_ids)" in source
     assert "technical_qty" in source and "financial_qty" in source
-    assert 'TechnicalSettlementEstimate.status.in_(("TechnicallyApproved", "ForwardedToFinance"))' in source
-    assert "لا يمكن اعتماد المستخلص الختامي قبل اكتمال وترحيل المستخلصات السابقة" in source
+    assert "TechnicalSettlementEstimate.status.in_(TECHNICAL_QUANTITY_STATUSES)" in source
+    assert '"UnderReview"' in source and '"TechnicalReviewed"' in source
+    assert '"JournalDraft"' in source
+    assert "settled_contract_item_quantities" in source
+    assert "ensure_no_unfinished_final_settlements" in source
+    assert "قبل اكتمال وترحيل المستخلصات السابقة" in source
 
 def test_contract_settlement_status_length_and_existing_postgres_schema_upgrade():
     models = Path("app/models.py").read_text(encoding="utf-8")
