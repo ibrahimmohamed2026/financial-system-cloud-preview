@@ -164,6 +164,7 @@ def settled_contract_item_quantities(db, contract_id, side, *,
     linked_financial_ids = select(TechnicalSettlementEstimate.financial_settlement_id).where(
         TechnicalSettlementEstimate.contract_id == contract_id,
         TechnicalSettlementEstimate.settlement_side == side,
+        TechnicalSettlementEstimate.status.in_(TECHNICAL_QUANTITY_STATUSES),
         TechnicalSettlementEstimate.financial_settlement_id.is_not(None))
     estimate_ids = select(TechnicalSettlementEstimate.estimate_id).where(
         TechnicalSettlementEstimate.contract_id == contract_id,
